@@ -71,11 +71,10 @@ Plans:
   2. Device boots to a usable default hotkey layout when the SD card is missing, the config file is absent, or the JSON is malformed
   3. Config file includes a version field, and the device can distinguish config format versions
   4. When a new config is saved, the previous config.json is automatically backed up to config.json.bak, and writes use atomic temp-file-then-rename to prevent corruption on power loss
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 05-01: TBD
-- [ ] 05-02: TBD
+- [ ] 05-01-PLAN.md -- ArduinoJson v7 migration, version field, backup + atomic save, page validation
 
 ### Phase 6: Data-Driven Display UI
 **Goal**: Display UI renders pages and buttons entirely from the in-memory config struct, enabling hot-reload of layouts without device reboot
