@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 ## Current Position
 
 Phase: 4 of 5 (Battery Management + Power States)
-Plan: 2 of 4 in current phase
+Plan: 3 of 4 in current phase
 Status: In Progress
-Last activity: 2026-02-15 -- Completed 04-02 (companion shutdown + time sync)
+Last activity: 2026-02-15 -- Completed 04-03 (display UI integration + bridge relay)
 
-Progress: [████████░░] 80%
+Progress: [█████████░] 85%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
+- Total plans completed: 7
 - Average duration: 2min
 - Total execution time: 0.25 hours
 
@@ -30,10 +30,10 @@ Progress: [████████░░] 80%
 | 01 | 3 | 11min | 4min |
 | 03 | 4 | 9min | 2min |
 
-| 04 | 2 | 2min | 1min |
+| 04 | 3 | 5min | 2min |
 
 **Recent Trend:**
-- Last 5 plans: 03-02 (4min), 03-03 (2min), 03-04 (1min), 04-01 (~2min), 04-02 (2min)
+- Last 5 plans: 03-03 (2min), 03-04 (1min), 04-01 (~2min), 04-02 (2min), 04-03 (3min)
 - Trend: Stable
 
 *Updated after each plan completion*
@@ -74,6 +74,9 @@ Recent decisions affecting current work:
 - [04-02]: All HID writes now include 1-byte message type prefix after report ID for bridge dispatch (0x03=stats, 0x05=power, 0x06=time)
 - [04-02]: D-Bus listener in daemon thread with asyncio loop, signals main thread via threading.Event (thread-safe)
 - [04-02]: dbus-next imported inside function for graceful degradation if not installed
+- [04-03]: lv_font_montserrat_40 used for clock (48 not available in LVGL build config)
+- [04-03]: Bridge uses switch/case on type-prefix byte for extensible vendor HID dispatch
+- [04-03]: Touch activity calls power_activity() every poll (cheap, ensures idle timer resets)
 
 ### Pending Todos
 
@@ -88,5 +91,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 04-02-PLAN.md (companion shutdown + time sync)
+Stopped at: Completed 04-03-PLAN.md (display UI integration + bridge relay)
 Resume file: None
