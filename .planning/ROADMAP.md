@@ -139,7 +139,7 @@ Phases execute in numeric order: 5 -> 6 -> 7 -> 8 -> 9
 | 6. Data-Driven Display UI | v0.8 | 2/2 | Complete | 2026-02-15 |
 | 7. Config Server (SoftAP + HTTP) | v0.8 | 2/2 | Complete | 2026-02-15 |
 | 8. Desktop GUI Editor | v0.8 | 3/3 | Complete | 2026-02-15 |
-| 9. Tweaks and Break-Fix | v0.9.1 | 0/TBD | Not started | - |
+| 9. Tweaks and Break-Fix | v0.9.1 | 0/5 | Planning complete | - |
 
 ## v0.9.1 Tweaks and Break-Fix
 
@@ -156,7 +156,11 @@ Phases execute in numeric order: 5 -> 6 -> 7 -> 8 -> 9
   4. Host OS notifications forward to display as toast overlays with app filtering (v0.9.1.4)
   5. Stats header monitors are selectable and placeable with expanded monitor types (v0.9.1.5)
   6. Four display modes available: standby, macro pad, picture frame, clock with analog+digital (v0.9.1.6)
-**Plans**: TBD
+**Plans**: 5 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 9 to break down)
+- [ ] 09-01-PLAN.md -- Grid layout + positioning + pressed color (v0.9.1.1 + v0.9.1.2)
+- [ ] 09-02-PLAN.md -- Variable button sizing with grid spans (v0.9.1.3)
+- [ ] 09-03-PLAN.md -- Configurable stats header with TLV protocol (v0.9.1.5)
+- [ ] 09-04-PLAN.md -- Display modes: standby, hotkeys, picture frame, clock (v0.9.1.6)
+- [ ] 09-05-PLAN.md -- Host OS notification forwarding with app filtering (v0.9.1.4)
