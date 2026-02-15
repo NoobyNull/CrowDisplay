@@ -7,12 +7,17 @@ streams them to the HotkeyBridge ESP32-S3 over USB HID output reports
 at 1 Hz. The bridge relays these stats to the CrowPanel display via
 ESP-NOW for rendering in the stats header bar.
 
+Also listens for systemd PrepareForShutdown D-Bus signal to notify the
+display bridge before PC powers off (enabling clock mode), and sends
+epoch time sync with each stats update for the display clock.
+
 Usage:
     python3 hotkey_companion.py          # Run directly
     systemctl --user start hotkey-companion  # Run as service
 
 Dependencies:
     pip install hidapi psutil pynvml
+    pip install dbus-next  # Optional: for shutdown detection
 """
 
 import hid
@@ -23,6 +28,8 @@ import sys
 import signal
 import logging
 import os
+import threading
+import asyncio
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -44,6 +51,15 @@ UPDATE_INTERVAL = 1.0       # Seconds between stat reports (1 Hz)
 #   uint16 net_down_kbps   (little-endian)
 STATS_FORMAT = "<BBBBBBhh"  # 6 x uint8 + 2 x int16 = 10 bytes
 
+# HID vendor message type prefixes (first byte after report ID)
+MSG_STATS       = 0x03
+MSG_POWER_STATE = 0x05
+MSG_TIME_SYNC   = 0x06
+
+# Power state values
+POWER_SHUTDOWN = 0
+POWER_WAKE     = 1
+
 # Retry interval when bridge is not found
 RETRY_INTERVAL = 5.0
 
@@ -52,6 +68,7 @@ RETRY_INTERVAL = 5.0
 # ---------------------------------------------------------------------------
 
 running = True
+shutdown_event = threading.Event()
 
 # ---------------------------------------------------------------------------
 # Signal handling
@@ -61,6 +78,121 @@ def _signal_handler(signum, frame):
     global running
     logging.info("Received signal %d, shutting down...", signum)
     running = False
+
+
+# ---------------------------------------------------------------------------
+# D-Bus shutdown listener
+# ---------------------------------------------------------------------------
+
+def _run_dbus_listener():
+    """Entry point for the D-Bus listener thread. Creates an asyncio
+    event loop and runs the async shutdown listener."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(start_dbus_shutdown_listener())
+    except Exception as exc:
+        logging.debug("D-Bus listener loop exited: %s", exc)
+    finally:
+        loop.close()
+
+
+async def start_dbus_shutdown_listener():
+    """Connect to the system D-Bus, take a shutdown inhibitor lock, and
+    listen for the PrepareForShutdown signal from logind.
+
+    When PrepareForShutdown(True) fires, sets shutdown_event so the main
+    thread can send MSG_POWER_STATE to the bridge, then releases the
+    inhibitor lock to allow shutdown to proceed.
+
+    Gracefully degrades if dbus-next is not installed or the system bus
+    is unavailable.
+    """
+    try:
+        from dbus_next.aio import MessageBus
+        from dbus_next import BusType
+    except ImportError:
+        logging.warning(
+            "dbus-next not installed -- shutdown detection disabled. "
+            "Install with: pip install dbus-next"
+        )
+        return
+
+    try:
+        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    except Exception as exc:
+        logging.warning("Cannot connect to system D-Bus: %s", exc)
+        return
+
+    try:
+        introspection = await bus.introspect(
+            "org.freedesktop.login1", "/org/freedesktop/login1"
+        )
+        proxy = bus.get_proxy_object(
+            "org.freedesktop.login1",
+            "/org/freedesktop/login1",
+            introspection,
+        )
+        manager = proxy.get_interface("org.freedesktop.login1.Manager")
+
+        # Take a delay inhibitor lock so we have time to send the HID
+        # shutdown message before the system powers off.
+        inhibit_fd = await manager.call_inhibit(
+            "shutdown",
+            "HotkeyCompanion",
+            "Sending shutdown signal to display bridge",
+            "delay",
+        )
+        # dbus-next returns the fd as an int
+        if hasattr(inhibit_fd, 'fileno'):
+            inhibit_fd = inhibit_fd.fileno()
+        logging.info("Shutdown inhibitor lock acquired (fd=%s)", inhibit_fd)
+
+        def on_prepare_for_shutdown(start):
+            if start:
+                logging.info("PrepareForShutdown(True) received")
+                shutdown_event.set()
+                # Release the inhibitor lock so shutdown can proceed
+                try:
+                    os.close(inhibit_fd)
+                    logging.info("Inhibitor lock released")
+                except OSError:
+                    pass
+
+        manager.on_prepare_for_shutdown(on_prepare_for_shutdown)
+        logging.info("D-Bus shutdown listener active")
+
+        await bus.wait_for_disconnect()
+    except Exception as exc:
+        logging.warning("D-Bus shutdown listener error: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Power state and time sync helpers
+# ---------------------------------------------------------------------------
+
+def send_power_state(device, state):
+    """Send a MSG_POWER_STATE message to the bridge.
+
+    Packet: [0x00 report ID] [0x05 MSG_POWER_STATE] [state byte]
+    """
+    try:
+        device.write(b"\x00" + bytes([MSG_POWER_STATE, state]))
+        logging.info("Sent power state: %s", "SHUTDOWN" if state == POWER_SHUTDOWN else "WAKE")
+    except (IOError, OSError) as exc:
+        logging.warning("Failed to send power state: %s", exc)
+
+
+def send_time_sync(device):
+    """Send a MSG_TIME_SYNC message with current epoch seconds.
+
+    Packet: [0x00 report ID] [0x06 MSG_TIME_SYNC] [uint32 LE epoch]
+    """
+    epoch = int(time.time())
+    try:
+        device.write(b"\x00" + bytes([MSG_TIME_SYNC]) + struct.pack("<I", epoch))
+    except (IOError, OSError) as exc:
+        logging.debug("Failed to send time sync: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +446,10 @@ def main():
     # Prime psutil.cpu_percent() -- first call always returns 0
     psutil.cpu_percent()
 
+    # Start D-Bus shutdown listener in background thread
+    dbus_thread = threading.Thread(target=_run_dbus_listener, daemon=True)
+    dbus_thread.start()
+
     # Discover and connect to bridge
     device = None
     while running:
@@ -345,6 +481,14 @@ def main():
     # Main stats loop
     logging.info("Streaming stats at %.1f Hz", 1.0 / UPDATE_INTERVAL)
     while running:
+        # Check for system shutdown signal from D-Bus
+        if shutdown_event.is_set():
+            logging.info("System shutdown detected, notifying bridge...")
+            send_power_state(device, POWER_SHUTDOWN)
+            logging.info("Shutdown signal sent to bridge")
+            running = False
+            break
+
         time.sleep(UPDATE_INTERVAL)
         if not running:
             break
@@ -353,9 +497,8 @@ def main():
 
         try:
             # Leading 0x00 is the HID report ID byte required by hidapi on
-            # Linux. If the vendor device uses a specific report ID, adjust
-            # this byte accordingly.
-            device.write(b"\x00" + packed)
+            # Linux. 0x03 is the MSG_STATS type prefix for bridge dispatch.
+            device.write(b"\x00" + bytes([MSG_STATS]) + packed)
         except (IOError, OSError) as exc:
             logging.warning("HID write failed (device disconnected?): %s", exc)
             try:
@@ -381,6 +524,10 @@ def main():
 
             if device is None:
                 break
+
+        # Send time sync alongside stats (same error handling)
+        if device is not None:
+            send_time_sync(device)
 
     # Clean shutdown
     if device is not None:
