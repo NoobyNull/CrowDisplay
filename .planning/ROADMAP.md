@@ -62,11 +62,13 @@ Plans:
   2. Stats header remains visible while user navigates between hotkey pages
   3. Bridge relays media key commands (play/pause, volume, next/prev, mute) from display to PC as USB consumer control reports
   4. Companion app launches on Linux PC and begins streaming stats with no manual configuration
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md — Protocol extension + bridge firmware: media keys (USB consumer control) and UART0 stats relay
+- [ ] 03-02-PLAN.md — Display firmware: persistent stats header bar and media key page
+- [ ] 03-03-PLAN.md — Python companion app: system stats collection and serial streaming
+- [ ] 03-04-PLAN.md — End-to-end verification checkpoint: human tests stats pipeline and media keys
 
 ### Phase 4: Battery Management + Power States
 **Goal**: Display operates untethered on battery power with intelligent power states and clock mode when the PC is off
@@ -106,8 +108,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Wired Command Foundation | 0/TBD | Not started | - |
-| 2. Wireless Link + Dual Transport | 0/TBD | Not started | - |
-| 3. Stats Display + Companion App | 0/TBD | Not started | - |
+| 1. Wired Command Foundation | 4/4 | Complete | 2026-02-15 |
+| 2. Wireless Link + Dual Transport | N/A | Complete (merged into Phase 1) | 2026-02-15 |
+| 3. Stats Display + Companion App | 0/4 | Planned | - |
 | 4. Battery Management + Power States | 0/TBD | Not started | - |
 | 5. Configuration + GUI Editor | 0/TBD | Not started | - |
