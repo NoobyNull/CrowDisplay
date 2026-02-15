@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 ## Current Position
 
 Phase: 3 of 5 (Stats Display + Companion App)
-Plan: 1 of 4 in current phase
+Plan: 3 of 4 in current phase
 Status: Executing
-Last activity: 2026-02-15 -- Completed 03-01 (protocol + bridge stats/media key)
+Last activity: 2026-02-15 -- Completed 03-03 (Python companion app)
 
-Progress: [█████░░░░░] 45%
+Progress: [██████░░░░] 55%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
+- Total plans completed: 5
 - Average duration: 3min
-- Total execution time: 0.21 hours
+- Total execution time: 0.24 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01 | 3 | 11min | 4min |
-| 03 | 1 | 2min | 2min |
+| 03 | 2 | 4min | 2min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5min), 01-02 (3min), 01-03 (3min), 03-01 (2min)
+- Last 5 plans: 01-01 (5min), 01-02 (3min), 01-03 (3min), 03-01 (2min), 03-03 (2min)
 - Trend: Accelerating
 
 *Updated after each plan completion*
@@ -60,6 +60,9 @@ Recent decisions affecting current work:
 - [01-03]: Key codes defined locally in ui.cpp (display does not include USBHIDKeyboard.h)
 - [03-01]: USBHIDVendor 63-byte reports with no size prepend (matches companion app expectations)
 - [03-01]: Stats relay is fire-and-forget -- no ACK from display for MSG_STATS
+- [03-03]: Python with hidapi for companion app (per user discretion and research)
+- [03-03]: GPU detection chain: NVIDIA (pynvml) -> AMD (sysfs) -> 0xFF fallback
+- [03-03]: Leading 0x00 report ID byte for hidapi Linux HID writes
 
 ### Pending Todos
 
@@ -74,5 +77,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 03-01-PLAN.md (protocol + bridge composite USB HID). Ready for 03-02.
+Stopped at: Completed 03-03-PLAN.md (Python companion app). Ready for 03-04.
 Resume file: None
