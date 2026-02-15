@@ -1,337 +1,432 @@
-# Stack Research
+# Stack Research: v1.1 Configurable Hotkey Layouts
 
-**Domain:** Dual-ESP32 wireless command center / macropad with system monitoring
-**Researched:** 2026-02-14
-**Confidence:** MEDIUM-HIGH
+**Domain:** SD card config storage, SoftAP HTTP file upload, desktop GUI layout editor
+**Researched:** 2026-02-15
+**Confidence:** HIGH (all three areas verified against official docs and existing codebase)
 
-## Existing Stack (Locked In)
+## Existing Stack (DO NOT CHANGE)
 
-These are already in the project and should NOT be changed. The new milestone builds on top of them.
+Already validated and production-ready. This research covers only NEW additions.
 
-| Technology | Version | Purpose | Status |
-|------------|---------|---------|--------|
-| PlatformIO | latest | Build system | Existing |
-| espressif32 | 6.5.0 | Platform (Arduino 2.x / ESP-IDF 4.4) | Existing, see note below |
-| Arduino framework | 2.x (via espressif32@6.5.0) | Application framework | Existing |
-| LovyanGFX | 1.1.8 | Display driver for CrowPanel 7.0" RGB565 | Existing |
-| LVGL | 8.3.11 | Touch UI framework | Existing |
-| PCA9557 | local lib | I/O expander for touch reset | Existing |
-| ESP32-BLE-Keyboard | local lib | BLE HID (running env) | Existing |
-| USB.h + USBHIDKeyboard.h | built-in | USB HID (test env) | Existing |
-
-### Critical Platform Decision: Stay on espressif32@6.5.0
-
-**Recommendation: Do NOT upgrade to Arduino 3.x / pioarduino.** Confidence: HIGH
-
-The official PlatformIO espressif32 platform stopped at Arduino 2.x support. Arduino 3.x requires the community-maintained pioarduino fork, which is a one-person effort with limited support. Upgrading risks breaking LovyanGFX and LVGL compatibility, the RGB panel bus driver, and the existing USB HID code. ESP-NOW, UART, deep sleep, and all features needed for this milestone work fine on Arduino 2.x / ESP-IDF 4.4. There is zero benefit and significant risk to upgrading.
-
-Sources:
-- [pioarduino/platform-espressif32 GitHub](https://github.com/pioarduino/platform-espressif32) -- community fork, "one man show"
-- [PlatformIO issue #1225](https://github.com/platformio/platform-espressif32/issues/1225) -- official support stalled
-- [espressif/arduino-esp32 discussion #10039](https://github.com/espressif/arduino-esp32/discussions/10039) -- community Arduino 3.x status
+| Technology | Version | Status |
+|------------|---------|--------|
+| PlatformIO + espressif32@6.5.0 | Arduino 2.x / ESP-IDF 4.4 | Locked |
+| LovyanGFX | 1.1.8 | Locked |
+| LVGL | 8.3.11 | Locked |
+| ESP-NOW | built-in | Locked, production |
+| Arduino SD library | built-in | Already integrated (display/sdcard.cpp) |
+| Arduino WebServer | built-in | Already used (display/ota.cpp) |
+| WiFi.h SoftAP | built-in | Already used in OTA mode (WIFI_AP_STA) |
+| Python companion app | psutil, hidapi, pynvml | Locked |
 
 ---
 
-## New Stack: Bridge Unit (ESP32-S3 DevKitC-1)
+## Area 1: SD Card JSON Config + Image Assets
 
-The bridge plugs into the PC via USB. It receives hotkey commands from the display wirelessly (ESP-NOW) or wired (UART), translates them to USB HID keystrokes, and relays system stats from a desktop companion app back to the display.
+### What Already Exists
 
-### Core Technologies
+The project already has a working SD card module (`display/sdcard.cpp`) using the Arduino `SD` library over SPI (HSPI bus):
+- Pins: CS=10, MOSI=11, CLK=12, MISO=13
+- SPI clock: 4 MHz
+- Functions: `sdcard_init()`, `sdcard_read_file()`, `sdcard_write_file()`, `sdcard_file_exists()`
+- Called at boot in `display/main.cpp` as non-fatal init
 
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| espressif32 | 6.5.0 | Same platform as display unit | Identical toolchain avoids cross-compilation headaches. Both units share the same PlatformIO project with env-per-target. |
-| Arduino framework | 2.x | Application framework | Matches display unit. ESP-NOW and USB both have mature Arduino APIs on 2.x. |
-| ESP-NOW (esp_now.h) | built-in | Wireless link display<->bridge | Sub-millisecond latency, no router needed, 250-byte packets (v1) sufficient for hotkey commands and stat payloads. Built into ESP-IDF, zero extra dependencies. |
-| USB.h + USBHIDKeyboard.h | built-in | USB HID keyboard to PC | Already proven in the existing test env. Uses TinyUSB under the hood on ESP32-S3. No external library needed. |
-| USBCDC (USB.h) | built-in | USB CDC serial to companion app | ESP32-S3 supports composite USB devices (HID + CDC simultaneously) via TinyUSB. The bridge appears as both a keyboard and a serial port to the PC. |
-| HardwareSerial (Serial1/Serial2) | built-in | UART wired fallback link | ESP32-S3 has 3 UART peripherals. Use Serial1 on dedicated TX/RX pins for the wired link to the display. |
+### NEW: ArduinoJson for Config Parsing
 
-### USB Composite Device: HID + CDC
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| ArduinoJson | 7.4.x | Parse/serialize hotkey layout JSON from SD card | The only serious JSON library for embedded C++. v7 has streaming parser, reduced memory footprint vs v6, and zero-copy deserialization. ~30KB flash overhead is acceptable for config parsing (not real-time protocol). |
 
-This is the trickiest part of the bridge firmware. The ESP32-S3 must present as TWO USB devices simultaneously:
-1. **HID Keyboard** -- receives hotkey commands from display, sends keystrokes to PC
-2. **CDC Serial** -- receives system stats from companion app, forwards to display
+**Confidence:** HIGH -- ArduinoJson 7.4.2 is current stable (released 2025-07-01). Compatible with ESP-IDF 4.4 / Arduino 2.x.
 
-**Implementation approach:** Confidence: MEDIUM
+**Why ArduinoJson and not raw struct files:**
+- Hotkey layouts are user-editable configuration, not a fixed wire protocol. JSON is the right format because:
+  - Human-readable on the SD card (debugging without special tools)
+  - The desktop GUI editor naturally produces JSON
+  - Schema can evolve (add fields) without binary format versioning headaches
+  - ArduinoJson's `JsonDocument` with PSRAM allocation handles layouts easily within memory
 
-The Arduino ESP32 2.x core supports composite USB via TinyUSB. The key is initialization order and build flags:
+**Why ArduinoJson v7 specifically:**
+- v7 replaced `StaticJsonDocument`/`DynamicJsonDocument` with a single `JsonDocument` that auto-sizes
+- `JsonDocument` can allocate from PSRAM via custom allocator -- critical on ESP32-S3 where internal RAM is precious
+- Streaming `deserializeJson(doc, file)` reads directly from SD `File` object -- no need to buffer entire file in RAM
+- v6 is in maintenance mode; v7 is actively developed
 
+**Installation:**
+```ini
+; platformio.ini [env:display] lib_deps addition
+lib_deps =
+    ${env.lib_deps}
+    bblanchon/ArduinoJson@^7.4.0
+```
+
+**Usage pattern (parse from SD):**
 ```cpp
-#include <USB.h>
-#include <USBHIDKeyboard.h>
+#include <ArduinoJson.h>
+#include <SD.h>
 
-USBHIDKeyboard Keyboard;
-USBCDC USBSerial;  // Second CDC interface for companion app
+bool load_layout(const char *path) {
+    File f = SD.open(path, FILE_READ);
+    if (!f) return false;
 
-void setup() {
-  USB.productName("HotkeyBridge");
-  USB.manufacturerName("Custom");
-  Keyboard.begin();
-  USBSerial.begin(115200);
-  USB.begin();  // Must be called AFTER all USB classes are initialized
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, f);
+    f.close();
+    if (err) {
+        Serial.printf("JSON parse error: %s\n", err.c_str());
+        return false;
+    }
+    // Extract hotkey definitions from doc...
+    return true;
 }
 ```
 
-**Required build flags:**
-```ini
-build_flags =
-    -DARDUINO_USB_MODE=0          ; Use USB-OTG (not JTAG)
-    -DARDUINO_USB_CDC_ON_BOOT=0   ; Don't auto-create CDC, we manage it
+Sources:
+- [ArduinoJson v7 release notes](https://arduinojson.org/v7/revisions/) -- v7.4.2 current stable
+- [ArduinoJson v7 docs](https://arduinojson.org/v7/) -- streaming deserialization, custom allocators
+- [ArduinoJson GitHub](https://github.com/bblanchon/ArduinoJson) -- ESP32 compatibility confirmed
+
+### NEW: LVGL File System Driver for Button Icons
+
+The existing `lv_conf.h` has image loading disabled:
+```c
+#define LV_USE_FS_STDIO 0
+#define LV_USE_FS_POSIX 0
+#define LV_USE_FS_FATFS 0
+#define LV_USE_PNG 0
+#define LV_USE_BMP 0
+#define LV_USE_SJPG 0
 ```
 
-**Risk:** The composite HID+CDC pattern is less documented than HID-only or CDC-only. The cnfatal/esp32-cdc-keyboard project proves it works with ESP-IDF directly, and the Arduino wrapper should support it, but this needs early prototyping.
+**Recommendation: Use LVGL's custom file system driver (`lv_fs_drv_t`) wrapping Arduino SD, plus enable `LV_USE_BMP` for button icon images.**
 
-Sources:
-- [ESP-IDF USB Device Stack docs](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/peripherals/usb_device.html) -- confirms composite device support
-- [Arduino ESP32 USB API](https://docs.espressif.com/projects/arduino-esp32/en/latest/api/usb.html) -- USBCDC and HID classes
-- [cnfatal/esp32-cdc-keyboard](https://github.com/cnfatal/esp32-cdc-keyboard) -- proven HID+CDC composite (ESP-IDF)
-- [philippkueng.ch ESP32-S3 keyboard guide](https://philippkueng.ch/2025-06-16-creating-a-virtual-usb-keyboard-with-the-esp32-s3.html) -- HID-only Arduino approach
+| Change | Value | Why |
+|--------|-------|-----|
+| Custom `lv_fs_drv_t` | Register with letter 'S' | LVGL v8.3 requires a registered FS driver to load images from files. The built-in `LV_USE_FS_FATFS` expects raw FatFs, not Arduino's SD wrapper. A custom driver wrapping `SD.open()`/`File.read()`/etc. is ~80 lines of code and is the standard approach for Arduino+LVGL. |
+| `LV_USE_BMP 1` | in lv_conf.h | BMP is the simplest format -- no decompression CPU cost, no extra library. 16-bit RGB565 BMP files match the display's native color depth exactly. |
+| `LV_USE_IMG 1` | Already enabled | No change needed. `lv_img_set_src(img, "S:/icons/copy.bmp")` loads from SD. |
 
----
+**Why BMP and not PNG:**
+- PNG decoding on ESP32 is CPU-intensive (zlib decompression). Each button icon decode adds latency to UI load.
+- BMP at RGB565 is zero-decode -- LVGL copies pixels directly to the draw buffer.
+- Button icons at 64x64 RGB565 = 8KB each. With 36 buttons max, that is 288KB of SD reads, which is trivial at 4MHz SPI.
+- The desktop GUI editor will export BMP files -- PNG-to-BMP conversion happens on the PC, not the ESP32.
 
-## New Stack: Display Unit Additions
+**Why not LVGL's built-in `LV_USE_FS_FATFS`:**
+- That macro expects the raw ESP-IDF FatFs API (`ff.h`), not Arduino's `SD.h` wrapper.
+- The Arduino SD library is already working and tested. Writing a thin `lv_fs_drv_t` adapter is simpler and safer than switching to raw FatFs.
 
-The existing display firmware gets ESP-NOW receive, UART fallback, system stats rendering, battery monitoring, and deep sleep/clock mode.
+**Flash impact:** Enabling `LV_USE_BMP` adds ~2-3KB to firmware. Negligible.
 
-### Supporting Libraries
-
-| Library | Version | Purpose | When to Use |
-|---------|---------|---------|-------------|
-| esp_now.h | built-in | ESP-NOW wireless receive | Always -- primary communication with bridge |
-| WiFi.h | built-in | Required to init ESP-NOW (sets WiFi to STA mode) | Init only -- WiFi.mode(WIFI_STA) then WiFi off, ESP-NOW runs independently |
-| HardwareSerial | built-in | UART wired fallback | When USB cable connects display to bridge directly |
-| esp_sleep.h | built-in | Deep sleep for battery conservation | When PC is off / no ESP-NOW heartbeat for N minutes |
-| esp_adc_cal.h | built-in | Battery voltage reading via ADC | Continuous -- read battery pin for charge level display |
-| time.h + esp_sntp.h | built-in | NTP time sync for clock mode | On WiFi connection at startup, then RTC maintains time in deep sleep |
-
-### ESP-NOW Protocol Design
-
-ESP-NOW v1 payload: 250 bytes max. This is plenty for the use case:
-
-| Message Type | Direction | Payload | Size |
-|-------------|-----------|---------|------|
-| Hotkey press | Display -> Bridge | msg_type(1) + hotkey_id(1) + modifiers(1) + keycode(1) | 4 bytes |
-| Hotkey ack | Bridge -> Display | msg_type(1) + status(1) | 2 bytes |
-| System stats | Bridge -> Display | msg_type(1) + cpu%(1) + ram%(1) + gpu%(1) + temp_cpu(2) + temp_gpu(2) + net_up(4) + net_down(4) + disk%(1) | ~17 bytes |
-| Heartbeat | Bridge -> Display | msg_type(1) + uptime(4) | 5 bytes |
-| Config sync | Bridge -> Display | msg_type(1) + page_id(1) + hotkey_data(variable) | <200 bytes |
-
-**Use struct packing with `__attribute__((packed))` and a shared header between both firmware targets.** Do NOT use JSON or msgpack on the ESP-NOW link -- raw structs are faster, smaller, and both sides compile from the same header.
-
-Sources:
-- [ESP-IDF ESP-NOW API Reference](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/network/esp_now.html) -- 250 byte limit, 20 peer max, CCMP encryption
-- [Random Nerd Tutorials ESP-NOW guide](https://randomnerdtutorials.com/esp-now-esp32-arduino-ide/) -- Arduino API patterns
-
----
-
-## New Stack: Desktop Companion App (Linux)
-
-Two components: (1) a background daemon that streams system stats over USB serial, and (2) a GUI app for configuring hotkey layouts.
-
-### Core Technologies
-
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| Python | 3.11+ | Application language | Ubiquitous on Linux, fast prototyping, excellent hardware/system libraries. Every similar project in this space uses Python. |
-| pyserial | 3.5 | USB CDC serial communication | De facto standard for serial in Python. Stable, cross-platform, zero-hassle. |
-| psutil | 5.9+ / 6.x | CPU, RAM, disk, network, temperature monitoring | The only serious option for cross-platform system monitoring in Python. Active development, 7.x now available. |
-| nvidia-ml-py | 12.x | NVIDIA GPU monitoring | Official NVIDIA bindings (pynvml is deprecated). Reports GPU util, temp, VRAM, fan speed. |
-
-**For AMD GPUs:** Use `/sys/class/drm/card*/device/gpu_busy_percent` and `sensors` command parsing. There is no equivalent to nvidia-ml-py for AMD -- you read sysfs directly. Confidence: MEDIUM (needs validation on specific AMD hardware).
-
-### Stats Daemon
-
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| Python | 3.11+ | Daemon runtime | Same as above |
-| struct (stdlib) | built-in | Binary serialization for serial protocol | Matches the packed struct approach on the ESP32 side. Fast, no dependencies, deterministic size. |
-| systemd unit | N/A | Auto-start daemon | Standard for Linux services. User-level unit (~/.config/systemd/user/) for non-root operation. |
-
-**Serial protocol between companion app and bridge:**
-
-Use Python `struct.pack` / `struct.unpack` with a simple framed protocol:
-
-```
-[START_BYTE(0xAA)] [MSG_TYPE(1)] [LENGTH(1)] [PAYLOAD(N)] [CRC8(1)]
+**lv_conf.h changes needed:**
+```c
+#define LV_USE_BMP 1       // Enable BMP decoder
+// Optionally, for future PNG support:
+// #define LV_USE_PNG 1    // ~10KB flash, requires lodepng
 ```
 
-Do NOT use JSON over serial -- it is slow to parse on the ESP32, wastes bandwidth, and has no framing. Do NOT use msgpack -- it adds a dependency on both sides for minimal benefit over raw structs. The message set is fixed and known at compile time.
-
-### Configuration GUI
-
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| Python | 3.11+ | GUI runtime | Same interpreter as daemon |
-| GTK4 + PyGObject | GTK4 4.x, PyGObject 3.48+ | Desktop GUI toolkit | Native look on Linux/GNOME/KDE. GTK4 is the current generation, actively maintained. PyGObject is the official Python binding. |
-| Libadwaita | 1.x | Adaptive UI components | GNOME's UI library built on GTK4. Provides HeaderBar, PreferencesPage, and other polished widgets out of the box. |
-
 Sources:
-- [psutil docs](https://psutil.readthedocs.io/) -- version 7.2.3 currently on PyPI
-- [pyserial docs](https://pyserial.readthedocs.io/en/latest/pyserial_api.html) -- stable at 3.5
-- [nvidia-ml-py on PyPI](https://pypi.org/project/nvidia-ml-py/) -- official NVIDIA bindings
-- [PyGObject getting started](https://pygobject.gnome.org/getting_started.html) -- GTK4 Python bindings
-- [pythonguis.com 2026 comparison](https://www.pythonguis.com/faq/which-python-gui-library/) -- GTK4 recommended for Linux-native apps
+- [LVGL 8.3 File System docs](https://docs.lvgl.io/8.3/overview/file-system.html) -- lv_fs_drv_t registration
+- [LVGL forum: SD card on ESP32 with v8.3](https://forum.lvgl.io/t/how-do-i-correctly-make-the-sd-card-work-for-image-widgets-on-an-esp32-dev-kit-with-lvgl-v-8-3/9827) -- community examples
+- [LVGL BMP decoder](https://docs.lvgl.io/8.3/libs/bmp.html) -- built-in, enable via lv_conf.h
 
----
+### SD Card File Layout
 
-## New Stack: Battery Management (Display Unit)
-
-### Hardware
-
-| Component | Purpose | Why |
-|-----------|---------|-----|
-| CrowPanel BAT connector | LiPo battery input | Built into the board. Uses LTC4054 or similar linear charger IC. Charges from USB 5V. |
-| 3.7V LiPo battery (3000-5000mAh) | Power source when untethered | 7" display at 800x480 draws significant power. 3000mAh minimum for ~2-4 hours at reduced brightness. |
-| ADC pin (battery voltage divider) | Battery level monitoring | CrowPanel has a voltage divider on the BAT line to an ADC-capable GPIO. Read with analogRead() and calibrate. |
-
-### Software
-
-| Technology | Purpose | Notes |
-|------------|---------|-------|
-| esp_adc_cal.h | Calibrated ADC readings | ESP32-S3 ADC is notoriously noisy. Use the calibration API and average over multiple samples. |
-| esp_sleep.h | Deep sleep when idle | ~200uA in deep sleep. Wake on touch (via EXT1 wakeup from touch interrupt pin) or timer (for clock refresh). |
-| RTC memory | Persist state across deep sleep | 8KB RTC FAST memory survives deep sleep. Store last known time, battery level, display state. |
-
-Sources:
-- [Elecrow CrowPanel 7.0 wiki](https://www.elecrow.com/wiki/esp32-display-702727-intelligent-touch-screen-wi-fi26ble-800480-hmi-display.html) -- BAT connector details
-- [Elecrow forum - battery charging](https://forum.elecrow.com/discussion/548/enabling-lipo-battery-charger-in-esp32-s3-5-inch-display) -- LTC4054 charger IC
-- [ESP32-S3 deep sleep guide](https://esp32.co.uk/esp32-battery-powered-sensors-deep-sleep-low-power-design-guide/) -- ~200uA deep sleep current
-
----
-
-## Development Tools
-
-| Tool | Purpose | Notes |
-|------|---------|-------|
-| PlatformIO | Build, upload, monitor | Use multi-env platformio.ini: `[env:display]`, `[env:bridge]`, `[env:display-debug]` etc. |
-| PlatformIO monitor filters | Debug both units | `pio device monitor --port /dev/ttyUSB0 --filter colorize` for each unit in separate terminals |
-| Python venv | Isolate companion app deps | `python -m venv .venv && source .venv/bin/activate` |
-| udev rules | Stable USB device names | Write rules so bridge always maps to `/dev/ttyHotkeyBridge` regardless of USB port. Critical for the companion daemon. |
-
----
-
-## Installation
-
-### ESP32 Firmware (both units)
-
-```ini
-; platformio.ini additions for bridge unit
-[env:bridge]
-board = esp32-s3-devkitc-1
-framework = arduino
-platform = espressif32@6.5.0
-build_flags =
-    -DBOARD_HAS_PSRAM
-    -DARDUINO_USB_MODE=0
-    -DARDUINO_USB_CDC_ON_BOOT=0
-    -DBRIDGE_UNIT
-    -I src
-lib_deps =
-    ; No external libs needed -- ESP-NOW, USB, UART are all built-in
+```
+/config/
+  layout.json          <- Hotkey definitions (all pages)
+  settings.json        <- Device settings (brightness, idle timeout, etc.)
+/icons/
+  copy.bmp             <- 64x64 RGB565 BMP button icons
+  paste.bmp
+  terminal.bmp
+  ...
+/backup/
+  layout.json.bak      <- Auto-backup before overwrite
 ```
 
-### Desktop Companion App
+### What NOT to Add for SD Card
+
+| Avoid | Why |
+|-------|-----|
+| SdFat library | Adds external dependency. Arduino SD is already working and sufficient. SdFat's advantages (long filenames, exFAT) are not needed -- config files have short names. |
+| SD_MMC | Uses SDMMC peripheral (4-bit/8-bit bus), different pins. The CrowPanel TF card slot is wired for SPI. SD_MMC would require hardware changes. |
+| LittleFS on flash | 4MB flash is tight with firmware. SD card provides effectively unlimited config storage. LittleFS is appropriate for devices without SD slots. |
+| SPIFFS | Deprecated in favor of LittleFS. Same flash space concerns. |
+| cJSON | Lower-level C library. ArduinoJson is the idiomatic choice for Arduino framework and has better memory management (custom allocators, PSRAM support). |
+| MessagePack on SD | Config files should be human-readable for debugging. JSON wins here. |
+
+---
+
+## Area 2: SoftAP HTTP Server for File Upload
+
+### What Already Exists
+
+The project already has a complete SoftAP + WebServer implementation in `display/ota.cpp`:
+- `WiFi.mode(WIFI_AP_STA)` -- AP+STA mode so ESP-NOW keeps working
+- `WiFi.softAP("CrowPanel-OTA", "crowpanel")` -- SoftAP with password
+- `WebServer` on port 80 -- handles multipart file upload via `HTTPUpload`
+- Teardown: `WiFi.softAPdisconnect(true)` then back to `WIFI_STA`
+
+**This infrastructure is directly reusable for config file upload.** The OTA module proves the pattern works, including WiFi + ESP-NOW coexistence.
+
+### Recommended Approach: Extend Existing WebServer
+
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| Arduino WebServer | built-in | HTTP server for file upload | Already working in OTA module. Synchronous model is fine for single-client config upload. No new dependency needed. |
+
+**Why NOT ESPAsyncWebServer:**
+- The sync `WebServer` is already proven in this codebase (OTA upload works).
+- ESPAsyncWebServer would add an external dependency (`me-no-dev/ESPAsyncWebServer` + `me-no-dev/AsyncTCP`).
+- Config upload is a single-client operation (one desktop app uploading files). No concurrent connection handling needed.
+- The async library has historical stability issues and is maintained by a single developer.
+- Adding async introduces task/callback complexity that conflicts with the existing synchronous main loop pattern.
+
+**Implementation approach:**
+
+Add new endpoints to the same `WebServer` instance, activated alongside OTA or as a separate "config mode":
+
+```
+POST /api/config/upload     <- Multipart form: layout.json
+POST /api/icons/upload      <- Multipart form: icon BMP file(s)
+GET  /api/config/download   <- Download current layout.json
+GET  /api/status            <- Device info (SD card size, firmware version, current layout)
+DELETE /api/icons/{name}    <- Remove an icon file
+```
+
+**WiFi + ESP-NOW Coexistence:**
+
+This is already solved in the codebase. Key constraints (verified from ESP-IDF docs and existing OTA code):
+
+1. Use `WIFI_AP_STA` mode (not `WIFI_AP` alone) -- ESP-NOW requires the station interface
+2. ESP-NOW and SoftAP must operate on the same WiFi channel. SoftAP defaults to channel 1, and ESP-NOW peers must be configured for channel 0 (auto = current channel) or explicitly channel 1
+3. Both the display and bridge are already using channel 0 / auto in the current ESP-NOW init, so this works out of the box when SoftAP is active
+4. Performance: expect slight ESP-NOW latency increase (~1-5ms) when WiFi is actively handling HTTP traffic. This is acceptable since config upload is not time-critical
+
+**SoftAP Configuration (reuse OTA pattern):**
+```cpp
+WiFi.mode(WIFI_AP_STA);
+WiFi.softAP("CrowPanel-Config", "crowpanel");
+// WebServer setup...
+// When done:
+WiFi.softAPdisconnect(true);
+WiFi.mode(WIFI_STA);
+```
+
+**File upload handler (SD card write):**
+```cpp
+static File upload_file;
+
+void handle_config_upload() {
+    HTTPUpload &upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+        // Backup existing config
+        if (SD.exists("/config/layout.json")) {
+            // Copy to /backup/layout.json.bak
+        }
+        upload_file = SD.open("/config/layout.json", FILE_WRITE);
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+        upload_file.write(upload.buf, upload.currentSize);
+    } else if (upload.status == UPLOAD_FILE_END) {
+        upload_file.close();
+        // Validate JSON before accepting
+        // Reload layout from SD card
+    }
+}
+```
+
+### What NOT to Add for HTTP Server
+
+| Avoid | Why |
+|-------|-----|
+| ESPAsyncWebServer | External dependency, async complexity, single-client use case. Sync WebServer already proven. |
+| WebSocket | Overkill for file upload. Standard HTTP multipart POST is sufficient. |
+| mDNS | Nice-to-have but not essential. The SoftAP always has IP 192.168.4.1. Desktop app can hardcode this. |
+| HTTPS/TLS | Local AP-only connection. No internet exposure. TLS would consume ~40KB RAM and add latency. |
+| REST framework (e.g., aREST) | Adds dependency for trivial routing. WebServer's `on()` method handles the 5 endpoints needed. |
+
+Sources:
+- [ESP-IDF WiFi coexistence docs (v5.5.2)](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/wifi.html) -- AP_STA + ESP-NOW channel behavior
+- [ESP-IDF ESP-NOW docs](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/network/esp_now.html) -- channel 0 = current channel
+- [circuitlabs.net ESP-NOW + WiFi coexistence](https://circuitlabs.net/esp-now-with-wifi-coexistence/) -- practical guide
+- [Arduino Forum: WebServer vs ESPAsyncWebServer](https://forum.arduino.cc/t/webserver-vs-espasyncwebserver/928293) -- comparison discussion
+
+---
+
+## Area 3: Python Desktop GUI for Hotkey Layout Editor
+
+### Technology Selection: PySide6
+
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| PySide6 | 6.10.x | GUI framework for layout editor | See detailed rationale below |
+| Pillow | 11.x | Image processing (resize, convert icons to BMP RGB565) | Standard Python imaging library. Needed to prepare button icons for the ESP32 display. |
+| requests | 2.32.x | HTTP client to upload config/icons to ESP32 SoftAP | Lightweight, standard HTTP library. Handles multipart file upload. |
+
+**Why PySide6 over GTK4 (reversing prior research recommendation):**
+
+The prior STACK.md recommended GTK4 + PyGObject for the companion daemon's config panel. For the dedicated layout editor GUI, PySide6 is the better choice:
+
+1. **Cross-platform:** PySide6 runs on Linux, macOS, and Windows. GTK4 is Linux-only in practice (macOS/Windows GTK is painful). A hotkey editor should work wherever the user's desktop PC is.
+
+2. **Richer widget set for visual editors:** Qt provides `QGraphicsView`/`QGraphicsScene` for the drag-and-drop grid layout editor, `QColorDialog` for button color picking, `QFileDialog` for icon selection, and `QTreeView` for page/hotkey hierarchy. GTK4 has equivalents but they are less polished for editor-style applications.
+
+3. **LGPL license:** PySide6 is LGPL-licensed (official Qt for Python binding). No commercial license needed for distribution. PyQt6 requires GPL or commercial license.
+
+4. **Companion app synergy:** The existing companion app (`companion/hotkey_companion.py`) is pure Python. PySide6 integrates naturally as another Python module in the same project.
+
+5. **Active development:** PySide6 6.10.2 released February 2026. Regular releases tracking Qt6.
+
+**Why NOT the alternatives:**
+
+| Alternative | Why Not |
+|-------------|---------|
+| GTK4 + PyGObject | Linux-only in practice. Editor app benefits from cross-platform. GTK4 lacks QGraphicsView equivalent for visual grid editing. |
+| PyQt6 | Same Qt6 API as PySide6 but GPL-licensed. Would require commercial license for distribution. |
+| Dear PyGui | Immediate-mode rendering. Great for data visualization, wrong paradigm for a form-based config editor with drag-and-drop. |
+| Tkinter | Primitive widget set. No modern styling. Would look and feel outdated. |
+| Electron/web | 200MB+ RAM overhead for a config panel. Absurd. |
+| Kivy | Touch-focused framework. Desktop editor needs standard desktop widgets (menus, dialogs, tree views). |
+
+**Confidence:** HIGH -- PySide6 is the official Qt for Python binding, actively maintained by the Qt Company, and 6.10.x is current stable.
+
+Sources:
+- [PySide6 on PyPI](https://pypi.org/project/PySide6/) -- v6.10.2, released Feb 2026
+- [PySide6 release notes](https://doc.qt.io/qtforpython-6/release_notes/pyside6_release_notes.html) -- full changelog
+- [PyQt6 vs PySide6 comparison](https://www.pythonguis.com/faq/pyqt6-vs-pyside6/) -- licensing is the key difference
+- [pythonguis.com 2026 GUI comparison](https://www.pythonguis.com/faq/which-python-gui-library/) -- PySide6 recommended for professional apps
+- [Medium: PySide6 vs PyQt vs Dear PyGui 2025 review](https://medium.com/@areejkam01/i-compared-pyside6-pyqt-kivy-flet-and-dearpygui-my-honest-2025-review-8c037118a777) -- practical comparison
+
+### GUI Editor Architecture
+
+```
+editor/
+  main.py                <- Entry point, QApplication
+  editor_window.py       <- Main window with toolbar, page tabs
+  grid_editor.py         <- QGraphicsView-based 4x3 button grid editor
+  hotkey_dialog.py       <- Dialog for editing individual hotkey properties
+  icon_manager.py        <- Icon browser, BMP conversion via Pillow
+  device_connection.py   <- HTTP client for ESP32 SoftAP upload/download
+  models.py              <- Layout data model (pages, hotkeys) with JSON serialization
+```
+
+### Image Processing Pipeline (Pillow)
+
+Button icons need to be converted from any format (PNG, JPEG, SVG) to 64x64 RGB565 BMP for the ESP32 display:
+
+```python
+from PIL import Image
+import struct
+
+def convert_to_rgb565_bmp(input_path: str, output_path: str, size: int = 64):
+    img = Image.open(input_path).convert("RGB").resize((size, size))
+    # Save as 16-bit BMP (RGB565)
+    # LVGL's BMP decoder expects standard BMP with 16-bit color depth
+    img.save(output_path, format="BMP")
+```
+
+Note: LVGL's BMP decoder supports 16-bit and 24-bit BMP. For simplicity, 24-bit BMP works fine (LVGL converts internally). For optimal performance, pre-convert to RGB565 format using LVGL's offline image converter tool.
+
+### Installation
 
 ```bash
-# System dependencies (Arch Linux / CachyOS)
-sudo pacman -S python python-gobject gtk4 libadwaita
+# Desktop GUI editor
+pip install PySide6>=6.10.0 Pillow>=11.0.0 requests>=2.32.0
 
-# Python dependencies
-pip install pyserial psutil nvidia-ml-py
+# Or with requirements.txt
+# editor/requirements.txt:
+# PySide6>=6.10.0
+# Pillow>=11.0.0
+# requests>=2.32.0
 ```
 
 ---
 
-## Alternatives Considered
+## Combined Stack Summary
 
-| Recommended | Alternative | Why Not |
-|-------------|-------------|---------|
-| ESP-NOW (wireless link) | BLE | ESP-NOW has sub-ms latency vs 7.5ms+ BLE connection interval. No pairing ceremony. Simpler API. BLE is overkill for 4-byte hotkey packets between two known devices. |
-| ESP-NOW (wireless link) | WiFi TCP/UDP | Requires a router, adds connection management complexity, higher power draw. ESP-NOW operates at the data-link layer without WiFi stack overhead. |
-| UART (wired fallback) | I2C | UART is full-duplex, faster (115200+ baud), longer cable runs, and does not require pull-up resistors. I2C is designed for on-board chip-to-chip, not inter-board communication. |
-| UART (wired fallback) | SPI | SPI requires 4 wires + chip select, is master-slave only, and adds unnecessary complexity for a simple bidirectional serial link. |
-| Packed C structs (protocol) | JSON | JSON parsing on ESP32 wastes CPU cycles and memory. The protocol is fixed at compile time with no dynamic fields. ArduinoJson would add ~30KB flash for zero benefit. |
-| Packed C structs (protocol) | MessagePack | Adds a dependency (msgpack library) on both ESP32 and Python sides. For a fixed protocol with 5 message types, the overhead is not justified. |
-| Packed C structs (protocol) | Protocol Buffers | Massive overkill. nanopb adds significant complexity for a handful of small fixed messages. |
-| Python + psutil (stats) | C/C++ daemon | Python is fast enough for 1-2 Hz stat polling. C would be premature optimization. psutil handles all the sysfs/procfs parsing. |
-| Python + psutil (stats) | Node.js | No equivalent to psutil in the Node ecosystem. Python is the standard for system tooling on Linux. |
-| GTK4 (GUI) | Qt6/PySide6 | Qt6 works but is a 200MB+ dependency. GTK4 is native on GNOME/Linux, lighter weight, and PyGObject is simpler than PySide6's signal/slot boilerplate. |
-| GTK4 (GUI) | Electron | 200MB+ RAM for a config panel is absurd. GTK4 native app uses ~30MB. |
-| GTK4 (GUI) | Terminal UI (curses) | A hotkey configuration GUI genuinely benefits from drag-and-drop, color pickers, and visual grid layout. TUI cannot deliver this. |
-| systemd user service (daemon) | cron | Stats need continuous 1-2 Hz streaming, not periodic batch runs. systemd handles restart-on-crash, logging, and dependency management. |
+### ESP32 Display Firmware Additions
 
----
+| Library | Version | platformio.ini | Purpose |
+|---------|---------|----------------|---------|
+| ArduinoJson | ^7.4.0 | `lib_deps` addition | Parse layout JSON from SD card |
 
-## What NOT to Use
+**lv_conf.h changes:**
+| Define | New Value | Purpose |
+|--------|-----------|---------|
+| `LV_USE_BMP` | `1` | Decode BMP button icons from SD |
 
-| Avoid | Why | Use Instead |
-|-------|-----|-------------|
-| pioarduino / Arduino 3.x | One-person community fork. Risks breaking LovyanGFX, LVGL, USB HID. No benefit for this project. | espressif32@6.5.0 (Arduino 2.x) |
-| ArduinoJson | Adds flash overhead for parsing. Fixed protocol does not need dynamic serialization. | Packed C structs with shared header |
-| BLE for display<->bridge link | Higher latency, complex pairing, connection-oriented overhead. Already abandoned in the project for good reason. | ESP-NOW |
-| NimBLE-Arduino (for bridge link) | Same BLE problems. Keep it only if you resurrect direct-to-PC BLE mode on the display. | ESP-NOW for bridge link |
-| pynvml | Deprecated. Use the official nvidia-ml-py package instead. | nvidia-ml-py |
-| PyGTK / GTK3 | GTK3 is legacy. PyGTK has been dead since 2011. | GTK4 + PyGObject + Libadwaita |
-| tkinter | Ugly, limited widgets, no native Linux integration. | GTK4 + PyGObject |
-| WebSocket/HTTP server on ESP32 | Memory-hungry, requires WiFi stack, adds attack surface. Not needed when you have USB serial. | USB CDC serial for companion app communication |
+**No new libraries needed for HTTP upload** -- reuses existing WebServer + WiFi SoftAP from OTA module.
+
+### Desktop Editor (New Python Package)
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| PySide6 | >=6.10.0 | GUI framework |
+| Pillow | >=11.0.0 | Image conversion (any format -> BMP for ESP32) |
+| requests | >=2.32.0 | HTTP upload to ESP32 SoftAP |
+
+### Total New Dependencies
+
+**Firmware:** 1 library (ArduinoJson) + 1 lv_conf.h flag change.
+**Desktop:** 3 pip packages (PySide6, Pillow, requests).
+
+This is deliberately minimal. The heaviest existing infrastructure (SD card, SoftAP, WebServer, ESP-NOW) is already built and proven.
 
 ---
 
-## Version Compatibility
+## Version Compatibility Matrix
 
-| Package A | Compatible With | Notes |
-|-----------|-----------------|-------|
-| espressif32@6.5.0 | LovyanGFX 1.1.8 | Proven in existing project |
-| espressif32@6.5.0 | LVGL 8.3.11 | Proven in existing project |
-| espressif32@6.5.0 | ESP-NOW (esp_now.h) | Built-in to ESP-IDF 4.4, no external dep |
-| espressif32@6.5.0 | USB.h + USBHIDKeyboard.h + USBCDC | Built-in to Arduino ESP32 2.x core |
-| Python 3.11+ | psutil 5.9+/6.x/7.x | All versions compatible |
-| Python 3.11+ | pyserial 3.5 | Stable, no breaking changes |
-| Python 3.11+ | PyGObject 3.48+ | Requires GTK4 system package |
-| GTK4 4.12+ | Libadwaita 1.4+ | Both available in Arch/CachyOS repos |
+| Component | Compatible With | Verified |
+|-----------|-----------------|----------|
+| ArduinoJson 7.4.x | espressif32@6.5.0 / Arduino 2.x | YES -- ESP Component Registry confirms compatibility |
+| ArduinoJson 7.4.x | PSRAM allocation | YES -- supports custom allocators |
+| WebServer (built-in) | WiFi.mode(WIFI_AP_STA) + ESP-NOW | YES -- proven in display/ota.cpp |
+| LV_USE_BMP | LVGL 8.3.11 | YES -- built-in decoder, lv_conf.h flag |
+| lv_fs_drv_t | Arduino SD library | YES -- standard adapter pattern, community-proven |
+| PySide6 6.10.x | Python 3.11+ | YES -- PyPI confirms |
+| Pillow 11.x | Python 3.11+ | YES -- standard compatibility |
+| requests 2.32.x | Python 3.11+ | YES -- standard compatibility |
 
 ---
 
-## Stack Patterns by Variant
+## Integration Points with Existing Stack
 
-**If using NVIDIA GPU:**
-- Use nvidia-ml-py for GPU stats (util%, temp, VRAM, fan speed)
-- Import conditionally; skip gracefully if not installed
+### SD Card <-> LVGL Integration
+The existing `sdcard.cpp` module uses `SD.h` with HSPI. The LVGL FS driver will also use `SD.h`, calling `SD.open()` / `File.read()` etc. Since both use the same `SD` singleton, they share the mounted filesystem. No SPI bus conflict because it is the same bus instance.
 
-**If using AMD GPU:**
-- Read `/sys/class/drm/card0/device/gpu_busy_percent` for utilization
-- Read `/sys/class/hwmon/hwmon*/temp*_input` for temperature (match via `name` file)
-- Use `sensors` command as fallback via subprocess
-- Wrap in try/except; GPU stats are "nice to have," not critical
+### WiFi Config Mode <-> ESP-NOW
+The existing `ota.cpp` already sets `WIFI_AP_STA` which keeps ESP-NOW alive. The config upload server will use the identical pattern. ESP-NOW messages (hotkey commands, stats) continue to flow during config upload. The only constraint: both display and bridge must be on the same WiFi channel (channel 1, the SoftAP default).
 
-**If display unit is connected via USB cable (wired mode):**
-- Use UART (Serial1) as primary link instead of ESP-NOW
-- ESP-NOW remains active for heartbeat/presence detection
-- UART is faster and more reliable when physically connected
+### JSON Config <-> UI Rebuild
+When a new `layout.json` is uploaded via HTTP, the firmware must:
+1. Parse with ArduinoJson
+2. Destroy existing LVGL tabview and button objects
+3. Rebuild UI from new config
+4. This is safe because LVGL is single-threaded and the rebuild happens in the main loop
 
-**If display unit is on battery (wireless mode):**
-- ESP-NOW is the only communication channel
-- Reduce stat update frequency to 0.5 Hz to conserve power
-- Enter deep sleep if no heartbeat from bridge for 5 minutes
-- Wake on touch interrupt for on-demand use
+### Desktop Editor <-> ESP32 Upload
+The editor generates `layout.json` and BMP icon files, then uploads via HTTP POST to `192.168.4.1` (SoftAP IP). The ESP32's WebServer receives multipart uploads and writes to SD card. Standard HTTP -- no custom protocol needed.
 
 ---
 
 ## Sources
 
-- [ESP-IDF ESP-NOW API Reference (v5.5.2)](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/network/esp_now.html) -- protocol limits, encryption, peer management (HIGH confidence)
-- [ESP-IDF USB Device Stack (v5.5.2)](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/peripherals/usb_device.html) -- composite device support (HIGH confidence)
-- [Arduino ESP32 USB API docs](https://docs.espressif.com/projects/arduino-esp32/en/latest/api/usb.html) -- USBCDC, HID classes (MEDIUM confidence -- docs are for latest, not pinned to 2.x)
-- [cnfatal/esp32-cdc-keyboard](https://github.com/cnfatal/esp32-cdc-keyboard) -- proven HID+CDC composite on ESP32-S3 (MEDIUM confidence -- ESP-IDF not Arduino)
-- [Elecrow CrowPanel 7.0 wiki](https://www.elecrow.com/wiki/esp32-display-702727-intelligent-touch-screen-wi-fi26ble-800480-hmi-display.html) -- board specs, BAT connector (HIGH confidence)
-- [psutil documentation](https://psutil.readthedocs.io/) -- system monitoring API (HIGH confidence)
-- [nvidia-ml-py on PyPI](https://pypi.org/project/nvidia-ml-py/) -- official NVIDIA GPU bindings (HIGH confidence)
-- [PyGObject docs](https://pygobject.gnome.org/getting_started.html) -- GTK4 Python bindings (HIGH confidence)
-- [pioarduino discussion](https://github.com/espressif/arduino-esp32/discussions/10039) -- Arduino 3.x PlatformIO status (HIGH confidence)
-- [Random Nerd Tutorials ESP-NOW](https://randomnerdtutorials.com/esp-now-esp32-arduino-ide/) -- Arduino ESP-NOW patterns (MEDIUM confidence)
-- [ESP32 Desktop Monitor project](https://github.com/tuckershannon/ESP32-Desktop-Monitor) -- similar companion app pattern (LOW confidence -- different hardware)
+- [ArduinoJson v7 documentation](https://arduinojson.org/v7/) -- HIGH confidence
+- [ArduinoJson v7 release notes](https://arduinojson.org/v7/revisions/) -- v7.4.2 current, HIGH confidence
+- [ArduinoJson GitHub](https://github.com/bblanchon/ArduinoJson) -- HIGH confidence
+- [LVGL 8.3 File System docs](https://docs.lvgl.io/8.3/overview/file-system.html) -- HIGH confidence
+- [LVGL 8.3 BMP decoder](https://docs.lvgl.io/8.3/libs/bmp.html) -- HIGH confidence
+- [LVGL Forum: SD card with LVGL v8.3 on ESP32](https://forum.lvgl.io/t/how-do-i-correctly-make-the-sd-card-work-for-image-widgets-on-an-esp32-dev-kit-with-lvgl-v-8-3/9827) -- MEDIUM confidence
+- [ESP-IDF WiFi driver docs (v5.5.2)](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/wifi.html) -- HIGH confidence
+- [ESP-IDF ESP-NOW docs (v5.5.2)](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/network/esp_now.html) -- HIGH confidence
+- [circuitlabs.net ESP-NOW + WiFi coexistence](https://circuitlabs.net/esp-now-with-wifi-coexistence/) -- MEDIUM confidence
+- [Arduino Forum: WebServer vs ESPAsyncWebServer](https://forum.arduino.cc/t/webserver-vs-espasyncwebserver/928293) -- MEDIUM confidence
+- [PySide6 on PyPI](https://pypi.org/project/PySide6/) -- v6.10.2, HIGH confidence
+- [PySide6 release notes](https://doc.qt.io/qtforpython-6/release_notes/pyside6_release_notes.html) -- HIGH confidence
+- [pythonguis.com GUI framework comparison 2026](https://www.pythonguis.com/faq/which-python-gui-library/) -- MEDIUM confidence
+- [PyQt6 vs PySide6](https://www.pythonguis.com/faq/pyqt6-vs-pyside6/) -- MEDIUM confidence
 
 ---
-*Stack research for: Dual-ESP32 wireless command center with system monitoring*
-*Researched: 2026-02-14*
+*Stack research for: v1.1 Configurable Hotkey Layouts (SD card + SoftAP upload + GUI editor)*
+*Researched: 2026-02-15*

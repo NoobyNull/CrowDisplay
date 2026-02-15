@@ -1,293 +1,515 @@
-# Pitfalls Research
+# Domain Pitfalls: SD Card Config + SoftAP Upload + Dynamic LVGL UI
 
-**Domain:** Dual-ESP32 wireless command center (ESP-NOW, USB HID bridging, battery management, desktop companion app)
-**Researched:** 2026-02-14
-**Confidence:** MEDIUM-HIGH (most pitfalls verified across multiple sources + confirmed by existing codebase patterns)
+**Domain:** Adding configurable hotkey layouts to existing ESP32-S3 wireless command center
+**Researched:** 2026-02-15
+**Confidence:** HIGH (pitfalls verified against actual codebase, ESP-IDF docs, and community reports)
+
+---
 
 ## Critical Pitfalls
 
-### Pitfall 1: ESP-NOW + WiFi Radio Contention Destroys Reliability
-
-**What goes wrong:**
-ESP-NOW and WiFi share the same 2.4 GHz radio on the ESP32-S3. When WiFi Station mode is connected to a router, ESP-NOW packet loss jumps to 80%+. The ESP32 uses time-division multiplexing between protocols, and WiFi power-save mode (MODEM_SLEEP) actively starves ESP-NOW of radio time.
-
-**Why it happens:**
-Developers assume ESP-NOW and WiFi are independent subsystems. They are not -- they share a single radio. When WiFi is associated with an AP, the radio spends most of its time listening to the AP's beacon interval and handling WiFi traffic. ESP-NOW packets get dropped silently.
-
-**How to avoid:**
-- On the CrowPanel (display unit): do NOT connect to WiFi. Use ESP-NOW only. If WiFi is needed for OTA or config, disconnect WiFi before resuming ESP-NOW communication.
-- On the USB-bridge ESP32: same rule -- ESP-NOW only, no concurrent WiFi STA connection.
-- Both peers MUST be on the same WiFi channel. Pin both to channel 1 (or whichever you choose) using `esp_wifi_set_channel()`.
-- Call `esp_wifi_set_ps(WIFI_PS_NONE)` to disable power save on both units. This is mandatory for reliable ESP-NOW.
-- Use `WIFI_MODE_STA` (not `WIFI_MODE_AP` or `WIFI_MODE_APSTA`) on both devices -- ESP-NOW works best in STA mode without an active AP connection.
-
-**Warning signs:**
-- Intermittent command delivery (hotkeys sometimes don't fire)
-- Packet loss increases when WiFi scan runs
-- ESP-NOW send callback reports failures sporadically
-- Latency spikes above 50ms on what should be sub-5ms delivery
-
-**Phase to address:**
-Phase 1 (ESP-NOW communication foundation). Must be resolved before any higher-level protocol work begins.
+These cause hard-to-diagnose failures, data loss, or require architectural rework.
 
 ---
 
-### Pitfall 2: USB HID + CDC Composite Device Stalls on ESP32-S3
+### Pitfall 1: WiFi Channel Lock Breaks ESP-NOW When SoftAP Starts
 
 **What goes wrong:**
-Running USB HID (keyboard) and USB CDC (serial for desktop companion app communication) simultaneously on the ESP32-S3 causes the USB stack to stall after extended use. Espressif has acknowledged this issue (arduino-esp32 #10307) and marked the fix as "Won't Do." The HID report queue fills up, CDC blocks waiting for the host to read, and the entire USB stack deadlocks.
+When `WiFi.mode(WIFI_AP_STA)` starts the SoftAP for config upload, the ESP32's single radio locks to the SoftAP's channel. If the bridge ESP32 was communicating on a different channel (e.g., channel 1 from `esp_wifi_set_channel()`), all ESP-NOW packets silently fail. The existing OTA code in `ota.cpp` already does `WiFi.mode(WIFI_AP_STA)` but does NOT pin the channel -- the SoftAP defaults to channel 1, which may or may not match the bridge's channel.
 
 **Why it happens:**
-The ESP32-S3 has one USB OTG peripheral with TinyUSB handling the stack. Composite devices (HID + CDC) share the same USB endpoint resources. When the host (PC) is slow to read CDC data or the HID report rate is high, internal semaphores timeout and the device stops responding to USB entirely.
+ESP32 has ONE 2.4 GHz radio. In AP_STA mode, both interfaces share the same physical channel. The SoftAP picks a channel (default 1), and ESP-NOW MUST operate on that same channel. The bridge ESP32 (running in STA mode on some other channel) cannot hear packets on a different channel. The current `espnow_link.cpp` sets `peer.channel = 0` (auto), which works in pure STA mode but becomes ambiguous in AP_STA mode.
 
-**How to avoid:**
-- Do NOT run HID and CDC on the same ESP32. This is the architecture-level fix: the USB-bridge ESP32 does HID-only to the PC. Communication from the desktop companion app goes over a separate channel (dedicated serial/UART over USB-to-serial adapter, or a second USB CDC on a separate MCU).
-- If composite is absolutely required: implement watchdog monitoring of USB stack health. When stall is detected, force USB re-enumeration via `tinyusb_driver_uninstall()` / `tinyusb_driver_install()`.
-- Rate-limit CDC writes. Never write CDC data faster than the host reads it. Use non-blocking writes with overflow detection.
+**Consequences:**
+- Hotkey commands stop reaching the bridge while config upload is active
+- ESP-NOW send callback reports success (MAC-layer ACK fails silently when peer is on wrong channel)
+- User thinks the device crashed because buttons stop working
 
-**Warning signs:**
-- USB device disappears from host after 10-60 minutes of use
-- "Report wait failed" errors in serial debug output
-- Windows Device Manager shows "USB Device Not Recognized" after extended operation
-- HID keypresses stop working but serial debug (if separate) still shows the ESP32 is running
+**Prevention:**
+1. Pin BOTH devices to the same channel explicitly at boot: `esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE)` on both display and bridge
+2. When starting SoftAP, specify the channel: `WiFi.softAP(ssid, pass, 1)` -- third param is channel, must match the ESP-NOW channel
+3. Update the ESP-NOW peer registration to use the explicit channel (not 0): `peer.channel = 1`
+4. After stopping SoftAP, call `WiFi.mode(WIFI_STA)` then re-pin channel with `esp_wifi_set_channel()`
+5. Add a pre-flight check: before entering config mode, send a MSG_PING to bridge and verify ACK, then send a "entering config mode" message so bridge knows to expect a pause
 
-**Phase to address:**
-Phase 1 (Architecture decision). The two-ESP32 architecture must separate HID and serial concerns from the start.
+**Detection:**
+- `espnow_get_rssi()` drops to 0 after SoftAP starts
+- Bridge stops receiving heartbeat pings
+- `esp_now_send()` returns ESP_OK but send callback never fires with success
+
+**Phase to address:** Config Upload milestone, first task -- WiFi mode transition must be the first thing tested.
 
 ---
 
-### Pitfall 3: I2C Bus Contention Breaks Touch After Adding New Peripherals
+### Pitfall 2: JSON Parsing on 96KB LVGL Heap + Internal SRAM Exhausts Memory
 
 **What goes wrong:**
-The GT911 touch controller, PCA9557 I/O expander, and PCF8575 all share I2C on pins 19/20. Adding ESP-NOW communication handlers or battery monitoring via I2C (fuel gauges like MAX17048) creates timing conflicts. The GT911 requires periodic polling with specific register read sequences (write register address, delay, read data, write clear flag). If another I2C device transaction interrupts this sequence -- especially from an ISR or FreeRTOS task -- the GT911 goes into an undefined state and stops responding.
+ArduinoJson's `JsonDocument` allocates from the heap. On ESP32-S3, the default heap is internal SRAM (~300KB total, shared with LVGL's 96KB pool, WiFi stack ~50KB, FreeRTOS tasks, etc.). Parsing a layout config file (say 3 pages x 12 buttons x ~100 bytes each = ~4KB JSON) requires ArduinoJson to allocate roughly 2-3x the file size for its DOM. This hits internal SRAM directly, competing with LVGL's memory pool and the WiFi stack buffers.
 
 **Why it happens:**
-The current code runs everything in a single `loop()` with no I2C bus locking. This works today because the polling is sequential. The moment ESP-NOW callbacks or battery monitoring tasks run on Core 0 while touch polling runs on Core 1, or when a FreeRTOS timer fires during a GT911 multi-step I2C transaction, bus corruption occurs.
+- `LV_MEM_CUSTOM 0` in `lv_conf.h` means LVGL uses its own 96KB allocator from internal SRAM
+- ArduinoJson `JsonDocument` defaults to heap_caps_malloc(MALLOC_CAP_DEFAULT) which is internal SRAM
+- WiFi + SoftAP + HTTP server consume ~50-70KB of internal SRAM when active
+- Reading the entire JSON file into a buffer before parsing doubles the memory cost
 
-**How to avoid:**
-- Wrap ALL I2C access in a FreeRTOS mutex. Create a global `SemaphoreHandle_t i2c_mutex` and take/give it around every Wire transaction sequence (not individual calls -- the entire read-modify-write sequence for GT911 must be atomic).
-- Move GT911 polling to a dedicated FreeRTOS task with guaranteed timing. The current `delay(1)` between I2C write and read is fragile; use `vTaskDelay(pdMS_TO_TICKS(2))` inside a task instead.
-- Never call `Wire.begin()` after initial setup. The existing code already does this correctly, but any new library that calls `Wire.begin()` internally will reset the bus and break the GT911.
-- If adding a battery fuel gauge, either: (a) put it on a separate I2C bus using the ESP32-S3's second I2C peripheral (Wire1 on different pins), or (b) ensure its polling frequency is low (every 10s) and uses the same mutex.
+**Consequences:**
+- `malloc()` returns NULL during JSON parsing, causing crash or silent data corruption
+- LVGL allocations fail during/after JSON parsing, widgets not created
+- HTTP upload + JSON parse + SD write happening simultaneously = memory cliff
 
-**Warning signs:**
-- Touch stops responding after adding a new I2C device or task
-- I2C errors (endTransmission returns non-zero) that appear intermittently
-- GT911 needs re-discovery after being active for minutes/hours
-- PCF8575 reads return 0xFFFF when they shouldn't
+**Prevention:**
+1. Use ArduinoJson v7 with a PSRAM-backed custom allocator:
+   ```cpp
+   struct PsramAllocator {
+       void* allocate(size_t size) { return ps_malloc(size); }
+       void deallocate(void* ptr) { free(ptr); }
+       void* reallocate(void* ptr, size_t new_size) { return ps_realloc(ptr, new_size); }
+   };
+   using PsramJsonDocument = BasicJsonDocument<PsramAllocator>;
+   ```
+2. Use streaming JSON parser (ArduinoJson `deserializeJson()` directly from File object) instead of reading entire file into buffer first
+3. Parse config BEFORE starting the HTTP server, not during an upload handler
+4. Budget memory explicitly:
+   - LVGL heap: 96KB (internal SRAM)
+   - WiFi + SoftAP stack: ~60KB (internal SRAM)
+   - JSON parsing: PSRAM only
+   - SD card read buffer: PSRAM only
+   - HTTP upload buffer: 1460 bytes per chunk (handled by WebServer internally)
+   - Available internal SRAM after LVGL + WiFi: ~120-150KB -- leave 50KB headroom minimum
 
-**Phase to address:**
-Phase 1 (communication infrastructure). I2C mutex must be the first thing implemented before any new peripheral or task is added.
+**Detection:**
+- Call `ESP.getFreeHeap()` before and after JSON parsing -- drop > 10KB is a warning
+- Enable `LV_USE_ASSERT_MALLOC 1` (already enabled) to catch LVGL allocation failures
+- Serial print: `heap_caps_get_free_size(MALLOC_CAP_INTERNAL)` at key points
+
+**Phase to address:** SD Card Config milestone -- JSON format and parsing approach must be decided before writing any parser code.
 
 ---
 
-### Pitfall 4: LVGL 96KB Memory Pool Exhaustion With Multi-Page UI
+### Pitfall 3: LVGL Widget Tree Leak When Rebuilding Dynamic UI
 
 **What goes wrong:**
-The current `LV_MEM_SIZE` is 96KB. The existing single-page 4x3 grid with buttons and labels uses a modest amount. But adding statistics pages, settings screens, connection status overlays, animations, or charts will exhaust LVGL's internal heap. When LVGL runs out of memory, it silently fails to create widgets, returns NULL pointers, and eventually crashes when NULL objects are used.
+When the user uploads a new layout config, the UI must be rebuilt -- old buttons destroyed, new buttons created from the config. If you call `lv_obj_del()` on the tab content but LVGL styles were initialized with `lv_style_init()`, those style allocations are NOT freed. Each rebuild leaks memory. After 3-5 config reloads, LVGL heap is exhausted and the device must be rebooted.
 
 **Why it happens:**
-LVGL's internal memory allocator (TLSF) fragments over time, especially when screens are created and destroyed. Each `lv_obj_create()`, `lv_label_create()`, style allocation, and animation uses LVGL heap. A 96KB pool is tight for a 7" 800x480 display with multiple pages. The draw buffers are in PSRAM (good), but LVGL's widget heap is in internal SRAM (limited).
+LVGL v8.3 does NOT garbage-collect styles. `lv_obj_del()` recursively deletes an object and its children, freeing their base allocations. But if you created local `lv_style_t` variables and applied them with `lv_obj_add_style()`, the style's internal data (allocated by `lv_style_init()`) is NOT freed by `lv_obj_del()`. The current `ui.cpp` uses inline style setters (`lv_obj_set_style_*`) which allocate from LVGL heap per-object.
 
-**How to avoid:**
-- Increase `LV_MEM_SIZE` to at least 128KB, preferably 192KB. The ESP32-S3 with OPI PSRAM has ~8MB external RAM. While LVGL's internal allocator should ideally use internal SRAM for speed, 96KB is too conservative for multi-page UI.
-- Alternatively, switch to `LV_MEM_CUSTOM 1` and use a custom allocator that uses PSRAM via `ps_malloc()`. This gives effectively unlimited LVGL heap but with a small performance penalty for widget operations (not display rendering, which already uses PSRAM buffers).
-- Do NOT create/destroy screens dynamically. Instead, create all screens at startup and use `lv_scr_load()` / `lv_scr_load_anim()` to switch. This avoids fragmentation.
-- Enable `LV_USE_ASSERT_MALLOC 1` (already enabled) and also enable `LV_USE_LOG 1` during development to catch allocation failures early.
-- Monitor free LVGL memory periodically: `lv_mem_monitor_t mon; lv_mem_monitor(&mon); Serial.printf("LVGL free: %d%%\n", mon.free_biggest_size);`
+**Consequences:**
+- Memory usage grows with each layout reload
+- After 3-5 reloads: widgets fail to create, display goes blank or shows partial UI
+- No error message -- LVGL silently returns NULL from `lv_*_create()`
 
-**Warning signs:**
-- Widgets don't appear on screen after creation (NULL return from `lv_*_create`)
-- Random crashes when navigating between screens
-- UI works initially but degrades after screen switches
-- `lv_mem_monitor()` shows fragmentation above 50% or free memory below 10KB
+**Prevention:**
+1. Do NOT destroy and recreate widgets for config changes. Instead, create the maximum widget tree once at boot (e.g., 4 pages x 12 buttons = 48 button slots), then UPDATE their labels, colors, and callbacks when config changes:
+   ```cpp
+   // At boot: create all slots
+   lv_obj_t* btn_slots[MAX_PAGES][MAX_BUTTONS_PER_PAGE];
 
-**Phase to address:**
-Phase 2 (UI expansion). Must be addressed before building multi-page interfaces.
+   // On config reload: update existing widgets
+   lv_label_set_text(btn_label, new_config.label);
+   lv_obj_set_style_bg_color(btn, lv_color_hex(new_config.color), 0);
+   ```
+2. If dynamic creation is unavoidable: call `lv_obj_clean()` on the parent (deletes all children) rather than individual `lv_obj_del()` calls -- this is slightly more memory-efficient
+3. Use `lv_obj_set_style_*()` functions (which the current code already does) instead of separate `lv_style_t` objects -- the per-object inline styles ARE freed when the object is deleted
+4. After any UI rebuild, call `lv_mem_monitor()` and log the result:
+   ```cpp
+   lv_mem_monitor_t mon;
+   lv_mem_monitor(&mon);
+   Serial.printf("LVGL: used=%d free=%d frag=%d%%\n",
+       mon.total_size - mon.free_size, mon.free_size, mon.frag_pct);
+   ```
+5. Set a hard limit: if `mon.free_size < 10240`, refuse to rebuild and show error message
+
+**Detection:**
+- `lv_mem_monitor()` shows decreasing free memory after each reload
+- Widgets stop appearing after multiple config uploads
+- LVGL assert fires (if `LV_USE_ASSERT_MALLOC 1` is enabled)
+
+**Phase to address:** Dynamic UI milestone -- widget pool pattern must be designed before building any dynamic layout code.
 
 ---
 
-### Pitfall 5: ESP-NOW Message Framing and Reliability Without ACK Protocol
+### Pitfall 4: SD Card SPI Blocks LVGL Rendering During File I/O
 
 **What goes wrong:**
-Developers send raw hotkey commands over ESP-NOW and assume delivery. ESP-NOW has built-in ACK at the MAC layer (the send callback tells you if the peer acknowledged), but this only confirms the frame reached the other radio -- NOT that the application processed it. If the receiving ESP32 is busy (handling a USB HID report, doing I2C, or in a critical section), the ESP-NOW receive callback may fire but the data gets dropped before the application acts on it.
+The SD card uses SPI (HSPI on GPIO 10-13, separate from display's RGB parallel bus). SD card reads/writes take 5-50ms depending on card speed and file size. During this time, the main loop is blocked -- `lv_timer_handler()` doesn't run, touch polling stops, and the display appears frozen. On a 7" 800x480 display at 60Hz refresh, even a 30ms stall is visually noticeable as a frame skip.
 
 **Why it happens:**
-ESP-NOW's 250-byte packet limit and low-level ACK give a false sense of reliability. The MAC-layer ACK means "radio received it," not "application handled it." There's no built-in retry at the application layer, no sequence numbers, and no way to know if a hotkey actually fired on the PC.
+The current architecture runs everything in a single-threaded `loop()`. SD file operations (`SD.open()`, `f.read()`, `f.write()`) are synchronous and blocking. The SPI bus is separate from the display bus (display uses RGB parallel, SD uses HSPI), so there is no electrical bus contention -- the problem is purely CPU time.
 
-**How to avoid:**
-- Implement a simple application-layer ACK protocol: sender sends command with sequence number, receiver processes and sends ACK with same sequence number. Sender retries 2-3 times with 20ms timeout if no ACK received.
-- Use a small ring buffer on the receiver to queue incoming commands. Process them in the main loop, not in the ESP-NOW receive callback (callbacks run in WiFi task context and must return quickly).
-- Include a message type byte in every packet: `CMD_HOTKEY`, `CMD_ACK`, `CMD_STATS_REQUEST`, `CMD_STATS_RESPONSE`, `CMD_HEARTBEAT`. This prevents protocol confusion as features are added.
-- Keep ESP-NOW receive callback minimal: copy data to queue, return immediately. Do NOT call Wire, USB, or any blocking function from the callback.
+**Consequences:**
+- UI freezes briefly when loading config from SD at boot
+- During HTTP file upload to SD, the touch stops responding and display flickers
+- If upload writes large files (icons, multiple configs), the freeze can last seconds
 
-**Warning signs:**
-- Hotkeys "sometimes don't work" with no error messages
-- Works perfectly in testing, fails under real use (because testing is low-frequency)
-- Adding console.log/Serial.print in receive callback "fixes" timing issues (masks the real problem)
+**Prevention:**
+1. Move SD card I/O to a dedicated FreeRTOS task on Core 0 (LVGL runs on Core 1 by default in Arduino):
+   ```cpp
+   // SD task on Core 0
+   xTaskCreatePinnedToCore(sd_task, "sd_io", 4096, NULL, 1, &sd_task_handle, 0);
 
-**Phase to address:**
-Phase 1 (ESP-NOW protocol design). The message format and ACK protocol must be defined before implementing any commands.
+   // Communication via queue
+   xQueueSend(sd_request_queue, &request, portMAX_DELAY);
+   ```
+2. For config loading at boot: load and parse BEFORE creating the LVGL UI. The display shows nothing useful during boot anyway
+3. For HTTP upload: write file chunks in the WebServer upload handler (already chunked at ~1460 bytes), which interleaves naturally with `loop()` calls since WebServer is polled, not async
+4. Keep individual SD operations under 5ms: read/write in small chunks (512-1024 bytes), yield between chunks with `vTaskDelay(1)`
+5. Show a loading indicator on screen BEFORE starting any SD operation, so the user knows the device is busy
+
+**Detection:**
+- Touch input feels "laggy" after adding SD reads to loop
+- LVGL timer handler warnings if `LV_USE_PERF_MONITOR` is enabled
+- Serial timestamps show >10ms gaps in loop iteration timing
+
+**Phase to address:** SD Card Config milestone -- file I/O strategy must account for LVGL rendering requirements.
 
 ---
 
-### Pitfall 6: CrowPanel USB-C Port Cannot Serve Both Programming and HID
+### Pitfall 5: HTTP Upload Handler + SD Write + ESP-NOW = Stack Overflow
 
 **What goes wrong:**
-The CrowPanel 7.0" routes its USB-C through a CH340 or similar USB-to-serial bridge for programming. This is NOT the ESP32-S3's native USB OTG port. The native USB pins (GPIO 19/20) are already used for I2C (GT911 touch + I/O expanders). This means the CrowPanel physically cannot act as a USB HID device through its USB-C port -- the USB data lines are connected to a UART bridge, not to the ESP32-S3's USB peripheral.
+The ESP32 WebServer upload handler runs in the WiFi task's context (or the main loop, depending on how `handleClient()` is called). The upload handler writes to SD card (SPI transaction). Meanwhile, ESP-NOW receive callbacks fire from the WiFi task. If the upload handler is running when an ESP-NOW packet arrives, the callback fires on the same stack. The combined stack depth (WebServer parsing + multipart decode + SD write + ESP-NOW callback) can exceed the task's stack allocation, causing a silent crash or watchdog reset.
 
 **Why it happens:**
-The CrowPanel was designed as a display/HMI device, not as a USB peripheral. The ESP32-S3 has native USB on GPIO 19/20, but CrowPanel uses those pins for I2C. The USB-C port provides power and serial programming only.
+- WebServer `handleClient()` is called from `loop()`, which runs on the Arduino main task (default 8KB stack)
+- SD file write involves SPI driver internals, adding stack frames
+- ESP-NOW callbacks fire in WiFi task context -- but if `handleClient()` is handling an upload, the callback is deferred, and when it fires, the combined context is deep
+- The real danger is the HTTP upload handler calling SD write, which triggers SPI interrupt handling, overlapping with WiFi interrupt handling
 
-**How to avoid:**
-- Accept this hardware constraint: the CrowPanel will NEVER be a USB HID device directly. This is why the two-ESP32 architecture exists.
-- The second ESP32 (USB bridge unit) provides USB HID to the PC. It receives commands from the CrowPanel via ESP-NOW (wireless) or UART (wired backup).
-- For the desktop companion app communication: use the CrowPanel's existing serial-over-USB (CH340) for debug/config, and the bridge ESP32's connection for runtime data.
-- Do NOT attempt to remap I2C to free up GPIO 19/20 for USB -- the touch controller and I/O expanders are hardwired on the CrowPanel PCB.
+**Consequences:**
+- Guru Meditation Error (stack overflow) during file upload
+- Device reboots mid-upload, leaving corrupt file on SD card
+- Intermittent: depends on exact timing of ESP-NOW packets arriving during upload
 
-**Warning signs:**
-- Spending time trying to get USB HID working on the CrowPanel itself
-- USB HID examples compile but "device not recognized" on host (because data goes through CH340, not USB OTG)
-- Confusion about which USB port does what
+**Prevention:**
+1. Increase Arduino loop task stack size in `platformio.ini`:
+   ```ini
+   build_flags = ... -DARDUINO_LOOP_STACK_SIZE=16384
+   ```
+2. Separate concerns: HTTP upload handler writes to a PSRAM buffer, then a separate task writes to SD card:
+   ```cpp
+   static void handle_config_upload() {
+       HTTPUpload &upload = web_server->upload();
+       if (upload.status == UPLOAD_FILE_WRITE) {
+           // Copy to PSRAM buffer -- fast, no SPI
+           memcpy(psram_buf + offset, upload.buf, upload.currentSize);
+           offset += upload.currentSize;
+       } else if (upload.status == UPLOAD_FILE_END) {
+           // Signal SD task to write the complete buffer
+           xTaskNotifyGive(sd_task_handle);
+       }
+   }
+   ```
+3. Limit upload file size (config files should be <16KB; reject anything larger in the upload handler)
+4. During active HTTP upload, temporarily pause ESP-NOW sending (not receiving -- we cannot stop callbacks, but we can avoid adding our own send operations that compete for WiFi task time)
 
-**Phase to address:**
-Architecture (pre-Phase 1). This constraint must be understood and accepted before any design work.
+**Detection:**
+- `Guru Meditation Error: Core 0 panic'd (Unhandled debug exception)` in serial output
+- `Stack canary watchpoint triggered (loopTask)` message
+- Upload succeeds sometimes but crashes other times (timing-dependent)
+
+**Phase to address:** Config Upload milestone -- upload handler design must avoid blocking SD writes on the HTTP task.
 
 ---
 
-### Pitfall 7: Battery Power Management Without Hardware Protection
+## Moderate Pitfalls
 
-**What goes wrong:**
-Adding a LiPo battery to the CrowPanel without proper under-voltage protection discharges the cell below 2.9V, permanently damaging it. The ESP32-S3 with WiFi radio draws current spikes of 300-500mA during transmission. A LiPo at 3.5V nominal can brownout the voltage regulator during these spikes, causing random resets. If the CrowPanel uses a linear regulator (like AMS1117-3.3), the dropout voltage means the battery must stay above ~4.4V, which a LiPo reaches only when nearly full.
-
-**Why it happens:**
-Developers add a battery and charging circuit without understanding the full current profile. The 7" display backlight alone draws significant current. ESP-NOW transmissions add burst current. The 470x480 RGB display interface continuously refreshes, consuming steady power. Without a proper BMS (Battery Management System), there's no cutoff when voltage drops.
-
-**How to avoid:**
-- Use a battery with built-in protection PCB (most quality LiPo cells include one). Never use bare cells.
-- Add a 470uF+ capacitor on the 3.3V rail to buffer current spikes during radio transmission.
-- Use a buck-boost or LDO with dropout voltage under 200mV (NOT AMS1117). Candidates: HT7333 (4uA quiescent), ME6211 (low dropout), or RT9080 (ultra-low quiescent for sleep).
-- Monitor battery voltage via ADC. Enter deep sleep or disable non-essential features (WiFi, backlight reduction) when voltage drops below 3.4V. Hard shutdown at 3.2V.
-- If the CrowPanel has an onboard regulator already, characterize its dropout voltage before adding battery power. The regulator may be suitable or may need bypassing.
-
-**Warning signs:**
-- ESP32 randomly resets under battery power but works fine on USB
-- Battery swells or gets warm during discharge (over-discharge damage)
-- Brownout detector triggers (visible in serial output as "Brownout detector was triggered")
-- Battery life is much shorter than calculated (regulator dropout eating usable voltage range)
-
-**Phase to address:**
-Phase 4 (Battery management). Requires hardware characterization of the CrowPanel's power circuit first.
+These cause bugs or performance issues but have straightforward fixes.
 
 ---
 
-## Technical Debt Patterns
+### Pitfall 6: Config File Corruption From Power Loss During SD Write
 
-| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
-|----------|-------------------|----------------|-----------------|
-| `delay()` in touch polling | Simple timing | Blocks entire loop, prevents concurrent work | Never in final code -- replace with FreeRTOS task + vTaskDelay |
-| Single `loop()` architecture | Easy to understand | Cannot handle ESP-NOW callbacks + touch + UI + serial simultaneously | Only in initial proof of concept |
-| Raw byte arrays for ESP-NOW messages | Quick to implement | No versioning, no way to add fields without breaking protocol | Never -- use a struct with version byte from day one |
-| Polling PCF8575 in main loop | Works for testing | Wastes I2C bandwidth, adds bus contention | Replace with interrupt-driven reads via INT pin |
-| Hardcoded hotkey definitions | Fast to build | Cannot update without reflashing | Acceptable for MVP, but add config storage by Phase 3 |
-| `delay(50)` after HID keypress | Ensures host registers keypress | Blocks everything for 50ms per keypress | Replace with non-blocking timer or FreeRTOS task |
+**What goes wrong:**
+If the device loses power or resets during `sdcard_write_file()`, the config file is left in a corrupt or truncated state. On next boot, JSON parsing fails on the corrupt file, and the device has no valid layout configuration. The current `sdcard_write_file()` opens with `FILE_WRITE` (overwrite mode) -- if it crashes mid-write, the old config is already destroyed.
 
-## Integration Gotchas
+**Prevention:**
+1. Write to a temp file first, then rename atomically:
+   ```cpp
+   bool sdcard_write_config(const char *path, const uint8_t *data, size_t len) {
+       const char *tmp = "/config/.tmp";
+       if (!sdcard_write_file(tmp, data, len)) return false;
+       SD.remove(path);           // Remove old config
+       return SD.rename(tmp, path); // Atomic rename
+   }
+   ```
+   Note: FAT32 rename is not truly atomic, but it is much safer than overwriting in place. The temp file approach means either the old config or new config is always intact.
+2. Keep a backup: before writing new config, copy current config to `.bak`:
+   ```
+   /config/layout.json      <- active config
+   /config/layout.json.bak  <- previous config (fallback)
+   ```
+3. On boot, if `layout.json` fails to parse, try `layout.json.bak`. If both fail, use hardcoded defaults (the current static hotkey arrays)
+4. Validate JSON BEFORE writing to SD: parse the uploaded data in PSRAM first, verify it produces a valid layout, then write
+
+**Detection:**
+- Device boots with no layout after power cycle during upload
+- JSON parser reports syntax error on a file that was "just uploaded"
+
+**Phase to address:** SD Card Config milestone -- file write safety must be implemented from the start.
+
+---
+
+### Pitfall 7: SoftAP Mode Consumes 60-70KB Internal SRAM
+
+**What goes wrong:**
+Starting WiFi SoftAP allocates significant internal SRAM for the WiFi stack, DHCP server, and TCP/IP buffers. Combined with LVGL's 96KB pool and existing allocations, free internal heap drops to dangerously low levels. Creating the WebServer object (`new WebServer(80)`) adds another ~2-3KB. Each connected client adds ~4KB for TCP buffers. If two browser tabs connect simultaneously, that is another 8KB gone.
+
+**Why it happens:**
+The ESP32's WiFi stack requires internal SRAM (not PSRAM) for DMA-capable buffers. SoftAP needs more memory than STA-only mode because it must manage client associations, beacon generation, and DHCP.
+
+Current memory budget (estimated from codebase):
+- LVGL internal heap: 96KB
+- LVGL draw buffers: 128KB (PSRAM -- does not count)
+- WiFi STA-only: ~40KB
+- WiFi AP_STA: ~70KB (additional ~30KB over STA-only)
+- FreeRTOS + Arduino core: ~40KB
+- Remaining free internal SRAM: ~50-80KB
+- WebServer + ArduinoOTA: ~10KB
+- **Safety margin: 40-70KB** -- tight but workable
+
+**Prevention:**
+1. Limit SoftAP to 1 simultaneous client: `WiFi.softAP(ssid, pass, channel, 0, 1)` -- last param is max_connections
+2. Use the existing OTA pattern: SoftAP is temporary, not always-on. Start only when user taps config button, stop when upload is complete or after timeout
+3. Do NOT run SoftAP + HTTP server at the same time as any other memory-intensive operation (JSON parsing, large SD reads)
+4. Monitor internal heap during SoftAP mode:
+   ```cpp
+   Serial.printf("Internal free: %d\n", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+   ```
+5. Set a hard minimum: if `heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < 30000` after starting SoftAP, abort and show error
+
+**Detection:**
+- Random crashes when SoftAP is active + user interacts with LVGL UI
+- `heap_caps_get_free_size(MALLOC_CAP_INTERNAL)` drops below 30KB
+- WiFi stack prints "E (xxx) wifi:alloc pbuf fail" to serial
+
+**Phase to address:** Config Upload milestone -- SoftAP start/stop lifecycle must include memory checks.
+
+---
+
+### Pitfall 8: Dynamic Hotkey Callbacks With Dangling Pointers
+
+**What goes wrong:**
+The current `btn_event_cb` receives a `const Hotkey*` pointer via `lv_event_get_user_data()`. These pointers reference static const arrays (`page1_hotkeys[]`, etc.) which live forever. When switching to dynamic configs loaded from SD card, the hotkey data is allocated on the heap or in a buffer. If the config buffer is freed or overwritten (e.g., loading a new config), all button callbacks now hold dangling pointers. Pressing any button crashes the device.
+
+**Prevention:**
+1. Maintain a stable config buffer that persists for the lifetime of the UI:
+   ```cpp
+   // Global config storage -- allocated once, updated in place
+   static Hotkey dynamic_hotkeys[MAX_PAGES][MAX_BUTTONS_PER_PAGE];
+
+   // Button callback always points into this stable array
+   lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED,
+                        &dynamic_hotkeys[page][button_idx]);
+   ```
+2. Never `free()` the old config until the new config is fully installed AND all button callbacks are updated
+3. Use a double-buffer pattern: two config slots, toggle between them. The inactive slot gets the new config, then swap the "active" pointer atomically
+4. Alternative: use button index as user_data (cast int to void*), and look up the hotkey from the active config array:
+   ```cpp
+   static void btn_event_cb(lv_event_t *e) {
+       int idx = (int)(intptr_t)lv_event_get_user_data(e);
+       const Hotkey *hk = &active_config->pages[current_page].hotkeys[idx];
+       // ...
+   }
+   ```
+
+**Detection:**
+- Crash (Guru Meditation) when pressing a button after config reload
+- Buttons send wrong keys (reading freed/overwritten memory)
+- Works perfectly on first config, crashes on second load
+
+**Phase to address:** Dynamic UI milestone -- callback data lifetime must be part of the design.
+
+---
+
+### Pitfall 9: SD Card Not Detected After WiFi/SoftAP Operations
+
+**What goes wrong:**
+Some ESP32-S3 GPIO configurations cause SD card SPI communication to fail after WiFi mode changes. The WiFi radio initialization can affect GPIO multiplexing, especially if any SD card pins overlap with WiFi-related internal routing. On the CrowPanel, SD uses GPIO 10-13 (HSPI), which do not overlap with WiFi's pins -- BUT the SPI bus state can be corrupted if the SD card was in the middle of a transaction when WiFi mode changed, or if the SD library's internal state machine gets confused.
+
+**Prevention:**
+1. Always complete any SD transaction before changing WiFi mode:
+   ```cpp
+   // BAD: WiFi mode change while SD might be mid-operation
+   WiFi.mode(WIFI_AP_STA);
+
+   // GOOD: ensure SD is idle first
+   // (no SD operations in progress -- check by design, not by mutex)
+   WiFi.mode(WIFI_AP_STA);
+   ```
+2. After returning from SoftAP mode to STA mode, verify SD card is still accessible:
+   ```cpp
+   if (!SD.exists("/")) {
+       Serial.println("SD lost after WiFi change, re-mounting");
+       SD.end();
+       SD.begin(SD_CS, sd_spi, 4000000);
+   }
+   ```
+3. Do NOT run SD card operations and WiFi mode transitions concurrently
+
+**Detection:**
+- SD reads return -1 after SoftAP start/stop cycle
+- "SD: mount failed" in serial output despite card being present
+- Config upload succeeds (file received via HTTP) but write to SD fails
+
+**Phase to address:** Config Upload milestone -- WiFi/SD interaction must be tested as integration scenario.
+
+---
+
+### Pitfall 10: Config Upload via HTTP Has No Authentication
+
+**What goes wrong:**
+The SoftAP network ("CrowPanel-OTA" with password "crowpanel") is the only protection. Anyone within WiFi range who knows the SSID/password can upload arbitrary config files. A malicious config could define hotkeys that execute dangerous keyboard shortcuts (Ctrl+Alt+Del, format commands, etc.). The existing OTA code has the same issue for firmware uploads -- but config uploads are a lower bar for attack.
+
+**Prevention:**
+1. Use a unique per-device password displayed on screen when config mode starts (not a hardcoded default)
+2. Add a confirmation step: after upload, show the new config on screen and require a physical tap to "Apply" -- this prevents silent remote config changes
+3. Validate config contents strictly: reject any keycodes outside an allowed set, limit label lengths, sanitize all string fields
+4. Add rate limiting: reject more than 3 upload attempts per config session
+5. Consider: require physical button press on the device to enable config upload mode (already the pattern with the OTA button in the UI header)
+
+**Detection:**
+- Unexpected config changes without user action
+- Hotkeys sending different keys than displayed labels
+
+**Phase to address:** Config Upload milestone -- authentication should be part of the upload flow design.
+
+---
+
+## Minor Pitfalls
+
+These are easy to avoid if you know about them.
+
+---
+
+### Pitfall 11: FAT32 Filename Limitations on SD Card
+
+**What goes wrong:**
+SD cards formatted as FAT32 have filename restrictions. While long filenames (LFN) are supported, some cheap SD card libraries have bugs with paths > 255 characters or filenames with special characters. More importantly, FAT32 is case-insensitive -- `/config/Layout.json` and `/config/layout.json` are the SAME file.
+
+**Prevention:**
+- Use lowercase filenames only
+- Keep paths short: `/cfg/layout.json` not `/configuration/hotkey-layouts/default-layout.json`
+- Use the `.json` extension consistently
+- Create directories explicitly before writing files (`SD.mkdir("/cfg")`)
+
+---
+
+### Pitfall 12: WebServer Blocks Main Loop During Large Responses
+
+**What goes wrong:**
+The ESP32 `WebServer` library is synchronous. When serving the config editor HTML page (which could be 10-20KB with embedded CSS/JS for the editor UI), the `server.send()` call blocks until the entire response is sent. At WiFi SoftAP speeds (~1-2 MB/s), a 20KB page takes ~15ms -- but if the client connection is slow or dropping packets, it could block for seconds.
+
+**Prevention:**
+1. Keep served HTML pages small (< 5KB). Use minified CSS/JS
+2. Serve large assets from SD card using chunked transfer with yield between chunks
+3. Use `server.sendContent()` for chunked responses that yield back to loop
+4. Set a client timeout: `web_server->setTimeout(5)` -- 5 seconds max per request
+5. Consider: serve only a minimal bootstrap HTML that loads a richer UI from a JS file on SD card
+
+---
+
+### Pitfall 13: ArduinoJson StaticJsonDocument Stack Overflow
+
+**What goes wrong:**
+Using `StaticJsonDocument<N>` allocates N bytes on the stack. For a config file that produces a 4KB+ JSON DOM, `StaticJsonDocument<4096>` puts 4KB on the stack. Combined with the ESP32's 8KB default task stack, this leaves very little room and can overflow. ArduinoJson v7 removed StaticJsonDocument entirely for this reason.
+
+**Prevention:**
+- Use ArduinoJson v7 with `JsonDocument` (heap-allocated) and PSRAM custom allocator
+- Never use `StaticJsonDocument` for anything larger than 512 bytes on ESP32
+- If stuck on ArduinoJson v6, use `DynamicJsonDocument` with explicit capacity
+
+---
+
+## Phase-Specific Warnings
+
+| Phase Topic | Likely Pitfall | Mitigation |
+|-------------|---------------|------------|
+| SD Card file format design | JSON too large for memory | Keep config compact: IDs not full strings, max 4 pages x 12 buttons, cap at 8KB |
+| SD Card read at boot | Blocks LVGL init, black screen for 200ms+ | Load config before `create_ui()`, show splash only after config loaded |
+| SoftAP start for config upload | ESP-NOW stops working | Pin channel explicitly, warn user "hotkeys paused during upload" |
+| HTTP upload handler | Stack overflow from SD write in handler | Buffer to PSRAM, write to SD in separate task or after upload complete |
+| Dynamic UI rebuild | LVGL memory leak from style allocations | Use widget pool pattern (create once, update labels/colors) |
+| Config validation | Corrupt JSON crashes device on boot | Validate before writing, keep fallback config, hardcoded defaults as last resort |
+| Desktop config editor | Over-complex JSON schema | Keep it flat: array of pages, each page is array of button objects. No nesting beyond 2 levels |
+| Multiple config files | User confusion, filename collisions | One active config, clearly named `/cfg/active.json`. Additional configs numbered `/cfg/1.json`, `/cfg/2.json` |
+
+## Memory Budget Analysis
+
+This is the critical constraint. All numbers are approximate for ESP32-S3 with 8MB OPI PSRAM and 512KB internal SRAM.
+
+### Internal SRAM Budget (512KB total, ~390KB usable)
+
+| Consumer | Allocation | Notes |
+|----------|-----------|-------|
+| FreeRTOS + Arduino core | ~40KB | Task stacks, kernel objects |
+| WiFi STA mode | ~40KB | Baseline when WiFi initialized |
+| WiFi AP_STA overhead | +30KB | Additional when SoftAP active |
+| LVGL internal heap | 96KB | `LV_MEM_SIZE` in lv_conf.h |
+| ESP-NOW buffers | ~5KB | Peer table, TX/RX queues |
+| Serial buffers | ~4KB | TX + RX ring buffers |
+| WebServer (when active) | ~8KB | Server object + client buffers |
+| ArduinoOTA (when active) | ~4KB | mDNS + update state |
+| **Total when idle (STA only)** | **~185KB** | |
+| **Total when config mode (AP_STA + HTTP)** | **~227KB** | |
+| **Remaining headroom (idle)** | **~205KB** | Comfortable |
+| **Remaining headroom (config mode)** | **~163KB** | Workable but watch it |
+| **Minimum safe threshold** | **30KB** | Below this = random crashes |
+
+### PSRAM Budget (8MB, ~7.5MB usable)
+
+| Consumer | Allocation | Notes |
+|----------|-----------|-------|
+| LVGL draw buffers | 128KB | 800x40x2 bytes x 2 buffers |
+| JSON parse buffer | ~16KB | Config file + ArduinoJson DOM |
+| HTTP upload temp buffer | ~16KB | Max config file size |
+| SD read/write buffer | ~4KB | Chunk buffer for file I/O |
+| **Total PSRAM used** | **~164KB** | |
+| **Remaining** | **~7.3MB** | Massive headroom |
+
+**Key insight:** Internal SRAM is the constraint, not PSRAM. Every allocation that CAN go to PSRAM SHOULD go to PSRAM. Use `ps_malloc()` for all buffers, ArduinoJson custom allocator for JSON, and keep LVGL on internal SRAM for performance.
+
+## Integration Gotchas Specific to This Milestone
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| ESP-NOW send callback | Blocking on send result in callback context | Copy result to flag variable, check in main loop. Callbacks run in WiFi task -- must return in <1ms |
-| ESP-NOW receive callback | Processing message (I2C, USB, Serial) inside callback | Copy to FreeRTOS queue (xQueueSendFromISR), process in application task |
-| USB HID on bridge ESP32 | Sending keypresses faster than host can process | Rate-limit to one keypress event per 20ms minimum. USB HID poll interval is typically 10ms |
-| Desktop companion app serial | Assuming serial port stays connected | Implement reconnection logic with device enumeration. USB CDC devices disappear during ESP32 reset or sleep |
-| LVGL from multiple tasks | Calling lv_* functions from ESP-NOW callback or timer ISR | All LVGL calls must happen from one task only. Use a message queue to trigger UI updates from other contexts |
-| UART between two ESP32s | Assuming UART is reliable without framing | Implement packet framing (start byte, length, CRC, end byte). UART has no built-in message boundaries -- bytes arrive as a stream |
-
-## Performance Traps
-
-| Trap | Symptoms | Prevention | When It Breaks |
-|------|----------|------------|----------------|
-| Touch polling with `delay(1)` in main loop | UI feels sluggish, LVGL refresh rate drops | Move touch to dedicated task on Core 0, UI on Core 1 | Immediately noticeable at >2 I2C devices |
-| Logging Serial.printf in every touch event | Touch latency increases, LVGL timer handler starved | Use ring buffer logger, print only on debug timer | When touch events fire 30+ times/sec |
-| ESP-NOW broadcast instead of unicast | All nearby ESP32s receive and process every packet | Use peer-to-peer with MAC address. Register specific peer | When other ESP32 devices exist nearby |
-| LVGL full-screen redraw on every stats update | Display flickers, frame rate drops below 30fps | Use `lv_label_set_text()` on existing labels, not screen recreation | When stats update frequency exceeds 2Hz |
-| Polling battery ADC every loop iteration | ADC noise, wasted CPU, I2C bus contention if using fuel gauge | Poll every 10-30 seconds. Battery voltage changes slowly | Immediately -- adds unnecessary load |
-
-## Security Mistakes
-
-| Mistake | Risk | Prevention |
-|---------|------|------------|
-| No ESP-NOW encryption | Anyone nearby can inject fake hotkey commands (keystroke injection attack) | Enable ESP-NOW encryption with PMK/LMK. Use `esp_now_set_pmk()` and set LMK per peer |
-| No pairing/authentication between ESP32 pair | Rogue device can impersonate either unit | Implement a pairing protocol: first-time setup exchanges keys, stored in NVS. Reject unknown MACs |
-| Desktop companion app trusts all serial data | Malicious USB device could send crafted serial data to companion app | Validate all incoming serial data. Use message authentication (HMAC) if companion app has elevated privileges |
-| HID keyboard with no physical safety | Accidental touch sends keystrokes to wrong application | Implement a "lock" mode on the touchscreen. Require deliberate gesture to unlock sending |
-| OTA updates over WiFi without verification | Man-in-the-middle could push malicious firmware | Use signed OTA with ESP-IDF's secure boot, or at minimum verify firmware hash before applying |
-
-## UX Pitfalls
-
-| Pitfall | User Impact | Better Approach |
-|---------|-------------|-----------------|
-| No visual feedback for connection state | User presses hotkeys not knowing bridge is disconnected | Persistent status indicator (LED color or screen icon) showing ESP-NOW link state |
-| Keypresses sent with no confirmation | User unsure if keypress was received by PC | Brief visual feedback on button (color flash or animation) confirming delivery + ACK |
-| Battery dies without warning | Device stops working unexpectedly | Progressive warnings: screen notification at 20%, reduced brightness at 10%, graceful shutdown at 5% |
-| Settings require reflashing | Users cannot customize hotkeys | Add settings screen accessible via long-press or dedicated button |
-| Desktop app shows stale data after reconnect | Statistics appear current but are from before disconnect | Clear all stats on reconnection, display "reconnecting..." state, timestamp all data |
-| Touch debounce issues cause double-presses | Single tap sends hotkey twice | Implement proper debounce in LVGL (LV_INDEV_DEF_READ_PERIOD at 30ms is good) and in hotkey callback (ignore repeat within 200ms) |
-
-## "Looks Done But Isn't" Checklist
-
-- [ ] **ESP-NOW pairing:** Works in testing but fails after power cycle -- verify MAC addresses are stored in NVS, not hardcoded
-- [ ] **USB HID:** Works for basic keys but fails for media keys or multi-key combos -- verify HID report descriptor includes all needed usage pages
-- [ ] **Battery level display:** Shows percentage but never updates -- verify ADC calibration and that monitoring task is actually running
-- [ ] **Desktop companion app connection:** Shows "connected" but data is stale -- verify heartbeat/keepalive mechanism, not just port-open detection
-- [ ] **Multi-page UI:** Pages render correctly but memory grows on each switch -- verify screens are reused not recreated, check lv_mem_monitor()
-- [ ] **ESP-NOW range:** Works on desk but fails across room -- verify both units use external antenna (if available) and are on same channel with no WiFi interference
-- [ ] **Deep sleep wake:** Device wakes from sleep but ESP-NOW is broken -- verify WiFi is re-initialized and ESP-NOW peers are re-registered after wake
-- [ ] **UART fallback:** UART communication works but no framing -- verify CRC checking prevents corrupted commands from firing hotkeys
+| WiFi mode transition (STA -> AP_STA -> STA) | Not re-pinning ESP-NOW channel after mode change | Always call `esp_wifi_set_channel()` after `WiFi.mode()` changes |
+| HTTP upload + SD write | Writing file in upload handler (same task as WebServer) | Buffer to PSRAM in handler, flush to SD after UPLOAD_FILE_END |
+| Config reload -> UI update | Destroying and recreating LVGL widgets | Update existing widgets in place (labels, colors, callbacks) |
+| Boot with no SD card | Crash or blank screen | Graceful fallback to hardcoded defaults, show "Insert SD card" message |
+| Boot with corrupt config | JSON parse fails, no UI | Try backup file, then hardcoded defaults. Never leave UI unbuilt |
+| SoftAP timeout | SoftAP left running forever, draining battery and blocking ESP-NOW | Auto-stop SoftAP after 5 minutes of inactivity or after successful upload |
+| Multiple rapid config uploads | Memory not freed between uploads, PSRAM buffers accumulate | Reuse single upload buffer, free after each complete upload |
+| Desktop editor sends oversized config | ESP32 runs out of memory parsing huge JSON | Reject uploads > 16KB at HTTP level with 413 response |
 
 ## Recovery Strategies
 
-| Pitfall | Recovery Cost | Recovery Steps |
+| Failure | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| I2C bus lockup (GT911 hangs) | LOW | Toggle GT911 reset pin via PCA9557, re-run gt911_discover(). Already have reset circuit in hardware |
-| USB HID stall on bridge ESP32 | MEDIUM | Implement USB watchdog: if no successful HID report in 5s, force USB stack reinit. May cause brief host-side disconnect |
-| ESP-NOW channel mismatch after WiFi use | LOW | Store channel in NVS. On boot, set channel from NVS before calling esp_now_init(). Never let WiFi auto-channel selection override |
-| LVGL memory exhaustion | HIGH | Requires code refactor. Cannot recover at runtime -- if LVGL heap is exhausted, widgets are corrupted. Must redesign screens for lower memory or increase pool |
-| Battery over-discharge | HIGH (hardware) | Cannot recover damaged LiPo cell. Prevention only: hardware BMS + software monitoring. If cell is swollen, replace immediately |
-| ESP-NOW + WiFi radio conflict | LOW | Call esp_wifi_disconnect(), wait 100ms, resume ESP-NOW. Can be automated with a "WiFi window" pattern for OTA |
-
-## Pitfall-to-Phase Mapping
-
-| Pitfall | Prevention Phase | Verification |
-|---------|------------------|--------------|
-| ESP-NOW/WiFi radio contention | Phase 1: ESP-NOW foundation | Packet loss test: send 1000 messages, verify >99% delivery |
-| USB HID+CDC composite stall | Phase 1: Architecture decision | Confirmed by design: HID-only on bridge ESP32, no CDC composite |
-| I2C bus contention | Phase 1: Communication infra | Add I2C mutex, stress test with simultaneous touch + PCF8575 + new device |
-| LVGL memory exhaustion | Phase 2: UI expansion | Run lv_mem_monitor() on every screen, verify >30% free after all screens created |
-| ESP-NOW message reliability | Phase 1: Protocol design | Implement ACK protocol, verify with packet loss simulation (drop every 10th packet) |
-| CrowPanel USB-C limitation | Pre-Phase 1: Architecture | Document in architecture doc, no verification needed -- hardware constraint |
-| Battery power management | Phase 4: Battery integration | Measure voltage under load (WiFi TX), verify regulator dropout, test brownout detection |
-| Touch debounce / double-press | Phase 2: UI refinement | Tap each button 100 times rapidly, verify exactly 100 events fired |
-| ESP-NOW security / encryption | Phase 3: Hardening | Attempt to send commands from unauthorized device, verify rejection |
-| Desktop app reconnection | Phase 3: Companion app | Kill and restart companion app, verify automatic reconnection within 5s |
+| Corrupt config file on SD | LOW | Fall back to `.bak` file, then hardcoded defaults. Boot always succeeds |
+| SD card removed during operation | LOW | Detect via `SD.exists("/")` check, show warning, continue with in-memory config |
+| WiFi SoftAP fails to start | LOW | Show error on screen, return to normal operation (ESP-NOW still works) |
+| LVGL heap exhausted after config reload | MEDIUM | Reboot device (soft reset). Widget pool pattern prevents this in production |
+| Stack overflow during HTTP upload | MEDIUM | Watchdog triggers reboot. Fix by increasing stack size or moving SD writes off HTTP task |
+| ESP-NOW stops after WiFi mode change | LOW | Re-initialize ESP-NOW: `esp_now_deinit(); esp_now_init(); esp_now_add_peer(...)` |
 
 ## Sources
 
-- [ESP-NOW + WiFi coexistence -- ESP32 Forum](https://www.esp32.com/viewtopic.php?t=12772) -- 80%+ packet loss when WiFi STA connected
-- [ESP-NOW + WiFi simultaneously -- Arduino Forum](https://forum.arduino.cc/t/use-esp-now-and-wifi-simultaneously-on-esp32/1034555) -- channel pinning requirement
-- [ESP32-S3 HID+CDC stall -- arduino-esp32 #10307](https://github.com/espressif/arduino-esp32/issues/10307) -- confirmed simultaneous CDC+HID stalls
-- [ESP32-S3 HID+CDC "Won't Do" -- esp-idf #13240](https://github.com/espressif/esp-idf/issues/13240) -- Espressif declined to fix
-- [UART buffer overflow -- esp-idf #9682](https://github.com/espressif/esp-idf/issues/9682) -- 128-byte hardcoded UART buffer
-- [UART locks and stops receiving -- arduino-esp32 #6326](https://github.com/espressif/arduino-esp32/issues/6326) -- RX stops when buffer full
-- [LVGL memory and ESP32 -- LVGL Forum](https://forum.lvgl.io/t/memory-and-esp32/4050) -- memory management strategies
-- [ESP32 battery low voltage issues -- espboards.dev](https://www.espboards.dev/troubleshooting/issues/power/esp32-battery-low-voltage/) -- under-voltage protection
-- [ESP32 deep sleep power drain -- Home Assistant Community](https://community.home-assistant.io/t/esp32-deep-sleep-and-massive-power-drain/813330) -- radio not shut down before sleep
-- [RF Coexistence -- ESP-IDF official docs](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/coexist.html) -- time-division multiplexing documentation
-- [CrowPanel 7" I2C port + touch -- Elecrow Forum](https://forum.elecrow.com/discussion/4618/esp32-5-hmi-i2c-port-with-touch) -- I2C shared bus design
-- [GT911 I2C address configuration -- Arduino Forum](https://forum.arduino.cc/t/gt911-i2c-touch-connects-to-esp32s3-screen/1330774) -- dual address behavior
-- [ESP32-S3 USB CDC not working on every computer -- arduino-esp32 #9580](https://github.com/espressif/arduino-esp32/issues/9580) -- CDC reliability issues
-- Existing project codebase analysis: `/data/Elcrow-Display-hotkeys/src/main.cpp`, `platformio.ini`, `lv_conf.h`
+- [ESP-IDF WiFi Driver -- Channel coexistence in AP+STA mode](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-guides/wifi.html) -- SoftAP and STA must share same channel
+- [ESP-NOW + WiFi coexistence -- Arduino Forum](https://forum.arduino.cc/t/use-esp-now-and-wifi-simultaneously-on-esp32/1034555) -- channel pinning requirement confirmed
+- [ESP-NOW + WiFi performance and channel -- ESP32 Forum](https://www.esp32.com/viewtopic.php?t=12772) -- packet loss when WiFi active
+- [ESP-NOW WiFi channel in APSTA mode -- ESP32 Forum](https://www.esp32.com/viewtopic.php?t=14542) -- channel 0 ambiguity in AP_STA
+- [ArduinoJson v7 PSRAM allocator](https://arduinojson.org/v7/how-to/use-external-ram-on-esp32/) -- custom allocator for ESP32 PSRAM
+- [ArduinoJson v6 PSRAM](https://arduinojson.org/v6/how-to/use-external-ram-on-esp32/) -- CONFIG_SPIRAM_USE_MALLOC approach
+- [LVGL v8.3 Object deletion](https://docs.lvgl.io/8.3/overview/object.html) -- lv_obj_del behavior
+- [LVGL style memory leak -- LVGL Forum](https://forum.lvgl.io/t/out-of-memory-even-though-using-style-reset-and-object-delete/8314) -- styles not freed on object delete
+- [LVGL animation memory leak -- GitHub #2978](https://github.com/lvgl/lvgl/issues/2978) -- lv_obj_del memory issues
+- [ESP32 SD card WebServer example -- arduino-esp32](https://github.com/espressif/arduino-esp32/blob/master/libraries/WebServer/examples/SDWebServer/SDWebServer.ino) -- reference implementation
+- [ESP32 WebServer upload buffer](https://avantmaker.com/references/esp32-arduino-core-index/esp32-webserver-library/esp32-webserver-library-upload/) -- 1460 byte chunk size
+- [ESPAsyncWebServer large file issues -- ESP32 Forum](https://www.esp32.com/viewtopic.php?t=9740) -- memory exhaustion with concurrent clients
+- Existing project codebase: `display/ota.cpp` (current SoftAP + WebServer pattern), `display/espnow_link.cpp` (channel=0 peer config), `display/sdcard.cpp` (SPI pin config), `display/ui.cpp` (current static widget creation), `src/lv_conf.h` (96KB LVGL heap), `partitions_4MB_app.csv` (960KB SPIFFS partition)
 
 ---
-*Pitfalls research for: Dual-ESP32 wireless command center (Elcrow Display Hotkeys)*
-*Researched: 2026-02-14*
+*Pitfalls research for: SD Card Config + SoftAP Upload + Dynamic LVGL UI milestone*
+*Project: CrowPanel Command Center (Elcrow Display Hotkeys)*
+*Researched: 2026-02-15*

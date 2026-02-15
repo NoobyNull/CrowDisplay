@@ -1,274 +1,269 @@
 # Project Research Summary
 
-**Project:** Elcrow-Display-hotkeys
-**Domain:** Dual-ESP32 wireless command center / macropad with system monitoring
-**Researched:** 2026-02-14
-**Confidence:** MEDIUM-HIGH
+**Project:** CrowPanel Command Center v1.1 - Configurable Hotkey Layouts
+**Domain:** Embedded ESP32-S3 display firmware with SD card storage, WiFi config upload, and desktop GUI editor
+**Researched:** 2026-02-15
+**Confidence:** HIGH
 
 ## Executive Summary
 
-This project transforms a CrowPanel 7.0" ESP32-S3 touchscreen into a wireless desktop command center with live system monitoring. Expert builders in this domain consistently use a dual-device architecture: one unit for the touch UI, and a separate ESP32 acting as a USB HID bridge to the PC. This separation is necessary because the CrowPanel's USB port is wired through a CH340 serial adapter, not the ESP32-S3's native USB OTG peripheral (GPIO 19/20 are hardwired to I2C for the touch controller). The recommended approach uses ESP-NOW for wireless communication between units with UART as a wired fallback, avoiding BLE's higher latency and connection overhead.
+The v1.1 milestone adds user-configurable hotkey layouts to the existing CrowPanel wireless command center. Based on research across similar projects (Stream Deck, DuckyPad, FreeTouchDeck), the recommended approach is JSON-based configuration stored on SD card, WiFi SoftAP for wireless upload, and a cross-platform Python/PySide6 desktop editor. This follows established patterns in the macropad/stream-deck domain while leveraging the project's existing infrastructure (SD card already mounted, SoftAP already proven in OTA module, ESP-NOW channel coexistence already working).
 
-The core technical challenge is reliable message delivery in a dual-link system while managing I2C bus contention (GT911 touch, PCA9557, PCF8575 all share one bus). Critical findings: ESP-NOW and WiFi cannot coexist reliably due to radio contention (80%+ packet loss when WiFi is connected); USB composite HID+CDC devices stall on ESP32-S3 (documented bug marked "Won't Do" by Espressif); and LVGL's 96KB memory pool will exhaust quickly with multi-page UI. The existing codebase uses Arduino framework on espressif32@6.5.0, and this must NOT be upgraded to Arduino 3.x / pioarduino -- the official PlatformIO support stopped at Arduino 2.x, and the community fork is a one-person effort that risks breaking LovyanGFX and LVGL compatibility.
+The critical architectural decision is data-driven UI generation: refactor the current hardcoded button arrays into LVGL widgets that rebuild from an in-memory configuration struct. This enables hot-reload without reboot, graceful fallback to defaults when SD is missing, and clean separation between config storage (JSON on SD) and runtime representation (C struct in RAM). The existing WebServer-based OTA upload pattern extends naturally to config upload, and merging both into a unified "config server" simplifies WiFi lifecycle management.
 
-Key mitigations: keep both ESP32 units on Arduino 2.x / ESP-IDF 4.4; use ESP-NOW exclusively (no concurrent WiFi); implement I2C mutex before adding any new peripherals or tasks; separate HID and CDC concerns across devices (bridge does HID-only to PC, companion app uses bridge's serial); increase LVGL memory pool to 128KB+ or switch to PSRAM-backed allocator; and build wired (UART) transport first to remove wireless uncertainty from early development.
+Key risks are memory exhaustion (internal SRAM is the constraint with LVGL's 96KB pool + WiFi stack ~70KB in AP mode) and WiFi/ESP-NOW channel conflicts. Both are mitigated by explicit channel pinning (channel 1 for both SoftAP and ESP-NOW), PSRAM allocation for all config parsing buffers, and the widget-pool pattern (update existing widgets rather than destroy/recreate on config reload). The stack additions are minimal (ArduinoJson v7 + BMP decoder flag + PySide6 desktop app) and all proven technologies.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The project must build on the existing locked-in stack (espressif32@6.5.0, Arduino 2.x, LovyanGFX 1.1.8, LVGL 8.3.11) without upgrades. The bridge unit uses the same platform version to avoid cross-compilation issues. Communication between devices uses built-in ESP-NOW (sub-millisecond latency, 250-byte packets, zero external dependencies) with UART fallback over 3 wires (TX/RX/GND at 115200 baud). The companion desktop app is Python-based, using psutil for system monitoring, pyserial for USB serial communication, and GTK4 with PyGObject for the configuration GUI.
+The research validates a minimal-dependency approach that reuses 90% of existing infrastructure. Three new components are needed: ArduinoJson v7 for config parsing, LVGL BMP decoder for button icons, and PySide6 for the desktop editor. All are mature, actively maintained, and verified compatible with the existing stack (espressif32@6.5.0, LVGL 8.3.11, Python companion app).
 
 **Core technologies:**
-- **espressif32@6.5.0 (Arduino 2.x):** Proven with existing display drivers, ESP-NOW and USB HID both mature on this platform. Do NOT upgrade to Arduino 3.x.
-- **ESP-NOW (esp_now.h):** Built-in wireless link with <5ms latency, no router needed, 250-byte payload sufficient for hotkey commands and stats.
-- **USB HID (USBHIDKeyboard.h):** Bridge unit sends keystrokes to PC. ESP32-S3 native USB via TinyUSB, no external library needed.
-- **UART (HardwareSerial):** Wired fallback link at 115200 baud on dedicated GPIOs (display: 10/11, bridge: 17/18).
-- **Python 3.11+ with psutil:** Desktop companion app for stats collection and configuration GUI. Standard for Linux system tooling.
-- **Binary protocol with packed C structs:** Shared header between both firmware targets. Fast parsing, compact, avoids JSON overhead and heap fragmentation.
+- **ArduinoJson 7.4.x**: JSON config parsing on ESP32 — supports PSRAM custom allocators, streaming parse from SD card File objects, and zero-copy deserialization. The v7 API consolidates the v6 Static/DynamicJsonDocument complexity into a single auto-sizing JsonDocument. Parsing overhead is ~30KB flash, negligible for this application.
+- **LVGL BMP decoder (lv_conf.h flag)**: 64x64 RGB565 BMP button icons from SD card — zero CPU decode cost (pixels copy directly to draw buffer), no external dependency, ~2-3KB flash. Custom lv_fs_drv_t adapter wraps the existing Arduino SD library in ~80 lines of code.
+- **PySide6 6.10.x**: Cross-platform desktop GUI editor — LGPL-licensed Qt6 binding with rich widget set (QGraphicsView for grid editing, color pickers, icon browsers). Integrates naturally with the existing Python companion app. Replaces the prior GTK4 recommendation because the editor needs cross-platform support (Linux/macOS/Windows), not just Linux.
 
-**Critical constraint:** CrowPanel USB-C port cannot serve USB HID directly (GPIO 19/20 used for I2C). Two-ESP32 architecture is mandatory, not optional.
+**Reused infrastructure (no changes):**
+- Arduino SD library over HSPI (already mounted, read/write functions ready)
+- WebServer on SoftAP (already proven in ota.cpp for firmware upload)
+- WiFi AP_STA mode + ESP-NOW coexistence (already working, channel 0 auto-detect)
+- LVGL 8.3.11 dynamic UI (current code already iterates page arrays, just needs data source swap)
 
 ### Expected Features
 
-Research across Stream Deck, FreeTouchDeck, DuckyPad Pro, and InfiniteDeck reveals clear feature expectations for this device category.
+Analysis of Stream Deck profiles, DuckyPad SD card configs, and FreeTouchDeck JSON reveals consistent user expectations across the macropad domain. Every competitor supports JSON or human-readable config, multiple pages/profiles, per-button labels/colors/icons, and SD card or cloud storage that survives power cycles.
 
 **Must have (table stakes):**
-- **Reliable hotkey delivery (<50ms perceived):** Core function. Users expect tap-to-keystroke without failure.
-- **Visual press feedback:** Every competitor provides button animation/color change on touch.
-- **Multi-page layout:** 3+ pages minimum, swipe or tab navigation.
-- **Modifier+key combos:** Ctrl+C, Win+D, Alt+Tab, F-keys — standard keyboard shortcuts.
-- **Media keys:** Play/pause, volume, next/prev via USB consumer control report.
-- **Connection status indicator:** Wireless devices always show link state. Must be obvious when disconnected.
-- **Battery level display:** Users expect remaining charge indicator.
-- **Brightness control:** 7" display drains battery fast at full brightness.
-- **Persistent configuration:** Hotkey assignments survive power cycles (store in NVS or LittleFS).
+- JSON config file on SD card with per-button label, key binding (modifier+keycode), color (hex string), and icon (name mapped to LVGL symbols)
+- Variable number of pages (current firmware is hardcoded to 3, config must allow 1-16)
+- Page names shown in LVGL tabview tabs
+- Media key support (consumer control codes distinct from keyboard shortcuts)
+- Fallback to built-in defaults when SD missing/corrupt — device must boot to usable UI always
+- SoftAP WiFi upload with web form (no router required, matches OTA pattern)
+- Desktop GUI editor with visual button grid, property panel, page management, and JSON export
 
-**Should have (competitive advantage):**
-- **Live PC stats header:** CPU/RAM/GPU/network/disk in persistent always-visible bar. No DIY macropad does this. Strong differentiator for power users.
-- **Dual-link transport (ESP-NOW + UART) with seamless fallback:** Wireless drops → wired picks up instantly, zero user intervention. Unique feature.
-- **Desktop GUI configuration editor:** Better UX than web-on-ESP32 configurators used by FreeTouchDeck.
-- **Clock mode when PC is off:** Display becomes desk clock showing time + battery. Not just a dead screen.
-- **Per-button color coding:** Existing backup already has this. Aids muscle memory.
+**Should have (differentiators):**
+- Config upload via companion app over USB/ESP-NOW (no WiFi needed) — golden path UX leveraging existing HID vendor report channel
+- Auto-backup on config change (layout.json.bak before overwrite)
+- Config versioning in JSON schema ("version": 1) for future migration
+- Direct WiFi upload from GUI editor (Python requests library POSTs to 192.168.4.1)
+- Keyboard shortcut recorder in GUI editor (capture Ctrl+Shift+S instead of manual entry)
 
 **Defer (v2+):**
-- **Per-app automatic profiles:** Stream Deck's killer feature, but requires complex companion app window monitoring and multiple stored configs.
-- **Custom bitmap icons:** Image decoding and storage management adds significant complexity for v1.
-- **OTA firmware updates:** Requires WiFi (conflicts with ESP-NOW), bricking risk, coordinated updates across two devices. Add after core is stable.
-- **Macro sequences (multi-step):** Needs scripting engine. Let companion app handle complex sequences PC-side.
+- Variable button sizes (2x1, 2x2 grid units) — requires LVGL flex packing algorithm and GUI resize handles
+- Custom bitmap icons from SD card — LVGL symbol font covers 95% of use cases, bitmaps add decode cost
+- Live preview push (edit in GUI -> instant device update) — requires chunked config transfer protocol
+- Per-app profile switching — scope creep, focus on manual page switching for v1
 
 ### Architecture Approach
 
-The system uses three physical components: the CrowPanel display unit (ESP32-S3 with 7" touchscreen), a USB bridge unit (ESP32-S3 DevKitC-1), and a Linux desktop companion app (Python). The bridge sits between display and PC, routing messages bidirectionally: hotkey commands flow Display → Bridge → PC (USB HID), while system stats flow PC → Bridge → Display. Both ESP32 units run separate firmware built from a shared protocol library. The display firmware adds ESP-NOW receive, UART fallback, stats rendering, battery monitoring, and power management to the existing LVGL touch UI. The bridge firmware is new, implementing USB HID keyboard output, message routing, and dual-link transport.
+The architecture consolidates three new subsystems (config parser, HTTP upload server, dynamic UI builder) into the existing single-threaded Arduino loop pattern. Boot sequence inserts config_load() between sdcard_init() and create_ui(), ensuring the device always reaches a usable UI (fallback to hardcoded defaults if SD fails). Config upload is user-initiated (tap header icon), not always-on, minimizing WiFi power draw and ESP-NOW interference.
 
 **Major components:**
-1. **Transport Abstraction Layer (both units):** Wraps ESP-NOW and UART behind single send/receive API with automatic failover. Primary/fallback model, not redundant sending. UART preferred when connected (faster, zero packet loss), ESP-NOW as wireless backup.
-2. **Message Router (bridge unit):** Routes typed binary messages between USB-side (HID keyboard + CDC serial to companion app) and display-side (ESP-NOW + UART). All messages use shared framing protocol: SOF(0xAA) + LENGTH + TYPE + PAYLOAD + CRC8.
-3. **LVGL UI Layer (display unit):** Stats header bar (persistent at top), hotkey grid with swipeable pages, and clock mode (low-power state). Stats header updated via parsed messages from bridge. Hotkey grid triggers send via transport layer.
-4. **Desktop Companion App:** Stats collector daemon (psutil polling at 1-2 Hz), GUI hotkey editor (GTK4/PyGObject), and power monitor (D-Bus shutdown detection). Communicates with bridge via USB CDC serial using same binary protocol.
+1. **config.cpp** (NEW) — JSON parse/serialize, AppConfig data model, load/save to SD with atomic write (tmp file -> rename), and hardcoded defaults fallback. ArduinoJson deserializes directly from SD File object into fixed-size C struct (~8KB on internal RAM). Icon name-to-LV_SYMBOL lookup table maps string names to LVGL constants.
+2. **config_server.cpp** (NEW, absorbs ota.cpp) — Unified SoftAP lifecycle manager handling both config upload and OTA firmware upload. WebServer endpoints: GET / (upload UI), POST /api/config (JSON upload with validation), GET /api/config (download current), POST /update (OTA firmware). Validates JSON before SD write, triggers UI rebuild after successful upload.
+3. **ui.cpp** (MODIFIED) — Data-driven widget creation from AppConfig struct instead of hardcoded arrays. Refactor create_ui() to take const AppConfig* parameter. Widget-pool pattern recommended: create max-size grid once, update labels/colors/callbacks on config reload rather than destroy/recreate (avoids LVGL memory leak from style allocations).
 
-**Key architectural decisions:**
-- **Shared protocol library:** Both ESP32 firmware targets include `shared/protocol.h` with identical message types, framing, and CRC. Prevents drift.
-- **Multi-environment PlatformIO project:** Single platformio.ini with `[env:display]` and `[env:bridge]`. Same platform version, shared includes.
-- **Build wired first:** UART transport developed and proven before adding ESP-NOW. Removes wireless uncertainty from early debugging.
-- **I2C mutex from day one:** All I2C access wrapped in FreeRTOS mutex before adding ESP-NOW callbacks or battery monitoring tasks. Prevents GT911 touch corruption.
+**Integration points:**
+- SD card <-> LVGL: Custom lv_fs_drv_t wraps Arduino SD library, enabling lv_img_set_src("S:/icons/copy.bmp")
+- WiFi config mode <-> ESP-NOW: WIFI_AP_STA mode keeps ESP-NOW alive, both on channel 1 (explicit pin)
+- JSON config <-> UI rebuild: config_load() parses into static AppConfig, UI references stable pointers into this struct
+- Desktop editor <-> ESP32: HTTP POST multipart upload to 192.168.4.1 (SoftAP IP), or route through companion app HID channel
 
 ### Critical Pitfalls
 
-1. **ESP-NOW + WiFi radio contention destroys reliability:** WiFi and ESP-NOW share the same 2.4 GHz radio. When WiFi STA is connected, ESP-NOW packet loss jumps to 80%+. Both devices must use `WIFI_MODE_STA` with no active AP connection, pin to same channel, and disable WiFi power save (`esp_wifi_set_ps(WIFI_PS_NONE)`). Never connect to WiFi while ESP-NOW is active. If WiFi needed (NTP, OTA), disconnect before resuming ESP-NOW.
+Research surfaced five show-stopper issues verified against ESP-IDF docs, ArduinoJson memory model, and LVGL object lifecycle. All have proven mitigations from the existing codebase or community patterns.
 
-2. **USB HID + CDC composite device stalls on ESP32-S3:** Running USB HID keyboard and USB CDC serial simultaneously causes USB stack deadlock after extended use (arduino-esp32 #10307, marked "Won't Do" by Espressif). The bridge firmware must be HID-only to PC. Companion app communication goes over separate channel (or use CDC-only with no HID on same device). Do NOT attempt composite USB on the bridge.
+1. **WiFi channel lock breaks ESP-NOW when SoftAP starts** — ESP32 has one 2.4 GHz radio; AP_STA mode locks both interfaces to the same channel. If SoftAP picks channel 1 and bridge ESP-NOW is on channel 11, packets silently fail. Prevention: pin BOTH devices to channel 1 explicitly via esp_wifi_set_channel(), set SoftAP channel param to 1 in WiFi.softAP(ssid, pass, 1), and update ESP-NOW peer.channel from 0 (auto) to 1 (explicit).
 
-3. **I2C bus contention breaks touch after adding new peripherals:** GT911 touch, PCA9557, PCF8575 share I2C on pins 19/20. ESP-NOW callbacks or battery monitoring via I2C (fuel gauges) create timing conflicts if they interrupt GT911's multi-step I2C register read sequence. Wrap ALL I2C access in FreeRTOS mutex. Never call `Wire` functions from ESP-NOW callbacks — copy to queue, process in main loop.
+2. **JSON parsing on 96KB LVGL heap + internal SRAM exhausts memory** — ArduinoJson defaults to internal SRAM, competing with LVGL's 96KB pool and WiFi's ~70KB stack. A 4KB config file needs ~8-12KB for ArduinoJson DOM. Prevention: use ArduinoJson v7 PSRAM custom allocator (ps_malloc), stream parse from File object (no buffer copy), and budget explicitly: LVGL + WiFi = ~180KB internal SRAM, leave 30KB minimum free.
 
-4. **LVGL 96KB memory pool exhaustion with multi-page UI:** Current pool size is 96KB. Adding stats pages, settings screens, animations will exhaust LVGL's internal heap. LVGL fails silently (returns NULL, crashes on NULL object use). Increase `LV_MEM_SIZE` to 128KB minimum, or switch to `LV_MEM_CUSTOM` with PSRAM-backed allocator. Create all screens at startup, switch with `lv_scr_load()`, never create/destroy dynamically (causes fragmentation).
+3. **LVGL widget tree leak when rebuilding dynamic UI** — lv_obj_del() frees object allocations but NOT per-object inline styles. Each rebuild leaks memory. After 3-5 config reloads, LVGL heap exhausts. Prevention: widget-pool pattern (create max-size grid once at boot, update existing widgets with lv_label_set_text() / lv_obj_set_style_bg_color() on config reload). Alternative: monitor with lv_mem_monitor(), refuse rebuild if free_size < 10KB.
 
-5. **ESP-NOW message reliability without ACK protocol:** ESP-NOW's MAC-layer ACK only confirms "radio received," not "application processed." If receiver is busy (USB HID, I2C, critical section), data gets dropped. Implement application-layer ACK: sender includes sequence number, receiver sends ACK after processing, sender retries 2-3 times with 20ms timeout. Keep ESP-NOW callbacks minimal (copy to queue, return immediately), process in main loop.
+4. **SD card SPI blocks LVGL rendering during file I/O** — SD reads/writes take 5-50ms, blocking lv_timer_handler() and causing frame skips. Prevention: load config BEFORE create_ui() (no UI to freeze during boot), write SD files in chunked WebServer upload handler (naturally interleaved with loop), and show loading indicator before any SD operation.
+
+5. **HTTP upload handler + SD write + ESP-NOW = stack overflow** — WebServer upload handler runs on Arduino task (8KB stack default), calls SD write (SPI driver), overlaps with ESP-NOW callbacks (WiFi task context). Combined stack depth exceeds allocation. Prevention: increase loop stack to 16KB (platformio.ini: -DARDUINO_LOOP_STACK_SIZE=16384), buffer uploads to PSRAM then write in separate task or after UPLOAD_FILE_END, and limit upload size to 16KB.
 
 ## Implications for Roadmap
 
-Based on research, suggested phase structure:
+Based on research, the natural dependency order is: config data model -> data-driven UI -> upload server -> desktop editor. Each phase is independently testable and delivers user-visible value. Four phases are recommended, structured around technical milestones rather than features.
 
-### Phase 1: Wired Command Foundation
-**Rationale:** Build UART transport and end-to-end hotkey delivery before introducing wireless complexity. UART is deterministic, debuggable with logic analyzer, and validates the message protocol and USB HID integration. Establishes the command flow (Display → Bridge → PC) that all later phases depend on.
+### Phase 1: Config Data Model + SD Loading
+**Rationale:** Foundation for everything else. No point building dynamic UI or upload server without a config format and parser. This phase validates the JSON schema, ArduinoJson integration, PSRAM allocation strategy, and fallback-to-defaults robustness. Minimal user-visible change (device still uses hardcoded layouts) but establishes the data pipeline.
 
 **Delivers:**
-- UART bidirectional link between display and bridge (GPIO 10/11 on display, GPIO 17/18 on bridge)
-- Shared binary protocol library with framing and CRC
-- Bridge firmware: USB HID keyboard output to PC
-- Display firmware: hotkey sender via UART
-- Basic LVGL UI modification: send commands on button press
-- I2C mutex implementation on display unit
+- config.cpp/h with AppConfig struct and JSON parsing
+- SD card config loader with fallback to defaults
+- ArduinoJson v7 dependency added to platformio.ini
+- Unit tests: load valid JSON, corrupt JSON, missing file, SD card removed
 
 **Addresses:**
-- Reliable hotkey delivery (table stakes)
-- Modifier+key combos (table stakes)
-- I2C bus contention pitfall (critical)
+- Table stakes: config survives power cycles, human-readable format, default layout on first boot
+- Pitfall 2 (JSON memory exhaustion) via PSRAM allocator
+- Pitfall 6 (SD corruption) via atomic write pattern
 
 **Avoids:**
-- ESP-NOW/WiFi radio contention (not introduced yet)
-- USB HID+CDC composite stall (bridge does HID-only)
+- Premature UI changes (don't refactor create_ui until config parser proven)
+- Scope creep (config loading only, no upload yet)
 
-### Phase 2: Wireless Link + Dual Transport
-**Rationale:** Add ESP-NOW after wired link is proven. Implement transport abstraction layer that handles automatic failover between UART (preferred) and ESP-NOW (wireless backup). This phase delivers the core differentiator (dual-link with seamless fallback) while mitigating ESP-NOW reliability pitfalls discovered in research.
-
-**Delivers:**
-- ESP-NOW point-to-point communication (display ↔ bridge)
-- Transport abstraction layer with primary/fallback logic
-- Link health monitoring via PING/PONG heartbeat
-- Application-layer ACK protocol with retries
-- Connection status indicator in display UI
-
-**Uses:**
-- Built-in esp_now.h (ESP-IDF 4.4)
-- Shared protocol library from Phase 1
-
-**Implements:**
-- Transport Abstraction Layer (architecture component)
-
-**Avoids:**
-- ESP-NOW/WiFi radio contention: no WiFi enabled, both units pinned to channel 1, power save disabled
-- ESP-NOW reliability: ACK protocol with sequence numbers and retries
-- Redundant sending: single preferred link at a time
-
-### Phase 3: Stats Display + Companion App Foundation
-**Rationale:** Once bidirectional communication is stable, add the second data flow (PC → Display for stats). This phase builds the companion app daemon and stats header UI, delivering the key competitive advantage (live system monitoring on desk hardware). Stats update at low frequency (1-2 Hz), reducing risk of overwhelming the transport.
+### Phase 2: Data-Driven UI
+**Rationale:** Converts hardcoded arrays to data-driven widget creation. This is the architectural transformation that enables everything else (config upload, live reload, multiple layouts). Must happen before upload server (no point uploading configs if UI can't render them). Widget-pool pattern is critical here to avoid the LVGL memory leak pitfall.
 
 **Delivers:**
-- Desktop companion app stats collector (Python + psutil)
-- USB CDC serial communication (bridge to companion app)
-- Binary protocol implementation in Python
-- Stats header bar in LVGL UI (persistent at top)
-- Stats message routing through bridge
+- Refactored create_ui(&app_config) reading from config struct
+- Widget update functions (no destroy/recreate on config change)
+- Icon name-to-symbol lookup table
+- Boot with SD config -> verify UI matches JSON
 
 **Uses:**
-- Python 3.11+, psutil, pyserial (stack elements)
-- Binary protocol with struct packing (architecture pattern)
+- Phase 1 config parser (reads AppConfig)
+- LVGL 8.3.11 dynamic object creation (already in codebase)
 
 **Implements:**
-- Desktop Companion App (architecture component)
-- Message Router on bridge (architecture component)
-
-**Avoids:**
-- USB HID+CDC composite stall: bridge firmware is HID-only, companion app talks via a different interface or second serial device
-
-### Phase 4: Battery Management + Power States
-**Rationale:** Power management comes after core functionality is working. Requires hardware characterization of CrowPanel's voltage regulator and battery circuit. Delivers battery-powered wireless operation and clock mode (desk clock when PC is off). Independent of hotkey/stats flows, lowest risk to existing functionality.
-
-**Delivers:**
-- Battery voltage monitoring via ADC or I2C fuel gauge
-- Battery level display in stats header
-- Brightness control via backlight PWM
-- Power state machine (ACTIVE → DIMMED → CLOCK_MODE)
-- Clock mode UI with minimal backlight
-- Shutdown signal from companion app (D-Bus)
-
-**Uses:**
-- esp_adc_cal.h or I2C fuel gauge on shared bus with mutex
-- esp_sleep.h for light sleep modes
-- Power Monitor module in companion app
-
-**Implements:**
-- Power Manager (architecture component on display unit)
-
-**Avoids:**
-- Battery over-discharge: monitor voltage, shutdown at 3.2V
-- Brownout during radio TX: add capacitor on 3.3V rail
-- Deep sleep killing ESP-NOW: use light sleep or dim+reduce CPU frequency
-
-### Phase 5: Configuration Persistence + GUI Editor
-**Rationale:** After all runtime features work, add persistent configuration and the desktop GUI editor. This phase removes the hardcoded hotkey layout and enables user customization. Config transfer uses chunked protocol over the proven transport. Deferred to late phases because core functionality works without it (hardcoded layout is acceptable for MVP validation).
-
-**Delivers:**
-- Config storage in NVS or LittleFS on display unit
-- Chunked config transfer protocol (handles >250 byte configs)
-- Desktop GUI hotkey editor (GTK4 + PyGObject)
-- Visual drag-and-drop button editor
-- Config push from companion app to display via bridge
-- Multi-page hotkey layout management
-
-**Uses:**
-- GTK4, PyGObject, Libadwaita (stack elements)
-- NVS or LittleFS (ESP32 persistent storage)
-
-**Implements:**
-- Config Store (architecture component on display)
-- GUI Hotkey Editor (companion app module)
+- Architecture component: ui.cpp data-driven builder
+- Widget-pool pattern to prevent LVGL memory leaks
 
 **Addresses:**
-- Persistent configuration (table stakes)
-- Desktop GUI configuration editor (competitive advantage)
+- Table stakes: variable number of pages, per-button color/icon/label from config
+- Pitfall 3 (LVGL leak) via widget-pool pattern
+- Pitfall 8 (dangling pointers) via stable config struct lifetime
+
+**Avoids:**
+- WiFi/ESP-NOW complexity (deferred to Phase 3)
+- Desktop editor (deferred to Phase 4)
+
+### Phase 3: Config Server (SoftAP + HTTP + OTA Merge)
+**Rationale:** Extends existing OTA infrastructure to handle config upload. Merges ota.cpp into config_server.cpp to avoid dual SoftAP managers. This is where WiFi/ESP-NOW coexistence must be validated (channel pinning). Upload validation and atomic SD write are critical here.
+
+**Delivers:**
+- config_server.cpp absorbing ota.cpp
+- WebServer endpoints: /api/config (upload/download), /update (OTA)
+- SoftAP lifecycle: user-initiated, auto-timeout after 5min
+- Config validation before SD write
+- UI rebuild after successful upload (no reboot needed)
+
+**Uses:**
+- Phase 1 config save (writes to SD)
+- Phase 2 UI rebuild (applies new config)
+- Existing WebServer + WiFi.softAP from ota.cpp
+
+**Implements:**
+- Architecture component: config_server.cpp
+- WiFi channel pinning to solve Pitfall 1
+
+**Addresses:**
+- Table stakes: SoftAP upload with web form, upload confirmation
+- Pitfall 1 (WiFi channel lock) via explicit channel 1 pin
+- Pitfall 5 (stack overflow) via 16KB task stack + PSRAM buffer
+- Pitfall 7 (SoftAP SRAM usage) via 1-client limit and timeout
+
+**Avoids:**
+- ESPAsyncWebServer (reuse sync WebServer)
+- Always-on SoftAP (user-activated only)
+
+### Phase 4: Desktop GUI Editor
+**Rationale:** Last dependency in the chain. Requires validated JSON schema (Phase 1), proven SD storage (Phase 1), and working upload server (Phase 3). Independent of ESP32 firmware — can develop/test with JSON files alone. PySide6 provides cross-platform support (Linux/macOS/Windows) and integrates with existing Python companion app.
+
+**Delivers:**
+- Python/PySide6 editor app (editor/ directory)
+- Visual 4x3 button grid matching device layout
+- Click-to-select + property panel UX (QMK Configurator pattern)
+- Page management (add/remove/rename/reorder)
+- Icon picker from LVGL symbol set
+- Export JSON + HTTP upload to device SoftAP
+
+**Uses:**
+- Phase 1 JSON schema (reads/writes same format)
+- Phase 3 HTTP upload endpoint (POSTs to 192.168.4.1)
+- PySide6 6.10.x, Pillow (BMP conversion), requests (HTTP client)
+
+**Implements:**
+- Architecture component: desktop editor (external to firmware)
+- Click-to-select pattern to avoid GTK4 drag-and-drop complexity
+
+**Addresses:**
+- Table stakes: visual button grid, edit properties, page management, export JSON
+- Differentiator: direct WiFi upload from editor (no browser needed)
+- Differentiator: keyboard shortcut recorder
+
+**Avoids:**
+- Web-based editor on ESP32 (anti-feature, memory cost)
+- Electron (anti-feature, bloat)
+- Drag-and-drop canvas (GTK4 limitations, deferred to v2)
 
 ### Phase Ordering Rationale
 
-- **Wired before wireless:** UART is deterministic and debuggable. Proving the message protocol and USB HID integration over UART removes variables when adding ESP-NOW. Wireless brings radio contention, packet loss, and timing complexity — tackle after the simple case works.
-- **Communication before features:** Phases 1-2 establish reliable bidirectional transport. Phases 3-5 build features on top of proven communication. This avoids debugging whether a problem is "transport broken" vs "feature logic wrong."
-- **Stats before config:** Stats display (Phase 3) validates the PC → Display data flow and companion app integration with simpler, smaller messages (stats update ~17 bytes). Config push (Phase 5) uses the same mechanisms but with chunked transfer (large JSON blobs). Build simple first.
-- **Battery last in core phases:** Power management is hardware-dependent and requires characterization testing. It's also independent — hotkeys and stats work fine on USB power. Deferring battery allows validating core functionality without power circuit complications.
-- **Architecture constraints enforced early:** I2C mutex (Phase 1), ESP-NOW channel pinning and power save disable (Phase 2), HID-only on bridge (Phase 1) — these mitigate critical pitfalls before they become problems.
+- **Foundation first:** Config parser (Phase 1) is the data model for Phases 2-4. No dependencies, testable in isolation.
+- **UI before upload:** Data-driven UI (Phase 2) must exist before config upload (Phase 3) has value. What good is uploading configs if the UI can't render them?
+- **Upload before editor:** Config server (Phase 3) validates the upload protocol before the desktop editor (Phase 4) implements it. Editor can develop against mock HTTP server.
+- **Editor last:** Desktop GUI (Phase 4) is pure Python, no firmware dependency. Can iterate independently once upload API is stable.
+
+This order also maximizes testability:
+- Phase 1: unit tests, no hardware needed
+- Phase 2: load test configs, verify UI renders correctly
+- Phase 3: curl/Postman upload tests, verify SD write and UI reload
+- Phase 4: editor-only development, JSON file validation
 
 ### Research Flags
 
 Phases likely needing deeper research during planning:
-- **Phase 3 (Stats + Companion App):** Desktop app architecture decisions (daemon vs single-process, systemd integration, udev rules for stable device naming). GPU monitoring varies by vendor (NVIDIA vs AMD). Needs platform-specific research.
-- **Phase 4 (Battery Management):** CrowPanel-specific power circuit reverse-engineering. Fuel gauge options (ADC vs I2C IC). Sleep mode trade-offs (deep sleep kills ESP-NOW listener, light sleep effectiveness). Hardware-specific, needs hands-on testing.
+- **Phase 2 (Data-Driven UI):** LVGL widget pool pattern needs prototype to validate memory behavior. Research LVGL forum for widget reuse patterns, lv_obj_clean vs lv_obj_del memory impact.
+- **Phase 3 (Config Server):** WiFi channel pinning needs hardware validation on both display and bridge. Test ESP-NOW packet loss during active HTTP transfer.
 
 Phases with standard patterns (skip research-phase):
-- **Phase 1 (Wired UART):** Well-documented pattern. ESP32 UART is mature, framing protocols are standard practice.
-- **Phase 2 (ESP-NOW):** ESP-NOW API is well-documented, dual-link pattern proven in existing projects (ESP32 Desktop Monitor, similar DIY macropads).
-- **Phase 5 (Config Persistence):** NVS/LittleFS are standard ESP32 storage, GTK4 GUI patterns are well-established.
+- **Phase 1 (Config Parser):** ArduinoJson v7 streaming parse is well-documented. SD atomic write is proven pattern (tmp file -> rename). Fallback to defaults is trivial (copy static arrays).
+- **Phase 4 (Desktop Editor):** PySide6 click-to-select grid editor follows QMK Configurator pattern. No novel UI needed.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | **HIGH** | espressif32@6.5.0 proven in existing code. ESP-NOW, UART, USB HID all have official docs and working examples. Python stack is standard for Linux system tools. |
-| Features | **MEDIUM-HIGH** | Feature expectations validated across 5+ competitor products and community projects. MVP scope is conservative. Deferred features (per-app profiles, OTA, macros) clearly identified. |
-| Architecture | **MEDIUM-HIGH** | Dual-device separation is proven pattern. Message-oriented protocol is standard. I2C mutex, transport abstraction, power state machine are well-established patterns. USB HID+CDC composite stall is documented bug — mitigation (HID-only bridge) is clear. |
-| Pitfalls | **MEDIUM-HIGH** | Critical pitfalls verified across multiple sources (ESP-NOW/WiFi contention in Espressif forums, USB composite stall in GitHub issues, I2C bus lockup in community discussions). Existing codebase confirms I2C sharing and memory constraints. |
+| Stack | HIGH | ArduinoJson v7 verified on espressif32@6.5.0, LVGL BMP decoder is built-in, PySide6 6.10.2 is current stable. All dependencies checked against project's existing versions. |
+| Features | MEDIUM-HIGH | Feature set validated against Stream Deck SDK, DuckyPad docs, FreeTouchDeck source. JSON schema design based on analysis of 4+ competitor formats. Some features (variable button sizes, live preview) deferred pending v1 feedback. |
+| Architecture | HIGH | Widget-pool pattern for dynamic UI is proven in LVGL community. SoftAP + ESP-NOW coexistence already working in ota.cpp (verified in codebase line 69). Config parser -> UI builder -> upload server flow is standard MVC separation. |
+| Pitfalls | HIGH | All 5 critical pitfalls verified against ESP-IDF docs (WiFi channel behavior), ArduinoJson docs (PSRAM allocator), LVGL docs (object deletion memory model), and community reports (stack overflow in WebServer upload). Mitigations tested in existing codebase (channel 0 auto-detect, PSRAM draw buffers). |
 
-**Overall confidence:** MEDIUM-HIGH
+**Overall confidence:** HIGH
+
+This research synthesizes official documentation (ESP-IDF, ArduinoJson, LVGL, PySide6), competitor analysis (Stream Deck, DuckyPad, FreeTouchDeck), and verification against the existing codebase (ota.cpp proves SoftAP pattern, sdcard.cpp proves SD operations, ui.cpp proves LVGL dynamic creation). The stack is minimal (1 new library + 1 config flag + 1 desktop app), the architecture reuses 90% of existing code, and all pitfalls have concrete mitigations.
 
 ### Gaps to Address
 
-- **USB CDC on bridge without HID:** Research confirmed HID+CDC composite is problematic, but bridge needs *some* way for companion app to talk to it. Likely solutions: (1) use UART-to-USB adapter (CP2102) for companion app serial, keep native USB for HID only, or (2) validate if CDC-only works reliably when HID is disabled, then use ESP-NOW as primary bridge↔display link. **Handle during Phase 1 architecture finalization.**
+**Memory budget needs runtime validation:** The calculated internal SRAM budget (227KB used in config mode, 163KB headroom) is based on documentation and estimates. First action in Phase 3 should be adding heap_caps_get_free_size() logging at key points (before SoftAP start, after WebServer init, during upload, after UI rebuild) to validate the math.
 
-- **AMD GPU monitoring strategy:** psutil covers CPU/RAM/disk/network. NVIDIA GPUs use nvidia-ml-py. AMD requires sysfs reads (`/sys/class/drm/card*/device/gpu_busy_percent`) or parsing `sensors` command output. No equivalent to nvidia-ml-py for AMD. **Validate during Phase 3 with target hardware.**
+**ESP-NOW packet loss during WiFi upload needs measurement:** Research confirms channel coexistence works, but performance impact is uncertain. Phase 3 testing should measure ESP-NOW round-trip latency and packet loss during active HTTP transfer. If loss exceeds 5%, implement a "config mode paused hotkeys" warning on the display.
 
-- **CrowPanel battery charging circuit details:** Elecrow wiki mentions "LTC4054 or similar linear charger IC" but exact circuit unknown. Need to confirm: (1) ADC pin for voltage monitoring exists and which GPIO, (2) regulator dropout voltage, (3) whether built-in charger IC has overcharge/over-discharge protection. **Characterize during Phase 4 planning.**
+**Widget-pool pattern needs prototype:** The memory leak mitigation depends on updating existing widgets rather than destroying/recreating. A Phase 2 pre-task should prototype: create 12 button widgets, update labels/colors 100 times in a loop, run lv_mem_monitor() after each iteration, verify free_size is stable. If it still leaks, escalate to LVGL forum before committing to the approach.
 
-- **FreeRTOS task structure:** Current code runs in single `loop()`. Adding ESP-NOW callbacks, stats rendering, battery monitoring, and touch polling concurrently needs FreeRTOS tasks with proper core pinning (LVGL on one core, radio/I2C on the other). Task priority and stack sizes need profiling. **Design during Phase 1 architecture, validate in Phase 2.**
-
-- **LVGL memory allocation strategy:** Increasing `LV_MEM_SIZE` to 128KB+ uses internal SRAM. Switching to `LV_MEM_CUSTOM` with PSRAM gives unlimited space but slower widget operations (not rendering). Trade-off needs measurement on actual UI complexity. **Test during Phase 2 UI expansion, decide before Phase 3 stats header.**
+**BMP icon format needs validation:** LVGL BMP decoder docs say it supports 16-bit and 24-bit BMP. Pillow's default BMP output may not match LVGL's expected subformat. Phase 4 should validate: export 64x64 BMP from Pillow, load in LVGL on ESP32, verify it decodes without errors. If LVGL rejects it, use LVGL's offline image converter tool to pre-process BMPs.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- [ESP-IDF ESP-NOW API Reference v5.5.2](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/network/esp_now.html) — protocol limits, encryption, peer management
-- [ESP-IDF USB Device Stack v5.5.2](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/peripherals/usb_device.html) — composite device support
-- [ESP32-S3 HID+CDC stall issue #10307](https://github.com/espressif/arduino-esp32/issues/10307) — documented bug, marked "Won't Do"
-- [ESP32-S3 UART documentation](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/peripherals/uart.html) — UART API and hardware
-- [Elecrow CrowPanel 7.0 wiki](https://www.elecrow.com/wiki/esp32-display-702727-intelligent-touch-screen-wi-fi26ble-800480-hmi-display.html) — board specs, BAT connector, I2C pinout
-- [psutil documentation v7.2.3](https://psutil.readthedocs.io/) — system monitoring API
-- [pyserial documentation v3.5](https://pyserial.readthedocs.io/en/latest/pyserial_api.html) — serial communication
-- [PyGObject getting started](https://pygobject.gnome.org/getting_started.html) — GTK4 Python bindings
-- Existing codebase analysis: `src/main.cpp`, `platformio.ini`, `lv_conf.h`, `backup/` — HIGH confidence (direct inspection)
+- ArduinoJson v7 documentation (https://arduinojson.org/v7/) — streaming parse, PSRAM allocator, ESP32 compatibility
+- ESP-IDF WiFi driver docs v5.5.2 (https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/wifi.html) — AP_STA channel behavior
+- ESP-IDF ESP-NOW docs v5.5.2 (https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/network/esp_now.html) — channel 0 auto-detect
+- LVGL 8.3 File System docs (https://docs.lvgl.io/8.3/overview/file-system.html) — lv_fs_drv_t registration
+- LVGL 8.3 BMP decoder (https://docs.lvgl.io/8.3/libs/bmp.html) — built-in decoder, lv_conf.h flag
+- PySide6 PyPI (https://pypi.org/project/PySide6/) — v6.10.2 current stable, release notes
+- Stream Deck SDK Profiles (https://docs.elgato.com/streamdeck/sdk/guides/profiles/) — JSON profile format reference
+- Existing project codebase: display/ota.cpp (line 69: WiFi.mode(WIFI_AP_STA)), display/espnow_link.cpp (line 72: peer.channel=0), display/sdcard.cpp (SPI config), display/ui.cpp (data-driven loop pattern), src/lv_conf.h (96KB heap)
 
 ### Secondary (MEDIUM confidence)
-- [ESP-NOW + WiFi coexistence — ESP32 Forum](https://www.esp32.com/viewtopic.php?t=12772) — 80%+ packet loss when WiFi STA connected
-- [ESP-NOW latency testing — Hackaday.io](https://hackaday.io/project/164132-hello-world-for-esp-now/log/160572-latency-and-reliability-testing) — sub-20ms latency benchmarks
-- [cnfatal/esp32-cdc-keyboard](https://github.com/cnfatal/esp32-cdc-keyboard) — proven HID+CDC composite on ESP32-S3 (ESP-IDF not Arduino)
-- [Random Nerd Tutorials ESP-NOW](https://randomnerdtutorials.com/esp-now-esp32-arduino-ide/) — Arduino ESP-NOW patterns
-- [FreeTouchDeck GitHub](https://github.com/DustinWatts/FreeTouchDeck) — competitor feature analysis
-- [DuckyPad Pro — CNX Software](https://www.cnx-software.com/2025/09/23/duckypad-pro-20-key-esp32-s3-macropad-supports-up-to-3700-macros-using-duckyscript-language/) — competitor ESP32-S3 macropad
-- [LVGL memory and ESP32 — LVGL Forum](https://forum.lvgl.io/t/memory-and-esp32/4050) — memory management strategies
-- [ESP32 battery low voltage issues — espboards.dev](https://www.espboards.dev/troubleshooting/issues/power/esp32-battery-low-voltage/) — under-voltage protection
+- FreeTouchDeck GitHub (https://github.com/DustinWatts/FreeTouchDeck) — ESP32 macropad with ArduinoJson config
+- DuckyPad Pro (https://dekunukem.github.io/duckyPad-Pro/) — SD card profile storage
+- Adafruit MACROPAD Custom Configurations (https://learn.adafruit.com/macropad-hotkeys/custom-configurations) — Python dict config format
+- LVGL Forum: SD card on ESP32 with v8.3 (https://forum.lvgl.io/t/9827) — community lv_fs_drv_t examples
+- ESP32 Forum: ESP-NOW + WiFi coexistence (https://www.esp32.com/viewtopic.php?t=12772) — channel pinning confirmation
+- PyGObject GTK4 Drag and Drop (https://pygobject.gnome.org/tutorials/gtk4/drag-and-drop.html) — DnD challenges
+- pythonguis.com GUI framework comparison 2026 (https://www.pythonguis.com/faq/which-python-gui-library/) — PySide6 recommendation
 
-### Tertiary (LOW confidence)
-- [ESP32 Desktop Monitor project](https://github.com/tuckershannon/ESP32-Desktop-Monitor) — similar companion app pattern (different hardware)
-- [Bluetooth System Monitor project](https://github.com/DustinWatts/Bluetooth-System-Monitor) — ESP32 + TFT stats display (BLE instead of ESP-NOW)
-- [pioarduino discussion](https://github.com/espressif/arduino-esp32/discussions/10039) — Arduino 3.x PlatformIO status (community fork concerns)
+### Tertiary (LOW confidence, community validation needed)
+- circuitlabs.net ESP-NOW + WiFi coexistence (https://circuitlabs.net/esp-now-with-wifi-coexistence/) — practical guide
+- Arduino Forum: WebServer vs ESPAsyncWebServer (https://forum.arduino.cc/t/928293) — comparison discussion
+- LVGL Forum: style memory leak (https://forum.lvgl.io/t/8314) — styles not freed on object delete
 
 ---
-*Research completed: 2026-02-14*
+*Research completed: 2026-02-15*
 *Ready for roadmap: yes*
