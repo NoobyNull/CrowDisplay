@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 ## Current Position
 
 Phase: 1 of 5 (Wired Command Foundation)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-02-14 -- Roadmap created
+Plan: 1 of 4 in current phase
+Status: Executing
+Last activity: 2026-02-15 -- Completed 01-01-PLAN.md
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 5%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: -
-- Total execution time: 0 hours
+- Total plans completed: 1
+- Average duration: 5min
+- Total execution time: 0.08 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 01 | 1 | 5min | 5min |
 
 **Recent Trend:**
-- Last 5 plans: -
-- Trend: -
+- Last 5 plans: 01-01 (5min)
+- Trend: Starting
 
 *Updated after each plan completion*
 
@@ -45,6 +45,9 @@ Recent decisions affecting current work:
 - [Roadmap]: Build wired UART transport first, add ESP-NOW in Phase 2 (removes wireless uncertainty from early debugging)
 - [Roadmap]: Bridge is HID-only to PC (avoids documented USB HID+CDC composite stall bug)
 - [Roadmap]: I2C mutex from day one in Phase 1 (prevents GT911 touch corruption)
+- [01-01]: Used build_src_filter instead of src_dir for multi-env PlatformIO builds
+- [01-01]: Display lib_deps (LovyanGFX, LVGL) moved to env:display only, not shared base
+- [01-01]: Init order: Wire -> touch_init(mutex) -> display_init(PCA9557+LCD) -> gt911_discover -> lvgl_init
 
 ### Pending Todos
 
@@ -58,6 +61,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-14
-Stopped at: Roadmap created, ready to plan Phase 1
+Last session: 2026-02-15
+Stopped at: Completed 01-01-PLAN.md (project structure + protocol + display/bridge skeletons)
 Resume file: None
