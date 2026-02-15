@@ -23,9 +23,65 @@ enum MsgType : uint8_t {
     MSG_MEDIA_KEY   = 0x04,  // Display -> Bridge: consumer control key
     MSG_POWER_STATE = 0x05,  // Bridge -> Display: PC power state change
     MSG_TIME_SYNC   = 0x06,  // Bridge -> Display: epoch time from companion
+    MSG_PING        = 0x07,  // Display -> Bridge: heartbeat (bridge replies with ACK)
 };
 
+// --- Stat Type Enum (for TLV stats protocol) ------------------------
+
+enum StatType : uint8_t {
+    STAT_CPU_PERCENT    = 0x01,
+    STAT_RAM_PERCENT    = 0x02,
+    STAT_GPU_PERCENT    = 0x03,
+    STAT_CPU_TEMP       = 0x04,
+    STAT_GPU_TEMP       = 0x05,
+    STAT_DISK_PERCENT   = 0x06,
+    STAT_NET_UP         = 0x07,  // KB/s, uint16
+    STAT_NET_DOWN       = 0x08,  // KB/s, uint16
+    STAT_CPU_FREQ       = 0x09,  // MHz, uint16
+    STAT_GPU_FREQ       = 0x0A,  // MHz, uint16
+    STAT_SWAP_PERCENT   = 0x0B,
+    STAT_UPTIME_HOURS   = 0x0C,  // Hours, uint16
+    STAT_BATTERY_PCT    = 0x0D,  // For laptops
+    STAT_FAN_RPM        = 0x0E,  // uint16
+    STAT_LOAD_AVG       = 0x0F,  // Load average x 100, uint16
+    STAT_PROC_COUNT     = 0x10,  // Process count, uint16
+    STAT_GPU_MEM_PCT    = 0x11,  // GPU memory percent
+    STAT_GPU_POWER_W    = 0x12,  // GPU power in watts
+    STAT_DISK_READ_KBS  = 0x13,  // Disk read KB/s, uint16
+    STAT_DISK_WRITE_KBS = 0x14,  // Disk write KB/s, uint16
+};
+
+#define STAT_TYPE_MAX 0x14
+
+// --- TLV Stats Decoding Helper ---------------------------------------
+//
+// TLV format: [count] [type1][len1][val1...] [type2][len2][val2...] ...
+// Each value is 1 byte (uint8) or 2 bytes (uint16 LE).
+// Heuristic: if data[0] <= STAT_TYPE_MAX, it's TLV (count); if > STAT_TYPE_MAX, legacy.
+
+inline bool tlv_decode_stats(const uint8_t *data, uint8_t len,
+                              void (*callback)(uint8_t type, uint16_t value)) {
+    if (len < 1) return false;
+    uint8_t count = data[0];
+    uint8_t pos = 1;
+    for (uint8_t i = 0; i < count && pos + 1 < len; i++) {
+        uint8_t type = data[pos++];
+        uint8_t vlen = data[pos++];
+        if (pos + vlen > len) return false;
+        uint16_t value = 0;
+        if (vlen == 1) value = data[pos];
+        else if (vlen == 2) value = data[pos] | (data[pos+1] << 8);
+        else return false;
+        callback(type, value);
+        pos += vlen;
+    }
+    return true;
+}
+
 // --- Payload Structs -------------------------------------------------
+
+// NOTE: StatsPayload is the legacy fixed-format struct (v0.9.0).
+// New stats use TLV encoding via tlv_decode_stats() above.
 
 struct __attribute__((packed)) HotkeyMsg {
     uint8_t modifiers;  // Bitfield: MOD_CTRL | MOD_SHIFT | MOD_ALT | MOD_GUI
