@@ -66,6 +66,7 @@ Recent decisions affecting current work:
 ### Pending Todos
 
 1. **Make buttons positionable with variable count per page** (ui) -- variable button count, grid positioning, button reorder within pages
+2. **Add button depressed color to config schema** (ui) -- separate pressed/depressed color per button, with auto-darken default
 
 ### Blockers/Concerns
 
