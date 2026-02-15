@@ -198,13 +198,24 @@ static void handle_config_upload() {
             return;
         }
 
-        // Load new config and rebuild UI
-        AppConfig new_config = config_load();
-        Serial.printf("Config: loaded updated config, profile: %s\n", new_config.active_profile_name.c_str());
+        // Load new config into global (all LVGL widgets destroyed before rebuild in loop)
+        AppConfig new_cfg = config_load();
+        const ProfileConfig* profile = new_cfg.get_active_profile();
+        if (!profile || profile->pages.empty()) {
+            Serial.println("Config: uploaded config invalid, keeping current");
+            free(config_buffer);
+            config_buffer = nullptr;
+            return;
+        }
 
-        // Rebuild UI without reboot
-        rebuild_ui(&new_config);
-        Serial.println("Config: UI rebuilt successfully");
+        // Update global config (ButtonConfig* pointers invalidated on rebuild)
+        get_global_config() = new_cfg;
+        Serial.printf("Config: loaded updated config, profile: %s, %zu pages\n",
+                      new_cfg.active_profile_name.c_str(), profile->pages.size());
+
+        // Request deferred rebuild (will execute from loop context)
+        request_ui_rebuild();
+        Serial.println("Config: rebuild requested");
 
         // Call user callback if registered
         if (g_callback) {

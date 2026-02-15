@@ -30,3 +30,9 @@ void show_ota_screen(const char *ip);
 
 // Hide OTA overlay, return to normal view
 void hide_ota_screen();
+
+// Request deferred UI rebuild (safe to call from any context, executes in loop)
+void request_ui_rebuild();
+
+// Access the global config (for config_server to update before rebuild)
+AppConfig& get_global_config();

@@ -163,8 +163,8 @@ static lv_obj_t *create_stat_label(lv_obj_t *parent, const char *text, uint32_t 
 // ============================================================
 //  Stats Header: create the two-row header container
 // ============================================================
-static void create_stats_header() {
-    stats_header = lv_obj_create(lv_scr_act());
+static void create_stats_header(lv_obj_t *parent) {
+    stats_header = lv_obj_create(parent);
     lv_obj_set_size(stats_header, SCREEN_WIDTH, 90);
     lv_obj_align(stats_header, LV_ALIGN_TOP_MID, 0, 45);
     lv_obj_set_style_bg_color(stats_header, lv_color_hex(0x0d1b2a), LV_PART_MAIN);
@@ -378,6 +378,98 @@ void hide_ota_screen() {
 }
 
 // ============================================================
+//  Static helper: create all main screen widgets (header, stats, tabview)
+//  Called by both create_ui() and rebuild_ui()
+// ============================================================
+static void create_ui_widgets(lv_obj_t *screen, const AppConfig *cfg) {
+    // Header bar (45px)
+    lv_obj_t *header = lv_obj_create(screen);
+    lv_obj_set_size(header, SCREEN_WIDTH, 45);
+    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(header, lv_color_hex(0x16213e), LV_PART_MAIN);
+    lv_obj_set_style_border_width(header, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(header, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Title on the left
+    lv_obj_t *title = lv_label_create(header);
+    lv_label_set_text(title, LV_SYMBOL_KEYBOARD "  Hotkeys");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_color(title, lv_color_hex(0xE0E0E0), LV_PART_MAIN);
+    lv_obj_align(title, LV_ALIGN_LEFT_MID, 15, 0);
+
+    // Status label (center-ish)
+    status_label = lv_label_create(header);
+    lv_label_set_text(status_label, LV_SYMBOL_USB " Ready");
+    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(status_label, lv_color_hex(0x2ECC71), LV_PART_MAIN);
+    lv_obj_align(status_label, LV_ALIGN_CENTER, 0, 0);
+
+    // Device status indicators on the right side of header
+    rssi_label = lv_label_create(header);
+    lv_label_set_text(rssi_label, LV_SYMBOL_WIFI);
+    lv_obj_set_style_text_font(rssi_label, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(rssi_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
+    lv_obj_align(rssi_label, LV_ALIGN_RIGHT_MID, -15, 0);
+
+    // OTA button (tappable)
+    lv_obj_t *ota_btn = lv_label_create(header);
+    lv_label_set_text(ota_btn, LV_SYMBOL_DOWNLOAD);
+    lv_obj_set_style_text_font(ota_btn, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ota_btn, lv_color_hex(CLR_CYAN), LV_PART_MAIN);
+    lv_obj_align(ota_btn, LV_ALIGN_RIGHT_MID, -55, 0);
+    lv_obj_add_flag(ota_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(ota_btn, ota_btn_event_cb, LV_EVENT_CLICKED, nullptr);
+
+    // Brightness button (tappable)
+    bright_btn = lv_label_create(header);
+    lv_label_set_text(bright_btn, LV_SYMBOL_IMAGE);
+    lv_obj_set_style_text_font(bright_btn, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_set_style_text_color(bright_btn, lv_color_hex(CLR_YELLOW), LV_PART_MAIN);
+    lv_obj_align(bright_btn, LV_ALIGN_RIGHT_MID, -95, 0);
+    lv_obj_add_flag(bright_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(bright_btn, brightness_event_cb, LV_EVENT_CLICKED, nullptr);
+
+    // Stats header (hidden by default, shown on first MSG_STATS)
+    create_stats_header(screen);
+
+    // Tabview with bottom tabs (45px tab bar)
+    tabview = lv_tabview_create(screen, LV_DIR_BOTTOM, 45);
+    lv_obj_set_size(tabview, SCREEN_WIDTH, SCREEN_HEIGHT - 45);
+    lv_obj_align(tabview, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+    // Style the tab buttons
+    lv_obj_t *tab_btns = lv_tabview_get_tab_btns(tabview);
+    lv_obj_set_style_bg_color(tab_btns, lv_color_hex(0x16213e), LV_PART_MAIN);
+    lv_obj_set_style_text_color(tab_btns, lv_color_hex(0xBBBBBB), LV_PART_MAIN);
+    lv_obj_set_style_text_color(tab_btns, lv_color_hex(0x3498DB), LV_PART_ITEMS | LV_STATE_CHECKED);
+    lv_obj_set_style_border_color(tab_btns, lv_color_hex(0x3498DB), LV_PART_ITEMS | LV_STATE_CHECKED);
+    lv_obj_set_style_text_font(tab_btns, &lv_font_montserrat_16, LV_PART_MAIN);
+
+    // Create pages from config (single config-driven path)
+    const ProfileConfig* active_profile = cfg->get_active_profile();
+    if (active_profile) {
+        for (size_t i = 0; i < active_profile->pages.size(); i++) {
+            const PageConfig& page = active_profile->pages[i];
+            lv_obj_t *tab = lv_tabview_add_tab(tabview, page.name.c_str());
+
+            lv_obj_set_flex_flow(tab, LV_FLEX_FLOW_ROW_WRAP);
+            lv_obj_set_flex_align(tab, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY);
+            lv_obj_set_style_pad_all(tab, 10, LV_PART_MAIN);
+            lv_obj_set_style_pad_row(tab, 10, LV_PART_MAIN);
+            lv_obj_set_style_pad_column(tab, 10, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(tab, lv_color_hex(0x1a1a2e), LV_PART_MAIN);
+
+            for (size_t j = 0; j < page.buttons.size(); j++) {
+                create_hotkey_button(tab, &page.buttons[j]);
+            }
+        }
+    } else {
+        Serial.println("UI: No active profile found in config");
+    }
+}
+
+// ============================================================
 //  Public: create_ui() -- Build the complete hotkey tabview UI
 // ============================================================
 void create_ui(const AppConfig* cfg) {
@@ -438,139 +530,51 @@ void create_ui(const AppConfig* cfg) {
     lv_label_set_text(exit_lbl, "Exit OTA Mode");
     lv_obj_center(exit_lbl);
 
-    // Header bar (45px)
-    lv_obj_t *header = lv_obj_create(main_screen);
-    lv_obj_set_size(header, SCREEN_WIDTH, 45);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x16213e), LV_PART_MAIN);
-    lv_obj_set_style_border_width(header, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(header, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    // Create main screen widgets (header, stats header, tabview with pages)
+    create_ui_widgets(main_screen, cfg);
 
-    // Title on the left
-    lv_obj_t *title = lv_label_create(header);
-    lv_label_set_text(title, LV_SYMBOL_KEYBOARD "  Hotkeys");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_set_style_text_color(title, lv_color_hex(0xE0E0E0), LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_LEFT_MID, 15, 0);
-
-    // Status label (center-ish)
-    status_label = lv_label_create(header);
-    lv_label_set_text(status_label, LV_SYMBOL_USB " Ready");
-    lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(status_label, lv_color_hex(0x2ECC71), LV_PART_MAIN);
-    lv_obj_align(status_label, LV_ALIGN_CENTER, 0, 0);
-
-    // Device status indicators on the right side of header
-    rssi_label = lv_label_create(header);
-    lv_label_set_text(rssi_label, LV_SYMBOL_WIFI);
-    lv_obj_set_style_text_font(rssi_label, &lv_font_montserrat_18, LV_PART_MAIN);
-    lv_obj_set_style_text_color(rssi_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
-    lv_obj_align(rssi_label, LV_ALIGN_RIGHT_MID, -15, 0);
-
-    // OTA button (tappable)
-    lv_obj_t *ota_btn = lv_label_create(header);
-    lv_label_set_text(ota_btn, LV_SYMBOL_DOWNLOAD);
-    lv_obj_set_style_text_font(ota_btn, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_set_style_text_color(ota_btn, lv_color_hex(CLR_CYAN), LV_PART_MAIN);
-    lv_obj_align(ota_btn, LV_ALIGN_RIGHT_MID, -55, 0);
-    lv_obj_add_flag(ota_btn, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(ota_btn, ota_btn_event_cb, LV_EVENT_CLICKED, nullptr);
-
-    // Brightness button (tappable)
-    bright_btn = lv_label_create(header);
-    lv_label_set_text(bright_btn, LV_SYMBOL_IMAGE);
-    lv_obj_set_style_text_font(bright_btn, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_set_style_text_color(bright_btn, lv_color_hex(CLR_YELLOW), LV_PART_MAIN);
-    lv_obj_align(bright_btn, LV_ALIGN_RIGHT_MID, -95, 0);
-    lv_obj_add_flag(bright_btn, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(bright_btn, brightness_event_cb, LV_EVENT_CLICKED, nullptr);
-
-    // Stats header (hidden by default, shown on first MSG_STATS)
-    create_stats_header();
-
-    // Tabview with bottom tabs (45px tab bar)
-    tabview = lv_tabview_create(main_screen, LV_DIR_BOTTOM, 45);
-    lv_obj_set_size(tabview, SCREEN_WIDTH, SCREEN_HEIGHT - 45);
-    lv_obj_align(tabview, LV_ALIGN_BOTTOM_MID, 0, 0);
-
-    // Style the tab buttons
-    lv_obj_t *tab_btns = lv_tabview_get_tab_btns(tabview);
-    lv_obj_set_style_bg_color(tab_btns, lv_color_hex(0x16213e), LV_PART_MAIN);
-    lv_obj_set_style_text_color(tab_btns, lv_color_hex(0xBBBBBB), LV_PART_MAIN);
-    lv_obj_set_style_text_color(tab_btns, lv_color_hex(0x3498DB), LV_PART_ITEMS | LV_STATE_CHECKED);
-    lv_obj_set_style_border_color(tab_btns, lv_color_hex(0x3498DB), LV_PART_ITEMS | LV_STATE_CHECKED);
-    lv_obj_set_style_text_font(tab_btns, &lv_font_montserrat_16, LV_PART_MAIN);
-
-    // Create pages from config (single config-driven path)
-    const ProfileConfig* active_profile = cfg->get_active_profile();
-    if (active_profile) {
-        for (size_t i = 0; i < active_profile->pages.size(); i++) {
-            const PageConfig& page = active_profile->pages[i];
-            lv_obj_t *tab = lv_tabview_add_tab(tabview, page.name.c_str());
-
-            lv_obj_set_flex_flow(tab, LV_FLEX_FLOW_ROW_WRAP);
-            lv_obj_set_flex_align(tab, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY);
-            lv_obj_set_style_pad_all(tab, 10, LV_PART_MAIN);
-            lv_obj_set_style_pad_row(tab, 10, LV_PART_MAIN);
-            lv_obj_set_style_pad_column(tab, 10, LV_PART_MAIN);
-            lv_obj_set_style_bg_color(tab, lv_color_hex(0x1a1a2e), LV_PART_MAIN);
-
-            for (size_t j = 0; j < page.buttons.size(); j++) {
-                create_hotkey_button(tab, &page.buttons[j]);
-            }
-        }
-        Serial.printf("UI created from config: %zu page(s)\n", active_profile->pages.size());
-    } else {
-        Serial.println("UI: No active profile found in config");
-    }
-
-    Serial.println("UI initialized: stats header, device status, clock screen ready");
+    Serial.printf("UI initialized: %zu page(s), stats header, clock screen ready\n",
+                  cfg->get_active_profile() ? cfg->get_active_profile()->pages.size() : 0);
 }
 
 // ============================================================
-//  Public: rebuild_ui() -- Recreate UI from new AppConfig
+//  Public: rebuild_ui() -- Full-screen rebuild from AppConfig
 // ============================================================
 void rebuild_ui(const AppConfig* cfg) {
-    if (!cfg) {
-        Serial.println("rebuild_ui: Config is nullptr, ignoring");
+    if (!cfg || !main_screen) {
+        Serial.println("rebuild_ui: invalid args");
         return;
     }
 
-    if (!tabview) {
-        Serial.println("rebuild_ui: Tabview not initialized");
-        return;
-    }
+    // Memory before rebuild
+    lv_mem_monitor_t mon_pre;
+    lv_mem_monitor(&mon_pre);
 
-    // Delete and recreate tabview (LVGL 8.3 has no lv_tabview_remove_tab)
-    lv_obj_del(tabview);
-    tabview = lv_tabview_create(main_screen, LV_DIR_BOTTOM, 45);
-    lv_obj_set_size(tabview, SCREEN_WIDTH, SCREEN_HEIGHT - 45);
-    lv_obj_align(tabview, LV_ALIGN_BOTTOM_MID, 0, 0);
+    // Step 1: Destroy ALL children of main screen
+    lv_obj_clean(main_screen);
 
-    // Update active config
+    // Step 2: Null all widget pointers (now dangling after clean)
+    tabview = nullptr;
+    status_label = nullptr;
+    stats_header = nullptr;
+    stats_visible = false;
+    rssi_label = nullptr;
+    bright_btn = nullptr;
+    memset(stat_labels, 0, sizeof(stat_labels));
+
+    // Step 3: Update active config pointer
     g_active_config = cfg;
 
-    // Recreate pages from config (ButtonConfig* points into long-lived global config)
-    const ProfileConfig* active_profile = cfg->get_active_profile();
-    if (active_profile) {
-        for (size_t i = 0; i < active_profile->pages.size(); i++) {
-            const PageConfig& page = active_profile->pages[i];
-            lv_obj_t *tab = lv_tabview_add_tab(tabview, page.name.c_str());
+    // Step 4: Recreate all widgets on main screen
+    create_ui_widgets(main_screen, cfg);
 
-            lv_obj_set_flex_flow(tab, LV_FLEX_FLOW_ROW_WRAP);
-            lv_obj_set_flex_align(tab, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY);
-            lv_obj_set_style_pad_all(tab, 10, LV_PART_MAIN);
-            lv_obj_set_style_pad_row(tab, 10, LV_PART_MAIN);
-            lv_obj_set_style_pad_column(tab, 10, LV_PART_MAIN);
-            lv_obj_set_style_bg_color(tab, lv_color_hex(0x1a1a2e), LV_PART_MAIN);
+    // Step 5: Memory after rebuild
+    lv_mem_monitor_t mon_post;
+    lv_mem_monitor(&mon_post);
 
-            for (size_t j = 0; j < page.buttons.size(); j++) {
-                create_hotkey_button(tab, &page.buttons[j]);
-            }
-        }
-        Serial.printf("UI rebuilt: %zu page(s) from config\n", active_profile->pages.size());
-    } else {
-        Serial.println("rebuild_ui: Active profile not found");
-    }
+    uint32_t used_pre = mon_pre.total_size - mon_pre.free_size;
+    uint32_t used_post = mon_post.total_size - mon_post.free_size;
+    Serial.printf("UI rebuild: LVGL mem used=%u->%u (delta=%d), free=%u, frag=%u, biggest=%u\n",
+                  used_pre, used_post, (int32_t)(used_post - used_pre),
+                  mon_post.free_size, mon_post.free_cnt, mon_post.free_biggest_size);
 }

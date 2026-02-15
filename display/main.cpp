@@ -28,6 +28,15 @@ static const uint32_t BRIDGE_LINK_TIMEOUT_MS = 10000;  // 10s to consider link s
 // Global config with program lifetime (ButtonConfig* in LVGL events point into this)
 static AppConfig g_app_config;
 
+// Deferred UI rebuild flag (set by config_server, consumed by loop)
+static volatile bool g_rebuild_pending = false;
+
+// Public accessor for global config (used by config_server to update config)
+AppConfig& get_global_config() { return g_app_config; }
+
+// Public function to request deferred UI rebuild from loop() context
+void request_ui_rebuild() { g_rebuild_pending = true; }
+
 void setup() {
     Serial.begin(115200);
     Serial.println("\n=== Display Unit Starting ===");
@@ -69,6 +78,12 @@ void loop() {
 
     // Drive LVGL
     lvgl_tick();
+
+    // Deferred UI rebuild (triggered by config upload)
+    if (g_rebuild_pending) {
+        g_rebuild_pending = false;
+        rebuild_ui(&g_app_config);
+    }
 
     // OTA polling (ArduinoOTA + web server)
     if (ota_active()) {
