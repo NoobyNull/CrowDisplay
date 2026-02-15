@@ -55,7 +55,7 @@ Plans:
 
 **Milestone Goal:** Make the display fully configurable -- all hotkey layouts, button properties, and visual assets defined by config files on SD card, editable via a Linux GUI app and pushed over WiFi.
 
-- [ ] **Phase 5: Config Data Model + SD Loading** - JSON config schema, parser, SD card persistence with fallback defaults
+- [x] **Phase 5: Config Data Model + SD Loading** - JSON config schema, parser, SD card persistence with fallback defaults
 - [ ] **Phase 6: Data-Driven Display UI** - Display renders pages and buttons dynamically from parsed config struct
 - [ ] **Phase 7: Config Server (SoftAP + HTTP)** - WiFi upload of config files with validation, OTA merge, ESP-NOW coexistence
 - [ ] **Phase 8: Desktop GUI Editor** - PySide6 visual layout editor with direct WiFi deploy to device
@@ -74,7 +74,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 05-01-PLAN.md -- ArduinoJson v7 migration, version field, backup + atomic save, page validation
+- [x] 05-01-PLAN.md -- ArduinoJson v7 migration, version field, backup + atomic save, page validation
 
 ### Phase 6: Data-Driven Display UI
 **Goal**: Display UI renders pages and buttons entirely from the in-memory config struct, enabling hot-reload of layouts without device reboot
@@ -133,7 +133,7 @@ Phases execute in numeric order: 5 -> 6 -> 7 -> 8
 | 2. Wireless Link (merged) | v1.0 | N/A | Complete | 2026-02-15 |
 | 3. Stats Display + Companion | v1.0 | 4/4 | Complete | 2026-02-15 |
 | 4. Battery + Power States | v1.0 | 3/3 | Complete | 2026-02-15 |
-| 5. Config Data Model + SD Loading | v1.1 | 0/TBD | Not started | - |
+| 5. Config Data Model + SD Loading | v1.1 | 1/1 | Complete | 2026-02-15 |
 | 6. Data-Driven Display UI | v1.1 | 0/TBD | Not started | - |
 | 7. Config Server (SoftAP + HTTP) | v1.1 | 0/TBD | Not started | - |
 | 8. Desktop GUI Editor | v1.1 | 0/TBD | Not started | - |
