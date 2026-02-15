@@ -7,13 +7,12 @@
 // ============================================================
 //  Key codes matching USB HID usage table (Arduino USBHIDKeyboard)
 // ============================================================
-#define KEY_TAB         0xB3
-#define KEY_ESC         0xB1
-#define KEY_F5          0xC4
+#define KEY_RETURN      0xB0
 #define KEY_LEFT_ARROW  0xD8
 #define KEY_RIGHT_ARROW 0xD7
 #define KEY_UP_ARROW    0xDA
 #define KEY_DOWN_ARROW  0xD9
+#define KEY_PRINT_SCREEN 0xCE
 
 // ============================================================
 //  Color Palette
@@ -28,6 +27,12 @@
 #define CLR_YELLOW  0xF1C40F
 #define CLR_GREY    0x7F8C8D
 #define CLR_DARK    0x2C3E50
+#define CLR_CYAN    0x00BCD4
+#define CLR_INDIGO  0x3F51B5
+#define CLR_LIME    0x8BC34A
+#define CLR_AMBER   0xFFC107
+#define CLR_DPURPLE 0x7B1FA2
+#define CLR_MAGENTA 0xAD1457
 
 // ============================================================
 //  Hotkey Data Structures
@@ -40,6 +45,8 @@ struct Hotkey {
     uint8_t keycode;
     uint32_t color;
     const char *icon;
+    bool is_media;
+    uint16_t consumer_code;
 };
 
 struct HotkeyPage {
@@ -49,64 +56,68 @@ struct HotkeyPage {
 };
 
 // ============================================================
-//  Page 1: General Shortcuts (12 keys)
+//  Page 1: Hyprland Window Management (12 keys)
 // ============================================================
 static const Hotkey page1_hotkeys[] = {
-    {"Copy",       "Ctrl+C",         MOD_CTRL,              'c', CLR_BLUE,   LV_SYMBOL_COPY},
-    {"Paste",      "Ctrl+V",         MOD_CTRL,              'v', CLR_GREEN,  LV_SYMBOL_PASTE},
-    {"Cut",        "Ctrl+X",         MOD_CTRL,              'x', CLR_ORANGE, LV_SYMBOL_CUT},
-    {"Undo",       "Ctrl+Z",         MOD_CTRL,              'z', CLR_RED,    LV_SYMBOL_LEFT},
-    {"Redo",       "Ctrl+Shift+Z",   MOD_CTRL | MOD_SHIFT,  'z', CLR_PURPLE, LV_SYMBOL_RIGHT},
-    {"Save",       "Ctrl+S",         MOD_CTRL,              's', CLR_TEAL,   LV_SYMBOL_SAVE},
-    {"Select All", "Ctrl+A",         MOD_CTRL,              'a', CLR_PINK,   LV_SYMBOL_LIST},
-    {"Find",       "Ctrl+F",         MOD_CTRL,              'f', CLR_YELLOW, LV_SYMBOL_EYE_OPEN},
-    {"New",        "Ctrl+N",         MOD_CTRL,              'n', CLR_BLUE,   LV_SYMBOL_FILE},
-    {"Print",      "Ctrl+P",         MOD_CTRL,              'p', CLR_GREY,   LV_SYMBOL_CHARGE},
-    {"Close",      "Ctrl+W",         MOD_CTRL,              'w', CLR_RED,    LV_SYMBOL_CLOSE},
-    {"Refresh",    "Ctrl+R",         MOD_CTRL,              'r', CLR_GREEN,  LV_SYMBOL_REFRESH},
+    {"WS 1",       "Super+1",          MOD_GUI,               '1',             CLR_BLUE,   LV_SYMBOL_HOME,     false, 0},
+    {"WS 2",       "Super+2",          MOD_GUI,               '2',             CLR_BLUE,   LV_SYMBOL_HOME,     false, 0},
+    {"WS 3",       "Super+3",          MOD_GUI,               '3',             CLR_BLUE,   LV_SYMBOL_HOME,     false, 0},
+    {"WS 4",       "Super+4",          MOD_GUI,               '4',             CLR_BLUE,   LV_SYMBOL_HOME,     false, 0},
+    {"Focus L",    "Super+Left",       MOD_GUI,               KEY_LEFT_ARROW,  CLR_TEAL,   LV_SYMBOL_LEFT,     false, 0},
+    {"Focus R",    "Super+Right",      MOD_GUI,               KEY_RIGHT_ARROW, CLR_TEAL,   LV_SYMBOL_RIGHT,    false, 0},
+    {"Focus Up",   "Super+Up",         MOD_GUI,               KEY_UP_ARROW,    CLR_TEAL,   LV_SYMBOL_UP,       false, 0},
+    {"Focus Dn",   "Super+Down",       MOD_GUI,               KEY_DOWN_ARROW,  CLR_TEAL,   LV_SYMBOL_DOWN,     false, 0},
+    {"Kill",       "Super+Q",          MOD_GUI,               'q',             CLR_RED,    LV_SYMBOL_CLOSE,    false, 0},
+    {"Fullscr",    "Super+F",          MOD_GUI,               'f',             CLR_CYAN,   LV_SYMBOL_NEW_LINE, false, 0},
+    {"Float",      "Super+Sh+Space",   MOD_GUI | MOD_SHIFT,   ' ',             CLR_INDIGO, LV_SYMBOL_SHUFFLE,  false, 0},
+    {"WS 5",       "Super+5",          MOD_GUI,               '5',             CLR_BLUE,   LV_SYMBOL_HOME,     false, 0},
 };
 
 // ============================================================
-//  Page 2: Window Management (12 keys)
+//  Page 2: Hyprland System Actions (12 keys)
 // ============================================================
 static const Hotkey page2_hotkeys[] = {
-    {"Desktop",    "Win+D",            MOD_GUI,               'd',             CLR_BLUE,   LV_SYMBOL_HOME},
-    {"Task View",  "Win+Tab",          MOD_GUI,               KEY_TAB,         CLR_PURPLE, LV_SYMBOL_LIST},
-    {"Lock",       "Win+L",            MOD_GUI,               'l',             CLR_RED,    LV_SYMBOL_EYE_CLOSE},
-    {"Explorer",   "Win+E",            MOD_GUI,               'e',             CLR_ORANGE, LV_SYMBOL_DIRECTORY},
-    {"Settings",   "Win+I",            MOD_GUI,               'i',             CLR_TEAL,   LV_SYMBOL_SETTINGS},
-    {"Snap Left",  "Win+Left",         MOD_GUI,               KEY_LEFT_ARROW,  CLR_GREEN,  LV_SYMBOL_LEFT},
-    {"Snap Right", "Win+Right",        MOD_GUI,               KEY_RIGHT_ARROW, CLR_GREEN,  LV_SYMBOL_RIGHT},
-    {"Maximize",   "Win+Up",           MOD_GUI,               KEY_UP_ARROW,    CLR_BLUE,   LV_SYMBOL_UP},
-    {"Minimize",   "Win+Down",         MOD_GUI,               KEY_DOWN_ARROW,  CLR_GREY,   LV_SYMBOL_DOWN},
-    {"Screenshot", "Win+Shift+S",      MOD_GUI | MOD_SHIFT,   's',             CLR_PINK,   LV_SYMBOL_IMAGE},
-    {"Task Mgr",   "Ctrl+Shift+Esc",   MOD_CTRL | MOD_SHIFT,  KEY_ESC,         CLR_RED,    LV_SYMBOL_WARNING},
-    {"Alt+Tab",    "Alt+Tab",          MOD_ALT,               KEY_TAB,         CLR_DARK,   LV_SYMBOL_SHUFFLE},
+    {"Terminal",   "Super+Enter",      MOD_GUI,               KEY_RETURN,      CLR_GREEN,  LV_SYMBOL_KEYBOARD, false, 0},
+    {"Files",      "Super+T",          MOD_GUI,               't',             CLR_ORANGE, LV_SYMBOL_DIRECTORY,false, 0},
+    {"Launcher",   "Super+D",          MOD_GUI,               'd',             CLR_LIME,   LV_SYMBOL_LIST,     false, 0},
+    {"Browser",    "Super+B",          MOD_GUI,               'b',             CLR_BLUE,   LV_SYMBOL_EYE_OPEN, false, 0},
+    {"ScreenSel",  "Super+Sh+S",       MOD_GUI | MOD_SHIFT,   's',             CLR_PINK,   LV_SYMBOL_IMAGE,    false, 0},
+    {"ScreenFull", "Print",            MOD_NONE,              KEY_PRINT_SCREEN,CLR_PINK,   LV_SYMBOL_IMAGE,    false, 0},
+    {"ColorPick",  "Super+Sh+C",       MOD_GUI | MOD_SHIFT,   'c',             CLR_AMBER,  LV_SYMBOL_EYE_OPEN, false, 0},
+    {"Lock",       "Super+L",          MOD_GUI,               'l',             CLR_RED,    LV_SYMBOL_EYE_CLOSE,false, 0},
+    {"Logout",     "Super+Sh+Q",       MOD_GUI | MOD_SHIFT,   'q',             CLR_RED,    LV_SYMBOL_WARNING,  false, 0},
+    {"Notify",     "Super+N",          MOD_GUI,               'n',             CLR_TEAL,   LV_SYMBOL_BELL,     false, 0},
+    {"Clipboard",  "Super+V",          MOD_GUI,               'v',             CLR_GREEN,  LV_SYMBOL_PASTE,    false, 0},
+    {"Settings",   "Super+I",          MOD_GUI,               'i',             CLR_GREY,   LV_SYMBOL_SETTINGS, false, 0},
 };
 
 // ============================================================
-//  Page 3: Dev Tools (12 keys) -- keyboard-only, no consumer
+//  Page 3: Media + Extras (12 keys)
+//  First 6: media keys (is_media=true, consumer control codes)
+//  Last 6: keyboard shortcuts
 // ============================================================
 static const Hotkey page3_hotkeys[] = {
-    {"Terminal",   "Ctrl+`",          MOD_CTRL,              '`',  CLR_DARK,   LV_SYMBOL_KEYBOARD},
-    {"Comment",    "Ctrl+/",          MOD_CTRL,              '/',  CLR_GREY,   LV_SYMBOL_EDIT},
-    {"Format",     "Ctrl+Shift+F",    MOD_CTRL | MOD_SHIFT,  'f',  CLR_PURPLE, LV_SYMBOL_LOOP},
-    {"Debug",      "F5",              MOD_NONE,              KEY_F5, CLR_GREEN, LV_SYMBOL_PLAY},
-    {"Build",      "Ctrl+Shift+B",    MOD_CTRL | MOD_SHIFT,  'b',  CLR_ORANGE, LV_SYMBOL_DOWNLOAD},
-    {"Palette",    "Ctrl+Shift+P",    MOD_CTRL | MOD_SHIFT,  'p',  CLR_PINK,   LV_SYMBOL_KEYBOARD},
-    {"Go to Line", "Ctrl+G",          MOD_CTRL,              'g',  CLR_BLUE,   LV_SYMBOL_RIGHT},
-    {"Sidebar",    "Ctrl+B",          MOD_CTRL,              'b',  CLR_TEAL,   LV_SYMBOL_LIST},
-    {"Split",      "Ctrl+\\",         MOD_CTRL,              '\\', CLR_YELLOW, LV_SYMBOL_NEW_LINE},
-    {"Close All",  "Ctrl+Shift+W",    MOD_CTRL | MOD_SHIFT,  'w',  CLR_RED,    LV_SYMBOL_CLOSE},
-    {"Zoom In",    "Ctrl+=",          MOD_CTRL,              '=',  CLR_GREEN,  LV_SYMBOL_PLUS},
-    {"Zoom Out",   "Ctrl+-",          MOD_CTRL,              '-',  CLR_GREY,   LV_SYMBOL_MINUS},
+    // Media keys (consumer control)
+    {"Play",       "Play/Pause",       MOD_NONE, 0, CLR_DPURPLE, LV_SYMBOL_PLAY,    true, 0x00CD},
+    {"Next",       "Next Track",       MOD_NONE, 0, CLR_DPURPLE, LV_SYMBOL_NEXT,    true, 0x00B5},
+    {"Prev",       "Prev Track",       MOD_NONE, 0, CLR_DPURPLE, LV_SYMBOL_PREV,    true, 0x00B4},
+    {"Vol Up",     "Volume Up",        MOD_NONE, 0, CLR_MAGENTA, LV_SYMBOL_VOLUME_MAX,  true, 0x00E9},
+    {"Vol Down",   "Volume Down",      MOD_NONE, 0, CLR_MAGENTA, LV_SYMBOL_VOLUME_MID,  true, 0x00EA},
+    {"Mute",       "Mute",             MOD_NONE, 0, CLR_MAGENTA, LV_SYMBOL_MUTE,    true, 0x00E2},
+    // Extra keyboard shortcuts
+    {"WS 6",       "Super+6",          MOD_GUI,               '6',  CLR_BLUE,   LV_SYMBOL_HOME,     false, 0},
+    {"WS 7",       "Super+7",          MOD_GUI,               '7',  CLR_BLUE,   LV_SYMBOL_HOME,     false, 0},
+    {"WS 8",       "Super+8",          MOD_GUI,               '8',  CLR_BLUE,   LV_SYMBOL_HOME,     false, 0},
+    {"Move L",     "Super+Ctrl+H",     MOD_GUI | MOD_CTRL,    'h',  CLR_CYAN,   LV_SYMBOL_LEFT,     false, 0},
+    {"Move R",     "Super+Ctrl+L",     MOD_GUI | MOD_CTRL,    'l',  CLR_CYAN,   LV_SYMBOL_RIGHT,    false, 0},
+    {"Resize",     "Super+R",          MOD_GUI,               'r',  CLR_ORANGE, LV_SYMBOL_LOOP,     false, 0},
 };
 
 // Page configuration
 static const HotkeyPage pages[] = {
-    {"General",   page1_hotkeys, sizeof(page1_hotkeys) / sizeof(Hotkey)},
-    {"Windows",   page2_hotkeys, sizeof(page2_hotkeys) / sizeof(Hotkey)},
-    {"Dev Tools", page3_hotkeys, sizeof(page3_hotkeys) / sizeof(Hotkey)},
+    {"Windows", page1_hotkeys, sizeof(page1_hotkeys) / sizeof(Hotkey)},
+    {"System",  page2_hotkeys, sizeof(page2_hotkeys) / sizeof(Hotkey)},
+    {"Media",   page3_hotkeys, sizeof(page3_hotkeys) / sizeof(Hotkey)},
 };
 static const uint8_t NUM_PAGES = sizeof(pages) / sizeof(HotkeyPage);
 
@@ -115,6 +126,11 @@ static const uint8_t NUM_PAGES = sizeof(pages) / sizeof(HotkeyPage);
 // ============================================================
 static lv_obj_t *tabview = nullptr;
 static lv_obj_t *status_label = nullptr;
+static lv_obj_t *stats_header = nullptr;
+static bool stats_visible = false;
+
+// Stats header labels (row 1: cpu%, ram%, gpu%, cpu_temp, gpu_temp; row 2: net_up, net_down, disk%)
+static lv_obj_t *stat_labels[8] = {};
 
 // ============================================================
 //  Button Event Handler
@@ -124,16 +140,19 @@ static void btn_event_cb(lv_event_t *e) {
     if (code == LV_EVENT_CLICKED) {
         const Hotkey *hk = (const Hotkey *)lv_event_get_user_data(e);
         if (hk) {
-            // Send over UART to bridge -- NOT directly to USB HID
-            send_hotkey_to_bridge(hk->modifiers, hk->keycode);
+            if (hk->is_media) {
+                send_media_key_to_bridge(hk->consumer_code);
+            } else {
+                send_hotkey_to_bridge(hk->modifiers, hk->keycode);
+            }
 
             // Update status bar
             if (status_label) {
                 lv_label_set_text_fmt(status_label, LV_SYMBOL_OK " Sent: %s (%s)", hk->label, hk->description);
             }
 
-            Serial.printf("Hotkey: %s (%s) mod=0x%02X key=0x%02X\n",
-                          hk->label, hk->description, hk->modifiers, hk->keycode);
+            Serial.printf("Hotkey: %s (%s) mod=0x%02X key=0x%02X media=%d\n",
+                          hk->label, hk->description, hk->modifiers, hk->keycode, hk->is_media);
         }
     }
 }
@@ -207,6 +226,133 @@ static void create_hotkey_page(lv_obj_t *tab, const HotkeyPage &page) {
 }
 
 // ============================================================
+//  Stats Header: helper to create a stat label with color
+// ============================================================
+static lv_obj_t *create_stat_label(lv_obj_t *parent, const char *text, uint32_t color) {
+    lv_obj_t *lbl = lv_label_create(parent);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(color), LV_PART_MAIN);
+    return lbl;
+}
+
+// ============================================================
+//  Stats Header: create the two-row header container
+// ============================================================
+static void create_stats_header() {
+    stats_header = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(stats_header, SCREEN_WIDTH, 90);
+    lv_obj_align(stats_header, LV_ALIGN_TOP_MID, 0, 45);
+    lv_obj_set_style_bg_color(stats_header, lv_color_hex(0x0d1b2a), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(stats_header, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(stats_header, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(stats_header, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(stats_header, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Start hidden
+    lv_obj_add_flag(stats_header, LV_OBJ_FLAG_HIDDEN);
+
+    // Row 1 container (top 45px): CPU%, RAM%, GPU%, CPU temp, GPU temp
+    lv_obj_t *row1 = lv_obj_create(stats_header);
+    lv_obj_set_size(row1, SCREEN_WIDTH - 20, 40);
+    lv_obj_align(row1, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_opa(row1, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(row1, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(row1, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(row1, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(row1, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row1, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    // Colors: CPU blue, RAM green, GPU orange, CPU temp red, GPU temp yellow
+    stat_labels[0] = create_stat_label(row1, "CPU --%",  0x3498DB);  // cpu_percent
+    stat_labels[1] = create_stat_label(row1, "RAM --%",  0x2ECC71);  // ram_percent
+    stat_labels[2] = create_stat_label(row1, "GPU --%",  0xE67E22);  // gpu_percent
+    stat_labels[3] = create_stat_label(row1, "CPU --\xC2\xB0""C", 0xE74C3C);  // cpu_temp
+    stat_labels[4] = create_stat_label(row1, "GPU --\xC2\xB0""C", 0xF1C40F);  // gpu_temp
+
+    // Row 2 container (bottom 45px): Net up, Net down, Disk%
+    lv_obj_t *row2 = lv_obj_create(stats_header);
+    lv_obj_set_size(row2, SCREEN_WIDTH - 20, 40);
+    lv_obj_align(row2, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_opa(row2, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(row2, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(row2, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(row2, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(row2, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row2, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    // Colors: network teal, disk grey
+    stat_labels[5] = create_stat_label(row2, LV_SYMBOL_UPLOAD " -- KB/s",   0x1ABC9C);  // net_up
+    stat_labels[6] = create_stat_label(row2, LV_SYMBOL_DOWNLOAD " -- KB/s", 0x1ABC9C);  // net_down
+    stat_labels[7] = create_stat_label(row2, "Disk --%",                     0x7F8C8D);  // disk_percent
+}
+
+// ============================================================
+//  Public: update_stats() -- Update stats header with new data
+// ============================================================
+void update_stats(const StatsPayload *stats) {
+    if (!stats_header || !stats) return;
+
+    // Show header if hidden
+    if (!stats_visible) {
+        lv_obj_clear_flag(stats_header, LV_OBJ_FLAG_HIDDEN);
+        stats_visible = true;
+        // Resize tabview to make room for stats header
+        lv_obj_set_size(tabview, SCREEN_WIDTH, SCREEN_HEIGHT - 45 - 90);
+        lv_obj_align(tabview, LV_ALIGN_BOTTOM_MID, 0, 0);
+    }
+
+    // Helper lambda for unavailable values
+    auto fmt_pct = [](lv_obj_t *lbl, const char *prefix, uint8_t val) {
+        if (val == 0xFF)
+            lv_label_set_text_fmt(lbl, "%s N/A", prefix);
+        else
+            lv_label_set_text_fmt(lbl, "%s %d%%", prefix, val);
+    };
+
+    auto fmt_temp = [](lv_obj_t *lbl, const char *prefix, uint8_t val) {
+        if (val == 0xFF)
+            lv_label_set_text_fmt(lbl, "%s N/A", prefix);
+        else
+            lv_label_set_text_fmt(lbl, "%s %d\xC2\xB0""C", prefix, val);
+    };
+
+    // Row 1
+    fmt_pct(stat_labels[0], "CPU", stats->cpu_percent);
+    fmt_pct(stat_labels[1], "RAM", stats->ram_percent);
+    fmt_pct(stat_labels[2], "GPU", stats->gpu_percent);
+    fmt_temp(stat_labels[3], "CPU", stats->cpu_temp);
+    fmt_temp(stat_labels[4], "GPU", stats->gpu_temp);
+
+    // Row 2 - network
+    if (stats->net_up_kbps >= 1024)
+        lv_label_set_text_fmt(stat_labels[5], LV_SYMBOL_UPLOAD " %.1f MB/s", stats->net_up_kbps / 1024.0f);
+    else
+        lv_label_set_text_fmt(stat_labels[5], LV_SYMBOL_UPLOAD " %d KB/s", stats->net_up_kbps);
+
+    if (stats->net_down_kbps >= 1024)
+        lv_label_set_text_fmt(stat_labels[6], LV_SYMBOL_DOWNLOAD " %.1f MB/s", stats->net_down_kbps / 1024.0f);
+    else
+        lv_label_set_text_fmt(stat_labels[6], LV_SYMBOL_DOWNLOAD " %d KB/s", stats->net_down_kbps);
+
+    fmt_pct(stat_labels[7], "Disk", stats->disk_percent);
+}
+
+// ============================================================
+//  Public: hide_stats_header() -- Hide stats header on timeout
+// ============================================================
+void hide_stats_header() {
+    if (!stats_header || !stats_visible) return;
+
+    lv_obj_add_flag(stats_header, LV_OBJ_FLAG_HIDDEN);
+    stats_visible = false;
+
+    // Restore tabview to full size
+    lv_obj_set_size(tabview, SCREEN_WIDTH, SCREEN_HEIGHT - 45);
+    lv_obj_align(tabview, LV_ALIGN_BOTTOM_MID, 0, 0);
+}
+
+// ============================================================
 //  Public: create_ui() -- Build the complete hotkey tabview UI
 // ============================================================
 void create_ui() {
@@ -223,7 +369,7 @@ void create_ui() {
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(header);
-    lv_label_set_text(title, LV_SYMBOL_KEYBOARD "  Hotkey Display");
+    lv_label_set_text(title, LV_SYMBOL_KEYBOARD "  Hyprland Hotkeys");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_set_style_text_color(title, lv_color_hex(0xE0E0E0), LV_PART_MAIN);
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 15, 0);
@@ -235,7 +381,11 @@ void create_ui() {
     lv_obj_set_style_text_color(status_label, lv_color_hex(0x2ECC71), LV_PART_MAIN);
     lv_obj_align(status_label, LV_ALIGN_RIGHT_MID, -15, 0);
 
+    // Stats header (hidden by default, shown on first MSG_STATS)
+    create_stats_header();
+
     // Tabview with bottom tabs (45px tab bar)
+    // Initially full height (no stats header visible)
     tabview = lv_tabview_create(lv_scr_act(), LV_DIR_BOTTOM, 45);
     lv_obj_set_size(tabview, SCREEN_WIDTH, SCREEN_HEIGHT - 45);
     lv_obj_align(tabview, LV_ALIGN_BOTTOM_MID, 0, 0);
@@ -254,5 +404,5 @@ void create_ui() {
         create_hotkey_page(tab, pages[i]);
     }
 
-    Serial.println("UI created: 3 pages, 36 hotkey buttons");
+    Serial.println("UI created: 3 Hyprland pages (Windows/System/Media), 36 hotkey buttons, stats header ready");
 }

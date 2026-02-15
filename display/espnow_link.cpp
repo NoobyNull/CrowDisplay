@@ -1,8 +1,8 @@
 /**
  * @file espnow_link.cpp
- * ESP-NOW wireless link for display -> bridge communication
+ * ESP-NOW wireless link for display <-> bridge communication
  *
- * Broadcasts hotkey commands; receives ACKs from bridge.
+ * Broadcasts hotkey/media key commands; receives ACKs and stats from bridge.
  * No pairing required -- bridge accepts from any peer.
  */
 
@@ -19,14 +19,30 @@ static const uint8_t broadcast_addr[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static volatile bool ack_ready = false;
 static volatile uint8_t ack_status_buf = 0;
 
+// Generic message receive buffer (callback -> poll)
+// Stores one message at a time; newer messages overwrite older unread ones.
+static volatile bool msg_ready = false;
+static volatile uint8_t msg_type_buf = 0;
+static volatile uint8_t msg_payload_len_buf = 0;
+static uint8_t msg_payload_buf[PROTO_MAX_PAYLOAD];
+
 // ESP-NOW receive callback (runs in WiFi task context)
 static void on_recv(const uint8_t *mac, const uint8_t *data, int len) {
-    if (len < 2) return;  // need at least type + 1 byte payload
+    if (len < 1) return;  // need at least type byte
 
     uint8_t msg_type = data[0];
+
     if (msg_type == MSG_HOTKEY_ACK && len >= 2) {
         ack_status_buf = data[1];
         ack_ready = true;
+    } else if (len > 1) {
+        // Queue as generic message for espnow_poll_msg()
+        uint8_t plen = (uint8_t)(len - 1);
+        if (plen > PROTO_MAX_PAYLOAD) plen = PROTO_MAX_PAYLOAD;
+        memcpy(msg_payload_buf, &data[1], plen);
+        msg_payload_len_buf = plen;
+        msg_type_buf = msg_type;
+        msg_ready = true;
     }
 }
 
@@ -72,10 +88,30 @@ void send_hotkey_to_bridge(uint8_t modifiers, uint8_t keycode) {
     Serial.printf("ESPNOW TX: hotkey mod=0x%02X key=0x%02X\n", modifiers, keycode);
 }
 
+void send_media_key_to_bridge(uint16_t consumer_code) {
+    MediaKeyMsg msg;
+    msg.consumer_code = consumer_code;
+    espnow_send(MSG_MEDIA_KEY, (uint8_t *)&msg, sizeof(msg));
+    Serial.printf("ESPNOW TX: media key 0x%04X\n", consumer_code);
+}
+
 bool espnow_poll_ack(uint8_t &status) {
     if (ack_ready) {
         ack_ready = false;
         status = ack_status_buf;
+        return true;
+    }
+    return false;
+}
+
+bool espnow_poll_msg(uint8_t &type, uint8_t *payload, uint8_t &payload_len) {
+    if (msg_ready) {
+        msg_ready = false;
+        type = msg_type_buf;
+        payload_len = msg_payload_len_buf;
+        if (payload_len > 0) {
+            memcpy(payload, msg_payload_buf, payload_len);
+        }
         return true;
     }
     return false;
