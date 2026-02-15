@@ -84,11 +84,11 @@ Plans:
   1. Display shows the exact number of pages and buttons defined in the config file, with each button displaying its configured label, color, icon symbol, and keystroke description
   2. User can edit the JSON config on SD card (manually or via upload), and the display renders the updated layout after a config reload -- without rebooting the device
   3. Repeated config reloads do not degrade performance or exhaust LVGL memory (widget-pool pattern prevents leaks across at least 10 consecutive reloads)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 06-01: TBD
-- [ ] 06-02: TBD
+- [ ] 06-01-PLAN.md -- Fix config lifetime bugs, eliminate Hotkey struct, single config-driven render path
+- [ ] 06-02-PLAN.md -- Full-screen rebuild with lv_obj_clean, deferred rebuild flag, LVGL memory monitoring
 
 ### Phase 7: Config Server (SoftAP + HTTP)
 **Goal**: User can wirelessly upload new hotkey configs to the display via a WiFi access point and HTTP server, with validation and seamless ESP-NOW coexistence
@@ -134,6 +134,6 @@ Phases execute in numeric order: 5 -> 6 -> 7 -> 8
 | 3. Stats Display + Companion | v1.0 | 4/4 | Complete | 2026-02-15 |
 | 4. Battery + Power States | v1.0 | 3/3 | Complete | 2026-02-15 |
 | 5. Config Data Model + SD Loading | v1.1 | 1/1 | Complete | 2026-02-15 |
-| 6. Data-Driven Display UI | v1.1 | 0/TBD | Not started | - |
+| 6. Data-Driven Display UI | v1.1 | 0/2 | Planned | - |
 | 7. Config Server (SoftAP + HTTP) | v1.1 | 0/TBD | Not started | - |
 | 8. Desktop GUI Editor | v1.1 | 0/TBD | Not started | - |
