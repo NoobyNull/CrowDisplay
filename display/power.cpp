@@ -24,6 +24,9 @@ static uint32_t   last_activity_ms  = 0;
 static uint8_t    preset_index      = 0;   // Current user brightness preset
 static uint8_t    user_brightness   = BRIGHTNESS_ACTIVE;  // Tracks user-chosen brightness for wake restore
 
+// Display mode state (orthogonal to power state)
+static DisplayMode current_mode = MODE_HOTKEYS;
+
 // ============================================================
 // power_init()
 // ============================================================
@@ -88,6 +91,29 @@ void power_wake_detected() {
 // ============================================================
 PowerState power_get_state() {
     return current_state;
+}
+
+// ============================================================
+// display_set_mode() -- switch display mode (orthogonal to power)
+// ============================================================
+void display_set_mode(DisplayMode mode) {
+    if (mode == current_mode) return;
+
+    DisplayMode prev_mode = current_mode;
+    current_mode = mode;
+
+    // Call UI transition handler (implemented in ui.cpp)
+    extern void ui_transition_mode(DisplayMode from, DisplayMode to);
+    ui_transition_mode(prev_mode, mode);
+
+    Serial.printf("[power] Display mode: %d -> %d\n", prev_mode, mode);
+}
+
+// ============================================================
+// display_get_mode()
+// ============================================================
+DisplayMode display_get_mode() {
+    return current_mode;
 }
 
 // ============================================================
