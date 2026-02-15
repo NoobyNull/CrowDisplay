@@ -141,10 +141,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | CONF-04 | Phase 5 | Pending |
 
 **Coverage:**
-- v1 requirements: 38 total
-- Mapped to phases: 38
-- Unmapped: 0 ✓
+- v1 requirements: 42 total
+- Mapped to phases: 42
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-14*
-*Last updated: 2026-02-14 after initial definition*
+*Last updated: 2026-02-14 after roadmap creation*
