@@ -1,8 +1,12 @@
 /**
  * @file usb_hid.cpp
- * USB HID Keyboard implementation for bridge ESP32-S3
+ * Composite USB HID implementation for bridge ESP32-S3
  *
- * Keyboard only -- no consumer control (media keys deferred to Phase 3 per BRDG-04).
+ * Three HID interfaces:
+ *   - Keyboard: fires hotkey keystrokes
+ *   - ConsumerControl: fires media keys (play/pause, volume, etc.)
+ *   - Vendor (63-byte reports): receives stats data from companion app
+ *
  * Requires build flags: ARDUINO_USB_MODE=0, ARDUINO_USB_CDC_ON_BOOT=0
  */
 
@@ -12,8 +16,12 @@
 #include <Arduino.h>
 #include <USB.h>
 #include <USBHIDKeyboard.h>
+#include <USBHIDConsumerControl.h>
+#include <USBHIDVendor.h>
 
 static USBHIDKeyboard Keyboard;
+static USBHIDConsumerControl ConsumerControl;
+static USBHIDVendor Vendor(63, false);  // 63-byte reports, no size prepend
 
 void usb_hid_init() {
     // Force USB D+/D- low to trigger host disconnect before switching
@@ -24,12 +32,16 @@ void usb_hid_init() {
     digitalWrite(20, LOW);
     delay(100);
 
+    // Register all HID devices before USB.begin()
     Keyboard.begin();
+    ConsumerControl.begin();
+    Vendor.begin();
+
     USB.productName("HotkeyBridge");
     USB.manufacturerName("CrowPanel");
     USB.begin();
     delay(1000);  // Allow USB enumeration after PHY switch
-    Serial.println("USB HID keyboard initialized");
+    Serial.println("USB HID composite initialized (Keyboard + ConsumerControl + Vendor)");
 }
 
 void fire_keystroke(uint8_t modifiers, uint8_t keycode) {
@@ -45,4 +57,22 @@ void fire_keystroke(uint8_t modifiers, uint8_t keycode) {
     Keyboard.releaseAll();
 
     Serial.printf("HID: mod=0x%02X key=0x%02X\n", modifiers, keycode);
+}
+
+void fire_media_key(uint16_t consumer_code) {
+    ConsumerControl.press(consumer_code);
+    delay(20);
+    ConsumerControl.release();
+    Serial.printf("HID: media key 0x%04X\n", consumer_code);
+}
+
+bool poll_vendor_hid(uint8_t *buf, size_t &len) {
+    if (Vendor.available()) {
+        int n = Vendor.read(buf, 63);
+        if (n > 0) {
+            len = (size_t)n;
+            return true;
+        }
+    }
+    return false;
 }
