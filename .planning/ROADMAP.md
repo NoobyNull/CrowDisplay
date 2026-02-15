@@ -65,10 +65,10 @@ Plans:
 **Plans**: 4 plans
 
 Plans:
-- [ ] 03-01-PLAN.md — Protocol extension + bridge firmware: media keys (USB consumer control) and UART0 stats relay
-- [ ] 03-02-PLAN.md — Display firmware: persistent stats header bar and media key page
-- [ ] 03-03-PLAN.md — Python companion app: system stats collection and serial streaming
-- [ ] 03-04-PLAN.md — End-to-end verification checkpoint: human tests stats pipeline and media keys
+- [ ] 03-01-PLAN.md — Protocol extension + bridge composite USB HID (Keyboard + ConsumerControl + Vendor) with stats relay
+- [ ] 03-02-PLAN.md — Display firmware: Hyprland hotkey pages rework, stats header bar, media key + stats message handling
+- [ ] 03-03-PLAN.md — Python companion app: stats collection via psutil/pynvml, HID output reports via hidapi, systemd service
+- [ ] 03-04-PLAN.md — End-to-end verification checkpoint: stats pipeline, media keys, Hyprland hotkeys
 
 ### Phase 4: Battery Management + Power States
 **Goal**: Display operates untethered on battery power with intelligent power states and clock mode when the PC is off
