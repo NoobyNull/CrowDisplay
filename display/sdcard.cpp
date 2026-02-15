@@ -88,6 +88,16 @@ bool sdcard_file_exists(const char *path) {
     return SD.exists(path);
 }
 
+bool sdcard_file_remove(const char *path) {
+    if (!mounted) return false;
+    if (!SD.exists(path)) return true;  // Already gone
+    if (!SD.remove(path)) {
+        Serial.printf("SD: remove failed: %s\n", path);
+        return false;
+    }
+    return true;
+}
+
 bool sdcard_file_rename(const char *old_path, const char *new_path) {
     if (!mounted) return false;
 

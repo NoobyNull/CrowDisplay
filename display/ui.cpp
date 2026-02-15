@@ -2,10 +2,12 @@
 #include <Arduino.h>
 #include <ctime>
 #include "protocol.h"
+#include "config.h"
 #include "display_hw.h"
 #include "espnow_link.h"
-#include "battery.h"
 #include "power.h"
+#include "ota.h"
+#include <WiFi.h>
 
 // ============================================================
 //  Key codes matching USB HID usage table (Arduino USBHIDKeyboard)
@@ -51,6 +53,21 @@ struct Hotkey {
     bool is_media;
     uint16_t consumer_code;
 };
+
+// Helper: Convert ButtonConfig to Hotkey for rendering
+// (store label/description in static buffer - only valid for single call)
+static Hotkey button_config_to_hotkey(const ButtonConfig& btn) {
+    Hotkey hk;
+    hk.label = btn.label.c_str();
+    hk.description = btn.description.c_str();
+    hk.modifiers = btn.modifiers;
+    hk.keycode = btn.keycode;
+    hk.color = btn.color;
+    hk.icon = btn.icon.c_str();
+    hk.is_media = (btn.action_type == ACTION_MEDIA_KEY);
+    hk.consumer_code = btn.consumer_code;
+    return hk;
+}
 
 struct HotkeyPage {
     const char *name;
@@ -133,21 +150,29 @@ static lv_obj_t *stats_header = nullptr;
 static bool stats_visible = false;
 
 // Device status header labels
-static lv_obj_t *batt_label = nullptr;
-static lv_obj_t *link_label = nullptr;
+static lv_obj_t *rssi_label = nullptr;
 static lv_obj_t *bright_btn = nullptr;
+
+// Global config reference (set by create_ui)
+static const AppConfig *g_active_config = nullptr;
 
 // Clock mode screen
 static lv_obj_t *main_screen = nullptr;
 static lv_obj_t *clock_screen = nullptr;
 static lv_obj_t *clock_time_label = nullptr;
-static lv_obj_t *clock_batt_label = nullptr;
+static lv_obj_t *clock_rssi_label = nullptr;
+
+// OTA screen
+static lv_obj_t *ota_screen = nullptr;
+static lv_obj_t *ota_ip_label = nullptr;
 
 // Stats header labels (row 1: cpu%, ram%, gpu%, cpu_temp, gpu_temp; row 2: net_up, net_down, disk%)
 static lv_obj_t *stat_labels[8] = {};
 
 // Forward declarations
 void update_clock_time();
+void show_ota_screen(const char *ip);
+void hide_ota_screen();
 
 // ============================================================
 //  Brightness Button Callback
@@ -382,32 +407,20 @@ void hide_stats_header() {
 // ============================================================
 //  Public: update_device_status() -- Update header indicators
 // ============================================================
-void update_device_status(uint8_t battery_pct, bool espnow_linked, uint8_t brightness_level) {
-    // Battery label
-    if (batt_label) {
-        if (battery_pct == 0xFF) {
-            lv_label_set_text(batt_label, "BAT N/A");
-            lv_obj_set_style_text_color(batt_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
+void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_level) {
+    // WiFi signal icon -- color reflects signal strength
+    if (rssi_label) {
+        if (rssi_dbm == 0 || !espnow_linked) {
+            lv_obj_set_style_text_color(rssi_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
+        } else if (rssi_dbm > -50) {
+            lv_obj_set_style_text_color(rssi_label, lv_color_hex(CLR_GREEN), LV_PART_MAIN);
+        } else if (rssi_dbm > -70) {
+            lv_obj_set_style_text_color(rssi_label, lv_color_hex(CLR_YELLOW), LV_PART_MAIN);
         } else {
-            lv_label_set_text_fmt(batt_label, "BAT %d%%", battery_pct);
-            if (battery_pct > 50)
-                lv_obj_set_style_text_color(batt_label, lv_color_hex(CLR_GREEN), LV_PART_MAIN);
-            else if (battery_pct >= 20)
-                lv_obj_set_style_text_color(batt_label, lv_color_hex(CLR_YELLOW), LV_PART_MAIN);
-            else
-                lv_obj_set_style_text_color(batt_label, lv_color_hex(CLR_RED), LV_PART_MAIN);
+            lv_obj_set_style_text_color(rssi_label, lv_color_hex(CLR_RED), LV_PART_MAIN);
         }
     }
 
-    // Link indicator
-    if (link_label) {
-        if (espnow_linked)
-            lv_obj_set_style_text_color(link_label, lv_color_hex(0x2ECC71), LV_PART_MAIN);
-        else
-            lv_obj_set_style_text_color(link_label, lv_color_hex(0x7F8C8D), LV_PART_MAIN);
-    }
-
-    // Brightness indicator is static (tap does the cycling)
     (void)brightness_level;
 }
 
@@ -434,23 +447,75 @@ void show_hotkey_view() {
 //  Public: update_clock_time() -- Refresh clock display
 // ============================================================
 void update_clock_time() {
-    if (!clock_time_label || !clock_batt_label) return;
+    if (!clock_time_label || !clock_rssi_label) return;
 
     time_t now = time(nullptr);
     struct tm *tm = localtime(&now);
     lv_label_set_text_fmt(clock_time_label, "%02d:%02d", tm->tm_hour, tm->tm_min);
 
-    BatteryState bat = battery_read();
-    if (bat.available)
-        lv_label_set_text_fmt(clock_batt_label, "BAT %d%%", bat.percent);
+    int rssi = espnow_get_rssi();
+    if (rssi != 0 && rssi > -50)
+        lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_GREEN), LV_PART_MAIN);
+    else if (rssi != 0 && rssi > -70)
+        lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_YELLOW), LV_PART_MAIN);
+    else if (rssi != 0)
+        lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_RED), LV_PART_MAIN);
     else
-        lv_label_set_text(clock_batt_label, "BAT N/A");
+        lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
+}
+
+// ============================================================
+//  OTA Button Callback
+// ============================================================
+static void ota_btn_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_CLICKED) {
+        if (!ota_active()) {
+            if (ota_start()) {
+                show_ota_screen(WiFi.softAPIP().toString().c_str());
+            }
+        } else {
+            ota_stop();
+            hide_ota_screen();
+        }
+    }
+}
+
+// ============================================================
+//  Public: show_ota_screen() -- Show OTA mode overlay
+// ============================================================
+void show_ota_screen(const char *ip) {
+    if (!ota_screen) return;
+    if (ota_ip_label) {
+        lv_label_set_text_fmt(ota_ip_label,
+            "Connect to WiFi: CrowPanel-OTA\nPassword: crowpanel\n\n"
+            "Web upload: http://%s\n"
+            "PlatformIO: pio run -t upload --upload-port %s\n\n"
+            "Tap " LV_SYMBOL_WIFI " to exit OTA mode", ip, ip);
+    }
+    lv_scr_load(ota_screen);
+}
+
+// ============================================================
+//  Public: hide_ota_screen() -- Return to main view
+// ============================================================
+void hide_ota_screen() {
+    if (main_screen) {
+        lv_scr_load(main_screen);
+    }
 }
 
 // ============================================================
 //  Public: create_ui() -- Build the complete hotkey tabview UI
 // ============================================================
-void create_ui() {
+void create_ui(const AppConfig* cfg) {
+    // Use provided config, or fall back to hardcoded defaults
+    if (cfg) {
+        g_active_config = cfg;
+    } else {
+        // Will use hardcoded pages[] array below
+        g_active_config = nullptr;
+    }
     // Save reference to the main screen before adding widgets
     main_screen = lv_scr_act();
 
@@ -482,25 +547,27 @@ void create_ui() {
 
     // Device status indicators on the right side of header
     // Battery label
-    batt_label = lv_label_create(header);
-    lv_label_set_text(batt_label, "BAT --%");
-    lv_obj_set_style_text_font(batt_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(batt_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
-    lv_obj_align(batt_label, LV_ALIGN_RIGHT_MID, -15, 0);
+    rssi_label = lv_label_create(header);
+    lv_label_set_text(rssi_label, LV_SYMBOL_WIFI);
+    lv_obj_set_style_text_font(rssi_label, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(rssi_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
+    lv_obj_align(rssi_label, LV_ALIGN_RIGHT_MID, -15, 0);
 
-    // Link indicator
-    link_label = lv_label_create(header);
-    lv_label_set_text(link_label, LV_SYMBOL_WIFI);
-    lv_obj_set_style_text_font(link_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(link_label, lv_color_hex(0x7F8C8D), LV_PART_MAIN);  // grey initially
-    lv_obj_align(link_label, LV_ALIGN_RIGHT_MID, -105, 0);
+    // OTA button (tappable)
+    lv_obj_t *ota_btn = lv_label_create(header);
+    lv_label_set_text(ota_btn, LV_SYMBOL_DOWNLOAD);
+    lv_obj_set_style_text_font(ota_btn, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ota_btn, lv_color_hex(CLR_CYAN), LV_PART_MAIN);
+    lv_obj_align(ota_btn, LV_ALIGN_RIGHT_MID, -55, 0);
+    lv_obj_add_flag(ota_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(ota_btn, ota_btn_event_cb, LV_EVENT_CLICKED, nullptr);
 
     // Brightness button (tappable)
     bright_btn = lv_label_create(header);
     lv_label_set_text(bright_btn, LV_SYMBOL_IMAGE);
     lv_obj_set_style_text_font(bright_btn, &lv_font_montserrat_16, LV_PART_MAIN);
     lv_obj_set_style_text_color(bright_btn, lv_color_hex(CLR_YELLOW), LV_PART_MAIN);
-    lv_obj_align(bright_btn, LV_ALIGN_RIGHT_MID, -135, 0);
+    lv_obj_align(bright_btn, LV_ALIGN_RIGHT_MID, -95, 0);
     lv_obj_add_flag(bright_btn, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(bright_btn, brightness_event_cb, LV_EVENT_CLICKED, nullptr);
 
@@ -515,11 +582,39 @@ void create_ui() {
     lv_obj_set_style_text_color(clock_time_label, lv_color_white(), LV_PART_MAIN);
     lv_obj_align(clock_time_label, LV_ALIGN_CENTER, 0, -30);
 
-    clock_batt_label = lv_label_create(clock_screen);
-    lv_label_set_text(clock_batt_label, "BAT --%");
-    lv_obj_set_style_text_font(clock_batt_label, &lv_font_montserrat_22, LV_PART_MAIN);
-    lv_obj_set_style_text_color(clock_batt_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
-    lv_obj_align(clock_batt_label, LV_ALIGN_CENTER, 0, 30);
+    clock_rssi_label = lv_label_create(clock_screen);
+    lv_label_set_text(clock_rssi_label, LV_SYMBOL_WIFI);
+    lv_obj_set_style_text_font(clock_rssi_label, &lv_font_montserrat_28, LV_PART_MAIN);
+    lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
+    lv_obj_align(clock_rssi_label, LV_ALIGN_CENTER, 0, 30);
+
+    // --- OTA screen (created but not loaded) ---
+    ota_screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(ota_screen, lv_color_hex(0x0d1b2a), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(ota_screen, LV_OPA_COVER, LV_PART_MAIN);
+
+    lv_obj_t *ota_title = lv_label_create(ota_screen);
+    lv_label_set_text(ota_title, LV_SYMBOL_DOWNLOAD "  OTA Update Mode");
+    lv_obj_set_style_text_font(ota_title, &lv_font_montserrat_28, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ota_title, lv_color_hex(CLR_CYAN), LV_PART_MAIN);
+    lv_obj_align(ota_title, LV_ALIGN_TOP_MID, 0, 40);
+
+    ota_ip_label = lv_label_create(ota_screen);
+    lv_label_set_text(ota_ip_label, "Starting...");
+    lv_obj_set_style_text_font(ota_ip_label, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ota_ip_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_align(ota_ip_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_align(ota_ip_label, LV_ALIGN_CENTER, 0, 0);
+
+    // Exit button on OTA screen
+    lv_obj_t *ota_exit = lv_btn_create(ota_screen);
+    lv_obj_set_size(ota_exit, 200, 50);
+    lv_obj_align(ota_exit, LV_ALIGN_BOTTOM_MID, 0, -40);
+    lv_obj_set_style_bg_color(ota_exit, lv_color_hex(CLR_RED), LV_PART_MAIN);
+    lv_obj_add_event_cb(ota_exit, ota_btn_event_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *exit_lbl = lv_label_create(ota_exit);
+    lv_label_set_text(exit_lbl, "Exit OTA Mode");
+    lv_obj_center(exit_lbl);
 
     // Stats header (hidden by default, shown on first MSG_STATS)
     create_stats_header();
@@ -538,11 +633,94 @@ void create_ui() {
     lv_obj_set_style_border_color(tab_btns, lv_color_hex(0x3498DB), LV_PART_ITEMS | LV_STATE_CHECKED);
     lv_obj_set_style_text_font(tab_btns, &lv_font_montserrat_16, LV_PART_MAIN);
 
-    // Create pages
-    for (uint8_t i = 0; i < NUM_PAGES; i++) {
-        lv_obj_t *tab = lv_tabview_add_tab(tabview, pages[i].name);
-        create_hotkey_page(tab, pages[i]);
+    // Create pages from config or hardcoded defaults
+    if (g_active_config && !g_active_config->profiles.empty()) {
+        // Use AppConfig: create pages from active profile
+        const ProfileConfig* active_profile = g_active_config->get_active_profile();
+        if (active_profile) {
+            for (size_t i = 0; i < active_profile->pages.size(); i++) {
+                const PageConfig& page = active_profile->pages[i];
+                lv_obj_t *tab = lv_tabview_add_tab(tabview, page.name.c_str());
+
+                // Create buttons from config
+                lv_obj_set_flex_flow(tab, LV_FLEX_FLOW_ROW_WRAP);
+                lv_obj_set_flex_align(tab, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY);
+                lv_obj_set_style_pad_all(tab, 10, LV_PART_MAIN);
+                lv_obj_set_style_pad_row(tab, 10, LV_PART_MAIN);
+                lv_obj_set_style_pad_column(tab, 10, LV_PART_MAIN);
+                lv_obj_set_style_bg_color(tab, lv_color_hex(0x1a1a2e), LV_PART_MAIN);
+
+                for (const auto& btn_cfg : page.buttons) {
+                    // Create temporary Hotkey from ButtonConfig for rendering
+                    Hotkey hk = button_config_to_hotkey(btn_cfg);
+                    create_hotkey_button(tab, &hk);
+                }
+            }
+            Serial.printf("UI created from config: %zu page(s)\n", active_profile->pages.size());
+        } else {
+            Serial.println("UI: Active profile not found, falling back to hardcoded defaults");
+            // Fall through to hardcoded pages below
+            g_active_config = nullptr;
+        }
     }
 
-    Serial.println("UI created: 3 pages, 36 buttons, stats header, device status, clock screen ready");
+    // Create pages from hardcoded defaults (if no config)
+    if (!g_active_config) {
+        for (uint8_t i = 0; i < NUM_PAGES; i++) {
+            lv_obj_t *tab = lv_tabview_add_tab(tabview, pages[i].name);
+            create_hotkey_page(tab, pages[i]);
+        }
+        Serial.println("UI created: 3 pages, 36 buttons (hardcoded defaults)");
+    }
+
+    Serial.println("UI initialized: stats header, device status, clock screen ready");
+}
+
+// ============================================================
+//  Public: rebuild_ui() -- Recreate UI from new AppConfig
+// ============================================================
+void rebuild_ui(const AppConfig* cfg) {
+    if (!cfg) {
+        Serial.println("rebuild_ui: Config is nullptr, ignoring");
+        return;
+    }
+
+    if (!tabview) {
+        Serial.println("rebuild_ui: Tabview not initialized");
+        return;
+    }
+
+    // Delete and recreate tabview (LVGL 8.3 has no lv_tabview_remove_tab)
+    lv_obj_del(tabview);
+    tabview = lv_tabview_create(lv_scr_act(), LV_DIR_BOTTOM, 45);
+    lv_obj_set_size(tabview, 800, 480 - 45);
+    lv_obj_align(tabview, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+    // Update active config
+    g_active_config = cfg;
+
+    // Recreate pages
+    const ProfileConfig* active_profile = cfg->get_active_profile();
+    if (active_profile) {
+        for (size_t i = 0; i < active_profile->pages.size(); i++) {
+            const PageConfig& page = active_profile->pages[i];
+            lv_obj_t *tab = lv_tabview_add_tab(tabview, page.name.c_str());
+
+            // Create buttons from config
+            lv_obj_set_flex_flow(tab, LV_FLEX_FLOW_ROW_WRAP);
+            lv_obj_set_flex_align(tab, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY);
+            lv_obj_set_style_pad_all(tab, 10, LV_PART_MAIN);
+            lv_obj_set_style_pad_row(tab, 10, LV_PART_MAIN);
+            lv_obj_set_style_pad_column(tab, 10, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(tab, lv_color_hex(0x1a1a2e), LV_PART_MAIN);
+
+            for (const auto& btn_cfg : page.buttons) {
+                Hotkey hk = button_config_to_hotkey(btn_cfg);
+                create_hotkey_button(tab, &hk);
+            }
+        }
+        Serial.printf("UI rebuilt: %zu page(s) from config\n", active_profile->pages.size());
+    } else {
+        Serial.println("rebuild_ui: Active profile not found");
+    }
 }
