@@ -14,8 +14,12 @@
 // Maximum pages per profile (validated on load)
 #define CONFIG_MAX_PAGES 16
 
-// Maximum buttons per page (validated on load)
-#define CONFIG_MAX_BUTTONS 16
+// Maximum buttons per page (4x3 grid = 12)
+#define CONFIG_MAX_BUTTONS 12
+
+// Grid dimensions
+#define GRID_COLS 4
+#define GRID_ROWS 3
 //
 // This schema defines the JSON structure for hotkey profiles
 // that can be stored on SD card and loaded at runtime.
@@ -49,11 +53,16 @@ struct ButtonConfig {
     uint8_t keycode;          // ASCII key or special key code (for HOTKEY)
     uint16_t consumer_code;   // USB HID consumer control code (for MEDIA_KEY)
 
+    // Grid positioning (optional, defaults to auto-flow)
+    int8_t grid_row;          // -1 = auto-flow (default), 0-2 = explicit row
+    int8_t grid_col;          // -1 = auto-flow (default), 0-3 = explicit column
+    uint32_t pressed_color;   // 0x000000 = auto-darken (default), else explicit color
+
     // Constructor with defaults
     ButtonConfig()
         : label(""), description(""), color(0xFFFFFF), icon(""),
           action_type(ACTION_HOTKEY), modifiers(0), keycode(0),
-          consumer_code(0) {}
+          consumer_code(0), grid_row(-1), grid_col(-1), pressed_color(0x000000) {}
 };
 
 // ============================================================

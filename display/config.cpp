@@ -370,6 +370,9 @@ static void button_to_json(JsonObject obj, const ButtonConfig& btn) {
     obj["modifiers"] = btn.modifiers;
     obj["keycode"] = btn.keycode;
     obj["consumer_code"] = btn.consumer_code;
+    obj["grid_row"] = btn.grid_row;
+    obj["grid_col"] = btn.grid_col;
+    obj["pressed_color"] = btn.pressed_color;
 }
 
 // Helper: Deserialize button from JSON object
@@ -382,6 +385,30 @@ static void json_to_button(JsonObject obj, ButtonConfig& btn) {
     if (!obj["modifiers"].isNull()) btn.modifiers = obj["modifiers"].as<uint8_t>();
     if (!obj["keycode"].isNull()) btn.keycode = obj["keycode"].as<uint8_t>();
     if (!obj["consumer_code"].isNull()) btn.consumer_code = obj["consumer_code"].as<uint16_t>();
+
+    // Grid positioning (v0.9.1)
+    if (!obj["grid_row"].isNull()) btn.grid_row = obj["grid_row"].as<int8_t>();
+    if (!obj["grid_col"].isNull()) btn.grid_col = obj["grid_col"].as<int8_t>();
+    if (!obj["pressed_color"].isNull()) btn.pressed_color = obj["pressed_color"].as<uint32_t>();
+
+    // Validate grid positioning constraints
+    if (btn.grid_row < -1 || btn.grid_row >= GRID_ROWS) {
+        Serial.printf("CONFIG: WARNING - grid_row %d out of range [-1,%d], clamping\n",
+                      btn.grid_row, GRID_ROWS - 1);
+        btn.grid_row = (btn.grid_row < -1) ? -1 : (GRID_ROWS - 1);
+    }
+    if (btn.grid_col < -1 || btn.grid_col >= GRID_COLS) {
+        Serial.printf("CONFIG: WARNING - grid_col %d out of range [-1,%d], clamping\n",
+                      btn.grid_col, GRID_COLS - 1);
+        btn.grid_col = (btn.grid_col < -1) ? -1 : (GRID_COLS - 1);
+    }
+    // If one is explicit and the other is auto, force both to auto
+    if ((btn.grid_row >= 0) != (btn.grid_col >= 0)) {
+        Serial.printf("CONFIG: WARNING - partial grid position (row=%d, col=%d), resetting to auto-flow\n",
+                      btn.grid_row, btn.grid_col);
+        btn.grid_row = -1;
+        btn.grid_col = -1;
+    }
 }
 
 // Helper: Serialize page to JSON object
@@ -413,6 +440,8 @@ static void json_to_page(JsonObject obj, PageConfig& page) {
             btn_count++;
         }
     }
+    Serial.printf("CONFIG: Page '%s': %d buttons loaded\n",
+                  page.name.c_str(), (int)page.buttons.size());
 }
 
 // Helper: Serialize profile to JSON object
