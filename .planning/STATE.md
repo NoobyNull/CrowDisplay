@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Tap a button on the display, the correct keyboard shortcut fires on the PC -- reliably, with minimal latency, whether connected by wire or wirelessly.
-**Current focus:** Phase 6 - Data-Driven Display UI (v1.1 System Control)
+**Current focus:** Phase 7 - Config Server (SoftAP + HTTP) (v1.1 System Control)
 
 ## Current Position
 
-Phase: 6 of 8 (Data-Driven Display UI)
+Phase: 7 of 8 (Config Server SoftAP + HTTP)
 Plan: 2 of 2 in current phase (all plans complete)
 Status: Phase execution complete, pending verification
-Last activity: 2026-02-15 -- Plan 06-02 complete (full-screen rebuild, deferred flag, memory monitoring)
+Last activity: 2026-02-15 -- Plan 07-02 complete (config mode UI screen with header icon)
 
-Progress: [############........] 62% (v1.0 complete, v1.1 1/4 phases)
+Progress: [###############.....] 75% (v1.0 complete, v1.1 3/4 phases)
 
 ## Performance Metrics
 
@@ -31,6 +31,8 @@ Progress: [############........] 62% (v1.0 complete, v1.1 1/4 phases)
 | 03 | 4 | 9min | 2min |
 | 04 | 3 | 5min | 2min |
 | 05 | 1 | 5min | 5min |
+| 06 | 2 | 6min | 3min |
+| 07 | 2 | 11min | 5.5min |
 
 *Updated after each plan completion*
 
@@ -50,6 +52,11 @@ Recent decisions affecting current work:
 - [Phase 5]: FAT rename requires explicit remove of target first
 - [Phase 5]: Config version mismatch logs warning but still loads (forward compatibility)
 - [Phase 5]: Raw string literals need custom delimiters when HTML contains )"
+- [Phase 7]: Single unified config_server module -- eliminates dual-SoftAP conflict
+- [Phase 7]: WiFi channel 1 pinning -- ensures ESP-NOW reliability during HTTP transfer
+- [Phase 7]: 5-minute inactivity timeout -- auto-stops SoftAP to conserve power
+- [Phase 7]: HTTP 400 for upload errors -- proper error propagation instead of always 200
+- [Phase 7]: LV_SYMBOL_SETTINGS gear icon in CLR_TEAL -- visually distinct config mode trigger
 
 ### Pending Todos
 
@@ -57,12 +64,11 @@ None.
 
 ### Blockers/Concerns
 
-- [Research]: LVGL widget-pool pattern needs prototype validation in Phase 6 (memory leak risk on repeated reloads)
-- [Research]: WiFi channel pinning needs hardware test in Phase 7 (ESP-NOW packet loss during HTTP transfer)
+- [Research]: WiFi channel pinning needs hardware test (ESP-NOW packet loss during HTTP transfer) -- implemented but untested on hardware
 - [Research]: BMP icon format validation deferred to v2 (LVGL symbols only for v1.1)
 
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Phase 5 complete, Phase 6 ready to plan
+Stopped at: Phase 7 execution complete, pending verification
 Resume file: None
