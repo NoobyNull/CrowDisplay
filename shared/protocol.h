@@ -19,6 +19,8 @@
 enum MsgType : uint8_t {
     MSG_HOTKEY     = 0x01,  // Display -> Bridge: fire keystroke
     MSG_HOTKEY_ACK = 0x02,  // Bridge -> Display: keystroke delivered
+    MSG_STATS      = 0x03,  // Bridge -> Display: system stats payload
+    MSG_MEDIA_KEY  = 0x04,  // Display -> Bridge: consumer control key
 };
 
 // --- Payload Structs -------------------------------------------------
@@ -30,6 +32,21 @@ struct __attribute__((packed)) HotkeyMsg {
 
 struct __attribute__((packed)) HotkeyAckMsg {
     uint8_t status;  // 0 = success, 1 = error
+};
+
+struct __attribute__((packed)) StatsPayload {
+    uint8_t  cpu_percent;     // 0-100
+    uint8_t  ram_percent;     // 0-100
+    uint8_t  gpu_percent;     // 0-100, 0xFF = unavailable
+    uint8_t  cpu_temp;        // Celsius, 0xFF = unavailable
+    uint8_t  gpu_temp;        // Celsius, 0xFF = unavailable
+    uint8_t  disk_percent;    // 0-100
+    uint16_t net_up_kbps;     // KB/s, little-endian
+    uint16_t net_down_kbps;   // KB/s, little-endian
+};
+
+struct __attribute__((packed)) MediaKeyMsg {
+    uint16_t consumer_code;   // USB HID consumer control usage code (e.g. 0x00CD = play/pause)
 };
 
 // --- Modifier Masks --------------------------------------------------
