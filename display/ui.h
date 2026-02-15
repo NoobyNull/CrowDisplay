@@ -25,11 +25,11 @@ void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_l
 // Update clock display (call in clock mode from main loop)
 void update_clock_time();
 
-// Show OTA mode overlay with IP address
-void show_ota_screen(const char *ip);
+// Enter config mode screen (shows SSID, password, IP, upload URLs)
+void show_config_screen();
 
-// Hide OTA overlay, return to normal view
-void hide_ota_screen();
+// Return to main hotkey view from config screen
+void hide_config_screen();
 
 // Request deferred UI rebuild (safe to call from any context, executes in loop)
 void request_ui_rebuild();

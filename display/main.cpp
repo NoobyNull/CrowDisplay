@@ -10,7 +10,6 @@
 #include "battery.h"
 #include "power.h"
 #include "sdcard.h"
-#include "ota.h"
 #include "config.h"
 #include "config_server.h"
 
@@ -85,14 +84,15 @@ void loop() {
         rebuild_ui(&g_app_config);
     }
 
-    // OTA polling (ArduinoOTA + web server)
-    if (ota_active()) {
-        ota_poll();
-    }
-
-    // Config server polling (WiFi SoftAP + config upload)
+    // Config server polling (WiFi SoftAP + config upload + OTA + ArduinoOTA)
     if (config_server_active()) {
         config_server_poll();
+    }
+
+    // Handle config server inactivity timeout (auto-stopped, return to main view)
+    if (config_server_timed_out()) {
+        Serial.println("Config server: timed out, returning to main view");
+        hide_config_screen();
     }
 
     // Power state machine update (checks idle timeout)

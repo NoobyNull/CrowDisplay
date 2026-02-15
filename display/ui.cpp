@@ -6,7 +6,7 @@
 #include "display_hw.h"
 #include "espnow_link.h"
 #include "power.h"
-#include "ota.h"
+#include "config_server.h"
 #include <WiFi.h>
 
 // ============================================================
@@ -50,17 +50,17 @@ static lv_obj_t *clock_screen = nullptr;
 static lv_obj_t *clock_time_label = nullptr;
 static lv_obj_t *clock_rssi_label = nullptr;
 
-// OTA screen
-static lv_obj_t *ota_screen = nullptr;
-static lv_obj_t *ota_ip_label = nullptr;
+// Config mode screen (replaces OTA screen)
+static lv_obj_t *config_screen = nullptr;
+static lv_obj_t *config_info_label = nullptr;
 
 // Stats header labels (row 1: cpu%, ram%, gpu%, cpu_temp, gpu_temp; row 2: net_up, net_down, disk%)
 static lv_obj_t *stat_labels[8] = {};
 
 // Forward declarations
 void update_clock_time();
-void show_ota_screen(const char *ip);
-void hide_ota_screen();
+void show_config_screen();
+void hide_config_screen();
 
 // ============================================================
 //  Brightness Button Callback
@@ -337,41 +337,48 @@ void update_clock_time() {
 }
 
 // ============================================================
-//  OTA Button Callback
+//  Config Server Button Callback
 // ============================================================
-static void ota_btn_event_cb(lv_event_t *e) {
+static void config_btn_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_CLICKED) {
-        if (!ota_active()) {
-            if (ota_start()) {
-                show_ota_screen(WiFi.softAPIP().toString().c_str());
+        if (!config_server_active()) {
+            if (config_server_start()) {
+                show_config_screen();
             }
         } else {
-            ota_stop();
-            hide_ota_screen();
+            config_server_stop();
+            hide_config_screen();
         }
     }
 }
 
 // ============================================================
-//  Public: show_ota_screen() -- Show OTA mode overlay
+//  Public: show_config_screen() -- Enter config mode screen
 // ============================================================
-void show_ota_screen(const char *ip) {
-    if (!ota_screen) return;
-    if (ota_ip_label) {
-        lv_label_set_text_fmt(ota_ip_label,
-            "Connect to WiFi: CrowPanel-OTA\nPassword: crowpanel\n\n"
-            "Web upload: http://%s\n"
-            "PlatformIO: pio run -t upload --upload-port %s\n\n"
-            "Tap " LV_SYMBOL_WIFI " to exit OTA mode", ip, ip);
+void show_config_screen() {
+    if (!config_screen) return;
+    if (config_info_label) {
+        IPAddress ip = WiFi.softAPIP();
+        lv_label_set_text_fmt(config_info_label,
+            "Connect to WiFi:\n"
+            "  SSID: CrowPanel-Config\n"
+            "  Password: crowconfig\n\n"
+            "Config upload:\n"
+            "  http://%s\n\n"
+            "OTA firmware upload:\n"
+            "  http://%s/update\n\n"
+            "PlatformIO:\n"
+            "  pio run -t upload --upload-port %s",
+            ip.toString().c_str(), ip.toString().c_str(), ip.toString().c_str());
     }
-    lv_scr_load(ota_screen);
+    lv_scr_load(config_screen);
 }
 
 // ============================================================
-//  Public: hide_ota_screen() -- Return to main view
+//  Public: hide_config_screen() -- Return to main hotkey view
 // ============================================================
-void hide_ota_screen() {
+void hide_config_screen() {
     if (main_screen) {
         lv_scr_load(main_screen);
     }
@@ -412,14 +419,14 @@ static void create_ui_widgets(lv_obj_t *screen, const AppConfig *cfg) {
     lv_obj_set_style_text_color(rssi_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
     lv_obj_align(rssi_label, LV_ALIGN_RIGHT_MID, -15, 0);
 
-    // OTA button (tappable)
-    lv_obj_t *ota_btn = lv_label_create(header);
-    lv_label_set_text(ota_btn, LV_SYMBOL_DOWNLOAD);
-    lv_obj_set_style_text_font(ota_btn, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_set_style_text_color(ota_btn, lv_color_hex(CLR_CYAN), LV_PART_MAIN);
-    lv_obj_align(ota_btn, LV_ALIGN_RIGHT_MID, -55, 0);
-    lv_obj_add_flag(ota_btn, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(ota_btn, ota_btn_event_cb, LV_EVENT_CLICKED, nullptr);
+    // Config button (gear icon, tappable)
+    lv_obj_t *cfg_btn = lv_label_create(header);
+    lv_label_set_text(cfg_btn, LV_SYMBOL_SETTINGS);
+    lv_obj_set_style_text_font(cfg_btn, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_set_style_text_color(cfg_btn, lv_color_hex(CLR_TEAL), LV_PART_MAIN);
+    lv_obj_align(cfg_btn, LV_ALIGN_RIGHT_MID, -55, 0);
+    lv_obj_add_flag(cfg_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(cfg_btn, config_btn_event_cb, LV_EVENT_CLICKED, nullptr);
 
     // Brightness button (tappable)
     bright_btn = lv_label_create(header);
@@ -502,32 +509,32 @@ void create_ui(const AppConfig* cfg) {
     lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
     lv_obj_align(clock_rssi_label, LV_ALIGN_CENTER, 0, 30);
 
-    // --- OTA screen (created once, persists across rebuilds) ---
-    ota_screen = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(ota_screen, lv_color_hex(0x0d1b2a), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(ota_screen, LV_OPA_COVER, LV_PART_MAIN);
+    // --- Config mode screen (created once, persists across rebuilds) ---
+    config_screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(config_screen, lv_color_hex(0x0d1b2a), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(config_screen, LV_OPA_COVER, LV_PART_MAIN);
 
-    lv_obj_t *ota_title = lv_label_create(ota_screen);
-    lv_label_set_text(ota_title, LV_SYMBOL_DOWNLOAD "  OTA Update Mode");
-    lv_obj_set_style_text_font(ota_title, &lv_font_montserrat_28, LV_PART_MAIN);
-    lv_obj_set_style_text_color(ota_title, lv_color_hex(CLR_CYAN), LV_PART_MAIN);
-    lv_obj_align(ota_title, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_t *cfg_title = lv_label_create(config_screen);
+    lv_label_set_text(cfg_title, LV_SYMBOL_SETTINGS "  Config Upload Mode");
+    lv_obj_set_style_text_font(cfg_title, &lv_font_montserrat_28, LV_PART_MAIN);
+    lv_obj_set_style_text_color(cfg_title, lv_color_hex(CLR_TEAL), LV_PART_MAIN);
+    lv_obj_align(cfg_title, LV_ALIGN_TOP_MID, 0, 40);
 
-    ota_ip_label = lv_label_create(ota_screen);
-    lv_label_set_text(ota_ip_label, "Starting...");
-    lv_obj_set_style_text_font(ota_ip_label, &lv_font_montserrat_18, LV_PART_MAIN);
-    lv_obj_set_style_text_color(ota_ip_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_align(ota_ip_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    lv_obj_align(ota_ip_label, LV_ALIGN_CENTER, 0, 0);
+    config_info_label = lv_label_create(config_screen);
+    lv_label_set_text(config_info_label, "Starting...");
+    lv_obj_set_style_text_font(config_info_label, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(config_info_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_align(config_info_label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
+    lv_obj_align(config_info_label, LV_ALIGN_CENTER, 0, 10);
 
-    // Exit button on OTA screen
-    lv_obj_t *ota_exit = lv_btn_create(ota_screen);
-    lv_obj_set_size(ota_exit, 200, 50);
-    lv_obj_align(ota_exit, LV_ALIGN_BOTTOM_MID, 0, -40);
-    lv_obj_set_style_bg_color(ota_exit, lv_color_hex(CLR_RED), LV_PART_MAIN);
-    lv_obj_add_event_cb(ota_exit, ota_btn_event_cb, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *exit_lbl = lv_label_create(ota_exit);
-    lv_label_set_text(exit_lbl, "Exit OTA Mode");
+    // "Apply & Exit" button
+    lv_obj_t *cfg_exit = lv_btn_create(config_screen);
+    lv_obj_set_size(cfg_exit, 250, 50);
+    lv_obj_align(cfg_exit, LV_ALIGN_BOTTOM_MID, 0, -40);
+    lv_obj_set_style_bg_color(cfg_exit, lv_color_hex(CLR_GREEN), LV_PART_MAIN);
+    lv_obj_add_event_cb(cfg_exit, config_btn_event_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *exit_lbl = lv_label_create(cfg_exit);
+    lv_label_set_text(exit_lbl, "Apply & Exit");
     lv_obj_center(exit_lbl);
 
     // Create main screen widgets (header, stats header, tabview with pages)

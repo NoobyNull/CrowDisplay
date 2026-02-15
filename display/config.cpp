@@ -270,13 +270,13 @@ AppConfig config_create_defaults() {
 
     btn.label = "Next";
     btn.description = "Media Next";
-    btn.icon = LV_SYMBOL_NEXT;
+    btn.icon = LV_SYMBOL_RIGHT;  // Use right arrow for next
     btn.consumer_code = 0x00B5;  // Next track
     page3.buttons.push_back(btn);
 
     btn.label = "Prev";
     btn.description = "Media Previous";
-    btn.icon = LV_SYMBOL_PREV;
+    btn.icon = LV_SYMBOL_LEFT;  // Use left arrow for previous
     btn.consumer_code = 0x00B6;  // Previous track
     page3.buttons.push_back(btn);
 

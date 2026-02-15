@@ -10,6 +10,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <esp_wifi.h>
+#include <esp_idf_version.h>
 #include <string.h>
 
 // Ring buffer for received messages (callback -> poll)
@@ -28,7 +30,12 @@ static volatile int rx_tail = 0;
 // Store last sender MAC for ACK replies
 static uint8_t last_sender_mac[6] = {};
 
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+    const uint8_t *mac = info->src_addr;
+#else
 static void on_recv(const uint8_t *mac, const uint8_t *data, int len) {
+#endif
     if (len < 1) return;
 
     // Save sender MAC for ACK
@@ -50,6 +57,9 @@ static void on_recv(const uint8_t *mac, const uint8_t *data, int len) {
 void espnow_link_init() {
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+
+    // Pin to WiFi channel 1 for deterministic coexistence with SoftAP
+    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
 
     if (esp_now_init() != ESP_OK) {
         Serial.println("ESP-NOW init failed!");
@@ -76,7 +86,7 @@ bool espnow_send(MsgType type, const uint8_t *payload, uint8_t len) {
     if (!esp_now_is_peer_exist(last_sender_mac)) {
         esp_now_peer_info_t peer = {};
         memcpy(peer.peer_addr, last_sender_mac, 6);
-        peer.channel = 0;
+        peer.channel = 1;
         peer.encrypt = false;
         esp_now_add_peer(&peer);
     }

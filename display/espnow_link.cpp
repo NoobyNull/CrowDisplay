@@ -10,6 +10,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <esp_wifi.h>
+#include <esp_idf_version.h>
 #include <string.h>
 
 // Broadcast address (all 0xFF)
@@ -26,8 +28,17 @@ static volatile uint8_t msg_type_buf = 0;
 static volatile uint8_t msg_payload_len_buf = 0;
 static uint8_t msg_payload_buf[PROTO_MAX_PAYLOAD];
 
+// RSSI from last received packet
+static volatile int last_rssi = 0;
+
 // ESP-NOW receive callback (runs in WiFi task context)
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+    const uint8_t *mac = info->src_addr;
+    if (info->rx_ctrl) last_rssi = info->rx_ctrl->rssi;
+#else
 static void on_recv(const uint8_t *mac, const uint8_t *data, int len) {
+#endif
     if (len < 1) return;  // need at least type byte
 
     uint8_t msg_type = data[0];
@@ -50,6 +61,9 @@ void espnow_link_init() {
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
 
+    // Pin to WiFi channel 1 for deterministic coexistence with SoftAP
+    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+
     if (esp_now_init() != ESP_OK) {
         Serial.println("ESP-NOW init failed!");
         return;
@@ -58,7 +72,7 @@ void espnow_link_init() {
     // Register broadcast peer
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, broadcast_addr, 6);
-    peer.channel = 0;
+    peer.channel = 1;
     peer.encrypt = false;
     esp_now_add_peer(&peer);
 
@@ -115,4 +129,8 @@ bool espnow_poll_msg(uint8_t &type, uint8_t *payload, uint8_t &payload_len) {
         return true;
     }
     return false;
+}
+
+int espnow_get_rssi() {
+    return last_rssi;
 }

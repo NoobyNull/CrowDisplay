@@ -19,3 +19,6 @@ bool espnow_poll_ack(uint8_t &status);
 // Returns true if a message was received; type, payload, and len are filled in.
 // payload buffer must be at least PROTO_MAX_PAYLOAD bytes.
 bool espnow_poll_msg(uint8_t &type, uint8_t *payload, uint8_t &payload_len);
+
+// Get RSSI of last received ESP-NOW packet (dBm, 0 = no packets yet)
+int espnow_get_rssi();
