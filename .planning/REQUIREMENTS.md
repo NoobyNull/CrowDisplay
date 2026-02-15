@@ -3,148 +3,152 @@
 **Defined:** 2026-02-14
 **Core Value:** Tap a button on the display, the correct keyboard shortcut fires on the PC — reliably, with minimal latency, whether connected by wire or wirelessly.
 
-## v1 Requirements
+## v1.0 Requirements (Validated)
 
-Requirements for initial release. Each maps to roadmap phases.
+Shipped in milestone v1.0 (Phases 1-4). Confirmed working.
 
 ### Communication
-
-- [ ] **COMM-01**: Display and bridge communicate bidirectionally over UART (GPIO 10/11 on display, dedicated pins on bridge)
-- [ ] **COMM-02**: Display and bridge communicate bidirectionally over ESP-NOW (point-to-point, no router)
-- [ ] **COMM-03**: Both links use a shared binary protocol with SOF framing, message types, and CRC8 validation
-- [ ] **COMM-04**: Transport abstraction layer provides single send/receive API regardless of active link
-- [ ] **COMM-05**: Dual-link failover: if UART disconnected, traffic routes over ESP-NOW automatically (and vice versa)
-- [ ] **COMM-06**: Application-layer ACK protocol with sequence numbers and retries (2-3 attempts, 20ms timeout)
-- [ ] **COMM-07**: PING/PONG heartbeat monitors link health on both channels
-- [ ] **COMM-08**: ESP-NOW configured with no concurrent WiFi, channel pinned, power save disabled
+- ✓ **COMM-01**: Display and bridge communicate bidirectionally over ESP-NOW — v1.0 Phase 1
+- ✓ **COMM-03**: Both links use a shared binary protocol with SOF framing, message types, and CRC8 — v1.0 Phase 1
 
 ### Bridge Firmware
-
-- [ ] **BRDG-01**: Bridge ESP32-S3 recognized as USB HID keyboard when plugged into PC (no drivers needed)
-- [ ] **BRDG-02**: Bridge receives hotkey commands from display and sends corresponding USB HID keystrokes to PC
-- [ ] **BRDG-03**: Bridge supports modifier+key combos (Ctrl, Shift, Alt, GUI + any key)
-- [ ] **BRDG-04**: Bridge supports media keys via USB consumer control report (play/pause, volume, next/prev, mute)
-- [ ] **BRDG-05**: Bridge routes stats data from companion app (USB serial) to display over active transport link
-- [ ] **BRDG-06**: Bridge routes config data from companion app to display over active transport link
-- [ ] **BRDG-07**: Bridge sends power state signals (PC on/off) to display
+- ✓ **BRDG-01**: Bridge ESP32-S3 recognized as USB HID keyboard — v1.0 Phase 1
+- ✓ **BRDG-02**: Bridge receives hotkey commands from display and sends USB HID keystrokes — v1.0 Phase 1
+- ✓ **BRDG-03**: Bridge supports modifier+key combos — v1.0 Phase 1
+- ✓ **BRDG-04**: Bridge supports media keys via USB consumer control — v1.0 Phase 3
+- ✓ **BRDG-05**: Bridge routes stats data from companion app to display — v1.0 Phase 3
+- ✓ **BRDG-07**: Bridge sends power state signals to display — v1.0 Phase 4
 
 ### Display UI
-
-- [ ] **DISP-01**: Multi-page hotkey grid with at least 3 pages of 12 buttons (4x3 layout)
-- [ ] **DISP-02**: Swipe or tab navigation between hotkey pages
-- [ ] **DISP-03**: Visual press feedback on button tap (color darken + shrink animation)
-- [ ] **DISP-04**: Per-button color coding by function category
-- [ ] **DISP-05**: Button icons (LVGL symbols) and text labels on each button
-- [ ] **DISP-06**: Persistent stats header bar at top of screen showing live PC metrics
-- [ ] **DISP-07**: Stats header displays CPU usage, RAM usage, GPU usage, network up/down speeds, disk usage
-- [ ] **DISP-08**: Stats header displays device status: battery %, ESP-NOW link indicator, brightness control
-- [ ] **DISP-09**: Clock mode activates when PC sends shutdown signal: dim screen showing time and battery level
-- [ ] **DISP-10**: Display wakes from clock mode when bridge comes online (heartbeat detected)
-- [ ] **DISP-11**: Brightness control adjustable from stats header (PWM backlight on GPIO 2)
-- [ ] **DISP-12**: I2C bus access wrapped in FreeRTOS mutex to prevent GT911 touch corruption
+- ✓ **DISP-01**: Multi-page hotkey grid with swipe navigation — v1.0 Phase 1
+- ✓ **DISP-03**: Visual press feedback on button tap — v1.0 Phase 1
+- ✓ **DISP-06**: Persistent stats header bar — v1.0 Phase 3
+- ✓ **DISP-07**: Stats header displays CPU/RAM/GPU/net/disk — v1.0 Phase 3
+- ✓ **DISP-08**: Stats header displays battery %, ESP-NOW link, brightness — v1.0 Phase 4
+- ✓ **DISP-09**: Clock mode on PC shutdown — v1.0 Phase 4
+- ✓ **DISP-10**: Wake from clock mode on bridge reconnect — v1.0 Phase 4
+- ✓ **DISP-11**: Brightness control from stats header — v1.0 Phase 4
+- ✓ **DISP-12**: I2C bus mutex prevents GT911 corruption — v1.0 Phase 1
 
 ### Power Management
-
-- [ ] **PWR-01**: Display operates on LiPo battery with USB charging
-- [ ] **PWR-02**: Battery voltage monitored and displayed as percentage in stats header
-- [ ] **PWR-03**: Power state machine: ACTIVE → DIMMED (idle timeout) → CLOCK_MODE (PC off)
-- [ ] **PWR-04**: Display transitions to clock mode on explicit shutdown signal from companion app
-- [ ] **PWR-05**: ESP-NOW listener remains active in clock mode for fast wake
+- ✓ **PWR-01**: LiPo battery with USB charging — v1.0 Phase 4
+- ✓ **PWR-02**: Battery voltage monitored and displayed — v1.0 Phase 4
+- ✓ **PWR-03**: Power state machine (ACTIVE → DIMMED → CLOCK_MODE) — v1.0 Phase 4
+- ✓ **PWR-04**: Clock mode on companion shutdown signal — v1.0 Phase 4
+- ✓ **PWR-05**: ESP-NOW listener active in clock mode — v1.0 Phase 4
 
 ### Companion App
+- ✓ **COMP-01**: Python app collects live system stats — v1.0 Phase 3
+- ✓ **COMP-02**: Stats streamed to bridge at 1-2 Hz — v1.0 Phase 3
+- ✓ **COMP-03**: Companion sends shutdown signal via D-Bus — v1.0 Phase 4
 
-- [ ] **COMP-01**: Python desktop app collects live system stats (CPU, RAM, GPU, network, disk) via psutil
-- [ ] **COMP-02**: Stats streamed to bridge via USB serial at 1-2 Hz using binary protocol
-- [ ] **COMP-03**: Companion app sends explicit shutdown signal before PC powers off (D-Bus integration)
-- [ ] **COMP-04**: GUI hotkey editor (GTK4 + PyGObject) for designing button layout, shortcuts, and pages
-- [ ] **COMP-05**: Config pushed from GUI editor to display via bridge over active transport
-- [ ] **COMP-06**: Companion app reads current config from display for editing
+## v1.1 Requirements
 
-### Configuration
+Requirements for milestone v1.1 "System Control". Configurable hotkey layouts via SD card, WiFi upload, and desktop GUI editor.
 
-- [ ] **CONF-01**: Hotkey layout persists across power cycles (stored in NVS or LittleFS on display)
-- [ ] **CONF-02**: Config format supports variable number of pages with variable number of buttons per page
-- [ ] **CONF-03**: Each button config includes: label, icon, modifier mask, key code, color
-- [ ] **CONF-04**: Chunked config transfer protocol handles configs larger than 250-byte ESP-NOW payload
+### SD Card Config (CFG)
 
-## v2 Requirements
+- [ ] **CFG-01**: Hotkey layout stored as JSON config file on SD card, loaded at boot
+- [ ] **CFG-02**: Per-button config includes label, key binding (modifier+keycode), color (hex), icon (name), type (keyboard/media), and consumer code
+- [ ] **CFG-03**: Config supports variable number of pages (1-16) with named page labels
+- [ ] **CFG-04**: Media keys stored as consumer control codes, distinct from keyboard shortcuts
+- [ ] **CFG-05**: Device falls back to built-in default layout when SD card is missing or config is corrupt
+- [ ] **CFG-06**: Config schema includes version field for future format migration
+- [ ] **CFG-07**: Previous config auto-backed up before overwrite (config.json.bak)
+- [ ] **CFG-08**: SD card writes use atomic pattern (temp file → rename) to prevent corruption on power loss
 
-Deferred to future release. Tracked but not in current roadmap.
+### WiFi Config Upload (WIFI)
 
-### Advanced Features
+- [ ] **WIFI-01**: User taps config icon in header to enter SoftAP config mode
+- [ ] **WIFI-02**: HTTP server accepts JSON config upload via POST endpoint
+- [ ] **WIFI-03**: Uploaded JSON validated before writing to SD card (malformed JSON rejected with error)
+- [ ] **WIFI-04**: Display shows WiFi SSID, password, and IP address when config mode is active
+- [ ] **WIFI-05**: SoftAP auto-stops after 5-minute inactivity timeout or after user taps "Apply & Exit"
+- [ ] **WIFI-06**: OTA firmware upload merged into same HTTP server alongside config upload
+- [ ] **WIFI-07**: ESP-NOW remains functional during SoftAP config mode (explicit WiFi channel pinning)
 
-- **ADV-01**: Per-app automatic profile switching (companion app detects active window, switches layout)
-- **ADV-02**: Custom bitmap icons per button (user-uploaded, stored in SPIFFS/SD)
-- **ADV-03**: OTA firmware updates for both display and bridge units
-- **ADV-04**: Macro sequences (multi-step automation from single button press)
-- **ADV-05**: Configurable button sizes (1x1, 2x1, 1x2, 2x2 grid units)
-- **ADV-06**: Plugin/extension system for companion app
+### Data-Driven Display UI (DRVUI)
+
+- [ ] **DRVUI-01**: Display UI renders pages and buttons from parsed config struct, not hardcoded arrays
+- [ ] **DRVUI-02**: Variable page count and variable buttons per page rendered from config
+- [ ] **DRVUI-03**: Per-button label, color, icon (LVGL symbol), and keystroke description displayed as configured
+- [ ] **DRVUI-04**: Config reload rebuilds display UI without device reboot (hot-reload)
+- [ ] **DRVUI-05**: Widget-pool pattern prevents LVGL memory leaks on repeated config reloads
+
+### Desktop GUI Editor (EDIT)
+
+- [ ] **EDIT-01**: Python/PySide6 desktop app shows visual button grid matching device layout
+- [ ] **EDIT-02**: User clicks a button in the grid to edit its properties in a side panel (label, shortcut, color, icon)
+- [ ] **EDIT-03**: User can add, remove, rename, and reorder pages
+- [ ] **EDIT-04**: User can save config to local JSON file and load existing JSON files
+- [ ] **EDIT-05**: Icon picker displays available LVGL symbols visually for selection
+- [ ] **EDIT-06**: Keyboard shortcut recorder captures key combos by pressing them (instead of manual entry)
+- [ ] **EDIT-07**: User can deploy config directly to device via WiFi HTTP POST (no browser needed)
+
+## Future Requirements
+
+Deferred to v2+. Tracked but not in current roadmap.
+
+### Advanced Layout
+- **ADV-01**: Variable button sizes (1x1, 2x1, 1x2, 2x2 grid units)
+- **ADV-02**: Custom bitmap images per button from SD card (not just LVGL symbols)
+- **ADV-03**: Live preview push (edit in GUI → instant update on device without full upload)
+- **ADV-04**: Per-app automatic profile switching (companion detects active window, switches layout)
+
+### Advanced Editor
+- **ADV-05**: Drag-and-drop button arrangement in editor canvas
+- **ADV-06**: Config push via companion app HID channel (no WiFi needed)
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| BLE HID connection to PC | Replaced by USB HID on bridge — lower latency, more reliable |
-| Web-based configurator on ESP32 | Conflicts with ESP-NOW (WiFi radio contention), wastes ESP32 RAM, inferior UI vs desktop app |
-| WiFi connectivity on display | Radio contention destroys ESP-NOW reliability (80%+ packet loss) |
-| Physical dock/cradle with pogo pins | Just a cable for now — can revisit for v2 hardware |
-| Deep sleep mode | Kills ESP-NOW listener, prevents fast wake, eliminates clock mode |
-| Mobile companion app | Desktop-only for v1, Linux primary |
-| Windows/macOS companion app | Linux (Arch/CachyOS) primary target for v1 |
-| Arduino 3.x / pioarduino upgrade | Community fork with single maintainer, risks breaking LovyanGFX and LVGL |
+| Web-based config editor on ESP32 | Severely limited UX, eats flash/RAM, WiFi conflicts with ESP-NOW |
+| YAML/TOML config format | No maintained ESP32 parser; ArduinoJson handles JSON natively |
+| Binary config format (MessagePack) | Not human-editable; JSON is inspectable for debugging |
+| DuckyScript macro language | Scope creep; device sends keystrokes, not automation sequences |
+| Electron desktop editor | 200+ MB bloat; PySide6 is 5 MB and native |
+| Cloud config sync | No cloud infra; JSON files work with git/manual copy |
+| Always-on WiFi AP | Drains battery, reduces ESP-NOW throughput, unnecessary attack surface |
+| BLE HID connection to PC | Replaced by USB HID on bridge — v1.0 decision |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| COMM-01 | Phase 1 | Pending |
-| COMM-02 | Phase 2 | Pending |
-| COMM-03 | Phase 1 | Pending |
-| COMM-04 | Phase 2 | Pending |
-| COMM-05 | Phase 2 | Pending |
-| COMM-06 | Phase 2 | Pending |
-| COMM-07 | Phase 2 | Pending |
-| COMM-08 | Phase 2 | Pending |
-| BRDG-01 | Phase 1 | Pending |
-| BRDG-02 | Phase 1 | Pending |
-| BRDG-03 | Phase 1 | Pending |
-| BRDG-04 | Phase 3 | Pending |
-| BRDG-05 | Phase 3 | Pending |
-| BRDG-06 | Phase 5 | Pending |
-| BRDG-07 | Phase 4 | Pending |
-| DISP-01 | Phase 1 | Pending |
-| DISP-02 | Phase 1 | Pending |
-| DISP-03 | Phase 1 | Pending |
-| DISP-04 | Phase 1 | Pending |
-| DISP-05 | Phase 1 | Pending |
-| DISP-06 | Phase 3 | Pending |
-| DISP-07 | Phase 3 | Pending |
-| DISP-08 | Phase 4 | Pending |
-| DISP-09 | Phase 4 | Pending |
-| DISP-10 | Phase 4 | Pending |
-| DISP-11 | Phase 4 | Pending |
-| DISP-12 | Phase 1 | Pending |
-| PWR-01 | Phase 4 | Pending |
-| PWR-02 | Phase 4 | Pending |
-| PWR-03 | Phase 4 | Pending |
-| PWR-04 | Phase 4 | Pending |
-| PWR-05 | Phase 4 | Pending |
-| COMP-01 | Phase 3 | Pending |
-| COMP-02 | Phase 3 | Pending |
-| COMP-03 | Phase 4 | Pending |
-| COMP-04 | Phase 5 | Pending |
-| COMP-05 | Phase 5 | Pending |
-| COMP-06 | Phase 5 | Pending |
-| CONF-01 | Phase 5 | Pending |
-| CONF-02 | Phase 5 | Pending |
-| CONF-03 | Phase 5 | Pending |
-| CONF-04 | Phase 5 | Pending |
+| CFG-01 | TBD | Pending |
+| CFG-02 | TBD | Pending |
+| CFG-03 | TBD | Pending |
+| CFG-04 | TBD | Pending |
+| CFG-05 | TBD | Pending |
+| CFG-06 | TBD | Pending |
+| CFG-07 | TBD | Pending |
+| CFG-08 | TBD | Pending |
+| WIFI-01 | TBD | Pending |
+| WIFI-02 | TBD | Pending |
+| WIFI-03 | TBD | Pending |
+| WIFI-04 | TBD | Pending |
+| WIFI-05 | TBD | Pending |
+| WIFI-06 | TBD | Pending |
+| WIFI-07 | TBD | Pending |
+| DRVUI-01 | TBD | Pending |
+| DRVUI-02 | TBD | Pending |
+| DRVUI-03 | TBD | Pending |
+| DRVUI-04 | TBD | Pending |
+| DRVUI-05 | TBD | Pending |
+| EDIT-01 | TBD | Pending |
+| EDIT-02 | TBD | Pending |
+| EDIT-03 | TBD | Pending |
+| EDIT-04 | TBD | Pending |
+| EDIT-05 | TBD | Pending |
+| EDIT-06 | TBD | Pending |
+| EDIT-07 | TBD | Pending |
 
 **Coverage:**
-- v1 requirements: 42 total
-- Mapped to phases: 42
-- Unmapped: 0
+- v1.1 requirements: 27 total
+- Mapped to phases: 0 (pending roadmap)
+- Unmapped: 27
 
 ---
-*Requirements defined: 2026-02-14*
-*Last updated: 2026-02-14 after roadmap creation*
+*Requirements defined: 2026-02-15*
+*Last updated: 2026-02-15 after v1.1 milestone definition*
