@@ -69,6 +69,8 @@ Recent decisions affecting current work:
 - [03-03]: GPU detection chain: NVIDIA (pynvml) -> AMD (sysfs) -> 0xFF fallback
 - [03-03]: Leading 0x00 report ID byte for hidapi Linux HID writes
 - [Phase 03-04]: Verification checkpoint pattern confirmed effective for hardware integration testing
+- [04-01]: Battery module uses i2c_take/i2c_give helpers (consistent with touch module pattern)
+- [04-01]: User brightness presets tracked separately from state-machine brightness for proper wake restore
 - [04-02]: All HID writes now include 1-byte message type prefix after report ID for bridge dispatch (0x03=stats, 0x05=power, 0x06=time)
 - [04-02]: D-Bus listener in daemon thread with asyncio loop, signals main thread via threading.Event (thread-safe)
 - [04-02]: dbus-next imported inside function for graceful degradation if not installed
