@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 1: Wired Command Foundation** - End-to-end hotkey delivery over UART with multi-page touch UI
 - [ ] **Phase 2: Wireless Link + Dual Transport** - ESP-NOW wireless link with transport abstraction and automatic failover
-- [ ] **Phase 3: Stats Display + Companion App** - Live PC metrics streaming to persistent stats header on display
+- [x] **Phase 3: Stats Display + Companion App** - Live PC metrics streaming to persistent stats header on display
 - [ ] **Phase 4: Battery Management + Power States** - Untethered battery operation with power state machine and clock mode
 - [ ] **Phase 5: Configuration + GUI Editor** - Persistent user-customizable hotkey layouts via desktop GUI editor
 
@@ -110,6 +110,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. Wired Command Foundation | 4/4 | Complete | 2026-02-15 |
 | 2. Wireless Link + Dual Transport | N/A | Complete (merged into Phase 1) | 2026-02-15 |
-| 3. Stats Display + Companion App | 0/4 | Planned | - |
+| 3. Stats Display + Companion App | 4/4 | Complete | 2026-02-15 |
 | 4. Battery Management + Power States | 0/TBD | Not started | - |
 | 5. Configuration + GUI Editor | 0/TBD | Not started | - |
