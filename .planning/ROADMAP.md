@@ -80,11 +80,13 @@ Plans:
   3. Display dims after idle timeout, then enters clock mode (showing time and battery) when companion app sends shutdown signal before PC powers off
   4. Display wakes from clock mode automatically when the bridge comes back online (PC turns on)
   5. User can adjust display brightness from the stats header without leaving the hotkey view
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
+- [ ] 04-01-PLAN.md — Protocol extension + battery module + power state machine + brightness wrappers
+- [ ] 04-02-PLAN.md — Companion app D-Bus shutdown listener + time sync + type-prefixed HID protocol
+- [ ] 04-03-PLAN.md — Display UI (device status header + clock screen) + main loop integration + bridge relay
+- [ ] 04-04-PLAN.md — End-to-end verification checkpoint: power states, battery, clock mode, brightness
 
 ### Phase 5: Configuration + GUI Editor
 **Goal**: Users design and deploy custom hotkey layouts from a desktop GUI editor, with configurations persisting across power cycles
