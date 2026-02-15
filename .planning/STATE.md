@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Tap a button on the display, the correct keyboard shortcut fires on the PC -- reliably, with minimal latency, whether connected by wire or wirelessly.
-**Current focus:** Phase 8 - Desktop GUI Editor (v1.1 System Control)
+**Current focus:** v1.1 milestone complete. No active phase.
 
 ## Current Position
 
-Phase: 8 of 8 (Desktop GUI Editor)
-Plan: 2 of 3 in current phase (08-01, 08-02 complete)
-Status: Executing wave 2
-Last activity: 2026-02-15 -- Plan 08-02 complete (media keys, page rename, grid polish)
+Phase: 8 of 8 (Desktop GUI Editor) -- COMPLETE
+Plan: 3 of 3 in current phase (all complete)
+Status: Phase 8 complete, v1.1 milestone shipped
+Last activity: 2026-02-15 -- Phase 8 complete (desktop GUI editor, beta test approved)
 
-Progress: [##################..] 87% (v1.0 complete, v1.1 3/4 phases)
+Progress: [####################] 100% (v1.0 complete, v1.1 complete)
 
 ## Performance Metrics
 
@@ -33,6 +33,7 @@ Progress: [##################..] 87% (v1.0 complete, v1.1 3/4 phases)
 | 05 | 1 | 5min | 5min |
 | 06 | 2 | 6min | 3min |
 | 07 | 2 | 11min | 5.5min |
+| 08 | 3 | 7min | 2.3min |
 
 *Updated after each plan completion*
 
@@ -57,6 +58,10 @@ Recent decisions affecting current work:
 - [Phase 7]: 5-minute inactivity timeout -- auto-stops SoftAP to conserve power
 - [Phase 7]: HTTP 400 for upload errors -- proper error propagation instead of always 200
 - [Phase 7]: LV_SYMBOL_SETTINGS gear icon in CLR_TEAL -- visually distinct config mode trigger
+- [Phase 8]: keyPressEvent override on custom QLineEdit (not QKeySequenceEdit) -- simpler, avoids system shortcut side effects
+- [Phase 8]: Icon picker stores UTF-8 decoded strings (not symbol names) -- matches device JSON format directly
+- [Phase 8]: 9 consumer control codes in media key dropdown (Play/Pause, Next, Prev, Stop, Vol+, Vol-, Mute, Browser Home/Back)
+- [Phase 8]: Gold border (#FFD700) for selected button, luminance threshold 140 for text contrast
 
 ### Pending Todos
 
@@ -70,5 +75,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Phase 7 complete, Phase 8 ready to plan
+Stopped at: v1.1 milestone complete, all phases shipped
 Resume file: None

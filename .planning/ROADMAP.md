@@ -3,7 +3,7 @@
 ## Milestones
 
 - [x] **v1.0 MVP** - Phases 1-4 (shipped 2026-02-15)
-- [ ] **v1.1 System Control** - Phases 5-8 (in progress)
+- [x] **v1.1 System Control** - Phases 5-8 (shipped 2026-02-15)
 
 ## Phases
 
@@ -51,14 +51,14 @@ Plans:
 
 </details>
 
-## v1.1 System Control (In Progress)
+## v1.1 System Control (Shipped 2026-02-15)
 
 **Milestone Goal:** Make the display fully configurable -- all hotkey layouts, button properties, and visual assets defined by config files on SD card, editable via a Linux GUI app and pushed over WiFi.
 
 - [x] **Phase 5: Config Data Model + SD Loading** - JSON config schema, parser, SD card persistence with fallback defaults
 - [x] **Phase 6: Data-Driven Display UI** - Display renders pages and buttons dynamically from parsed config struct
 - [x] **Phase 7: Config Server (SoftAP + HTTP)** - WiFi upload of config files with validation, OTA merge, ESP-NOW coexistence
-- [ ] **Phase 8: Desktop GUI Editor** - PySide6 visual layout editor with direct WiFi deploy to device
+- [x] **Phase 8: Desktop GUI Editor** - PySide6 visual layout editor with direct WiFi deploy to device
 
 ## Phase Details
 
@@ -119,9 +119,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 08-01-PLAN.md -- Fix data translation layer: keycode mapping, LVGL symbol encoding, keyboard recorder, icon picker
-- [ ] 08-02-PLAN.md -- Wire up corrected mappings: media key support, page rename/reorder, grid polish
-- [ ] 08-03-PLAN.md -- End-to-end verification checkpoint: human tests full editor workflow
+- [x] 08-01-PLAN.md -- Fix data translation layer: keycode mapping, LVGL symbol encoding, keyboard recorder, icon picker
+- [x] 08-02-PLAN.md -- Wire up corrected mappings: media key support, page rename/reorder, grid polish
+- [x] 08-03-PLAN.md -- End-to-end verification checkpoint: human tests full editor workflow
 
 ## Progress
 
@@ -137,4 +137,4 @@ Phases execute in numeric order: 5 -> 6 -> 7 -> 8
 | 5. Config Data Model + SD Loading | v1.1 | 1/1 | Complete | 2026-02-15 |
 | 6. Data-Driven Display UI | v1.1 | 2/2 | Complete | 2026-02-15 |
 | 7. Config Server (SoftAP + HTTP) | v1.1 | 2/2 | Complete | 2026-02-15 |
-| 8. Desktop GUI Editor | v1.1 | 0/TBD | Not started | - |
+| 8. Desktop GUI Editor | v1.1 | 3/3 | Complete | 2026-02-15 |
