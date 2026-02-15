@@ -1,8 +1,9 @@
 # Roadmap: CrowPanel Command Center
 
-## Overview
+## Milestones
 
-This roadmap delivers a wireless desktop command center in five phases, building from a proven wired hotkey pipeline through wireless transport, live system monitoring, battery-powered operation, and user-configurable layouts. Each phase delivers a complete, testable capability: wired hotkeys first (removing wireless uncertainty), then ESP-NOW dual-link transport, then PC stats streaming, then untethered battery operation, and finally persistent user-customizable hotkey layouts via a desktop GUI editor.
+- [x] **v1.0 MVP** - Phases 1-4 (shipped 2026-02-15)
+- [ ] **v1.1 System Control** - Phases 5-8 (in progress)
 
 ## Phases
 
@@ -12,106 +13,128 @@ This roadmap delivers a wireless desktop command center in five phases, building
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Wired Command Foundation** - End-to-end hotkey delivery over UART with multi-page touch UI
-- [ ] **Phase 2: Wireless Link + Dual Transport** - ESP-NOW wireless link with transport abstraction and automatic failover
-- [x] **Phase 3: Stats Display + Companion App** - Live PC metrics streaming to persistent stats header on display
-- [ ] **Phase 4: Battery Management + Power States** - Untethered battery operation with power state machine and clock mode
-- [ ] **Phase 5: Configuration + GUI Editor** - Persistent user-customizable hotkey layouts via desktop GUI editor
-
-## Phase Details
+<details>
+<summary>v1.0 MVP (Phases 1-4) - SHIPPED 2026-02-15</summary>
 
 ### Phase 1: Wired Command Foundation
 **Goal**: User taps a button on the display, the correct keyboard shortcut fires on the PC over a wired UART link
-**Depends on**: Nothing (first phase)
-**Requirements**: COMM-01, COMM-03, BRDG-01, BRDG-02, BRDG-03, DISP-01, DISP-02, DISP-03, DISP-04, DISP-05, DISP-12
-**Success Criteria** (what must be TRUE):
-  1. User taps a hotkey button on the display and the corresponding keyboard shortcut (including modifier+key combos like Ctrl+C, Alt+Tab) fires on the PC within 50ms
-  2. User can swipe between at least 3 pages of 12 hotkey buttons each, with buttons showing icons, labels, and category-based color coding
-  3. Buttons show visible press feedback (color darken + shrink) on tap, confirming the touch registered
-  4. Bridge ESP32-S3 appears as a standard USB HID keyboard on the PC with no driver installation required
-  5. Touch input remains stable with no I2C bus corruption during sustained use (mutex-protected bus access)
-**Plans**: 4 plans
+**Plans**: 4 plans (complete)
 
 Plans:
-- [ ] 01-01-PLAN.md — Project restructure: dual-firmware architecture, shared protocol header, display hardware skeleton with I2C mutex
-- [ ] 01-02-PLAN.md — Bridge firmware: USB HID keyboard, UART receive with SOF parser, hotkey command dispatch
-- [ ] 01-03-PLAN.md — Display firmware: multi-page hotkey UI with tabview, icons, colors, press feedback, UART transmit
-- [ ] 01-04-PLAN.md — End-to-end verification checkpoint: human tests full hotkey pipeline
+- [x] 01-01-PLAN.md -- Project restructure: dual-firmware architecture, shared protocol header, display hardware skeleton with I2C mutex
+- [x] 01-02-PLAN.md -- Bridge firmware: USB HID keyboard, UART receive with SOF parser, hotkey command dispatch
+- [x] 01-03-PLAN.md -- Display firmware: multi-page hotkey UI with tabview, icons, colors, press feedback, UART transmit
+- [x] 01-04-PLAN.md -- End-to-end verification checkpoint: human tests full hotkey pipeline
 
 ### Phase 2: Wireless Link + Dual Transport
 **Goal**: Display and bridge communicate wirelessly over ESP-NOW with automatic failover between wired and wireless links
-**Depends on**: Phase 1
-**Requirements**: COMM-02, COMM-04, COMM-05, COMM-06, COMM-07, COMM-08
-**Success Criteria** (what must be TRUE):
-  1. User can unplug the UART cable and hotkey commands continue to fire on the PC over ESP-NOW with no manual intervention
-  2. User can reconnect the UART cable and traffic automatically routes back to the wired link (preferred when available)
-  3. Hotkey commands are reliably delivered even under wireless packet loss (application-layer ACK with retries confirms receipt)
-  4. Display UI shows ESP-NOW connection status so user knows whether the wireless link is active
-**Plans**: TBD
-
-Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+**Plans**: N/A (merged into Phase 1)
 
 ### Phase 3: Stats Display + Companion App
 **Goal**: Live PC system metrics stream from a desktop companion app through the bridge to a persistent stats header on the display
-**Depends on**: Phase 2
-**Requirements**: BRDG-04, BRDG-05, DISP-06, DISP-07, COMP-01, COMP-02
-**Success Criteria** (what must be TRUE):
-  1. Display shows a persistent stats header bar at the top of the screen with CPU, RAM, GPU, network, and disk usage updating at 1-2 Hz
-  2. Stats header remains visible while user navigates between hotkey pages
-  3. Bridge relays media key commands (play/pause, volume, next/prev, mute) from display to PC as USB consumer control reports
-  4. Companion app launches on Linux PC and begins streaming stats with no manual configuration
-**Plans**: 4 plans
+**Plans**: 4 plans (complete)
 
 Plans:
-- [ ] 03-01-PLAN.md — Protocol extension + bridge composite USB HID (Keyboard + ConsumerControl + Vendor) with stats relay
-- [ ] 03-02-PLAN.md — Display firmware: Hyprland hotkey pages rework, stats header bar, media key + stats message handling
-- [ ] 03-03-PLAN.md — Python companion app: stats collection via psutil/pynvml, HID output reports via hidapi, systemd service
-- [ ] 03-04-PLAN.md — End-to-end verification checkpoint: stats pipeline, media keys, Hyprland hotkeys
+- [x] 03-01-PLAN.md -- Protocol extension + bridge composite USB HID (Keyboard + ConsumerControl + Vendor) with stats relay
+- [x] 03-02-PLAN.md -- Display firmware: Hyprland hotkey pages rework, stats header bar, media key + stats message handling
+- [x] 03-03-PLAN.md -- Python companion app: stats collection via psutil/pynvml, HID output reports via hidapi, systemd service
+- [x] 03-04-PLAN.md -- End-to-end verification checkpoint: stats pipeline, media keys, Hyprland hotkeys
 
 ### Phase 4: Battery Management + Power States
 **Goal**: Display operates untethered on battery power with intelligent power states and clock mode when the PC is off
-**Depends on**: Phase 3
-**Requirements**: BRDG-07, DISP-08, DISP-09, DISP-10, DISP-11, PWR-01, PWR-02, PWR-03, PWR-04, PWR-05, COMP-03
-**Success Criteria** (what must be TRUE):
-  1. Display runs on LiPo battery with battery percentage shown in the stats header bar
-  2. Stats header shows device status indicators: battery level, ESP-NOW link state, and brightness control
-  3. Display dims after idle timeout, then enters clock mode (showing time and battery) when companion app sends shutdown signal before PC powers off
-  4. Display wakes from clock mode automatically when the bridge comes back online (PC turns on)
-  5. User can adjust display brightness from the stats header without leaving the hotkey view
-**Plans**: 4 plans
+**Plans**: 4 plans (complete)
 
 Plans:
-- [ ] 04-01-PLAN.md — Protocol extension + battery module + power state machine + brightness wrappers
-- [ ] 04-02-PLAN.md — Companion app D-Bus shutdown listener + time sync + type-prefixed HID protocol
-- [ ] 04-03-PLAN.md — Display UI (device status header + clock screen) + main loop integration + bridge relay
-- [ ] 04-04-PLAN.md — End-to-end verification checkpoint: power states, battery, clock mode, brightness
+- [x] 04-01-PLAN.md -- Protocol extension + battery module + power state machine + brightness wrappers
+- [x] 04-02-PLAN.md -- Companion app D-Bus shutdown listener + time sync + type-prefixed HID protocol
+- [x] 04-03-PLAN.md -- Display UI (device status header + clock screen) + main loop integration + bridge relay
 
-### Phase 5: Configuration + GUI Editor
-**Goal**: Users design and deploy custom hotkey layouts from a desktop GUI editor, with configurations persisting across power cycles
-**Depends on**: Phase 4
-**Requirements**: BRDG-06, COMP-04, COMP-05, COMP-06, CONF-01, CONF-02, CONF-03, CONF-04
+</details>
+
+## v1.1 System Control (In Progress)
+
+**Milestone Goal:** Make the display fully configurable -- all hotkey layouts, button properties, and visual assets defined by config files on SD card, editable via a Linux GUI app and pushed over WiFi.
+
+- [ ] **Phase 5: Config Data Model + SD Loading** - JSON config schema, parser, SD card persistence with fallback defaults
+- [ ] **Phase 6: Data-Driven Display UI** - Display renders pages and buttons dynamically from parsed config struct
+- [ ] **Phase 7: Config Server (SoftAP + HTTP)** - WiFi upload of config files with validation, OTA merge, ESP-NOW coexistence
+- [ ] **Phase 8: Desktop GUI Editor** - PySide6 visual layout editor with direct WiFi deploy to device
+
+## Phase Details
+
+### Phase 5: Config Data Model + SD Loading
+**Goal**: Hotkey layouts are defined in a human-readable JSON file on SD card, parsed at boot into an in-memory config struct, with robust fallback to built-in defaults
+**Depends on**: Phase 4 (v1.0 shipped)
+**Requirements**: CFG-01, CFG-02, CFG-03, CFG-04, CFG-05, CFG-06, CFG-07, CFG-08
 **Success Criteria** (what must be TRUE):
-  1. User opens desktop GUI editor, designs a multi-page hotkey layout with custom labels, icons, shortcuts, and button colors, and pushes it to the display
-  2. Hotkey layout survives power cycles (stored persistently on display in NVS or LittleFS)
-  3. User can read the current layout from the display into the GUI editor for modification
-  4. Configs larger than 250 bytes transfer reliably via chunked protocol over ESP-NOW or UART
+  1. Device boots and loads hotkey layout from a JSON config file on SD card -- pages, buttons, labels, key bindings, colors, icons, and media key consumer codes all read from the file
+  2. Device boots to a usable default hotkey layout when the SD card is missing, the config file is absent, or the JSON is malformed
+  3. Config file includes a version field, and the device can distinguish config format versions
+  4. When a new config is saved, the previous config.json is automatically backed up to config.json.bak, and writes use atomic temp-file-then-rename to prevent corruption on power loss
 **Plans**: TBD
 
 Plans:
 - [ ] 05-01: TBD
 - [ ] 05-02: TBD
 
+### Phase 6: Data-Driven Display UI
+**Goal**: Display UI renders pages and buttons entirely from the in-memory config struct, enabling hot-reload of layouts without device reboot
+**Depends on**: Phase 5
+**Requirements**: DRVUI-01, DRVUI-02, DRVUI-03, DRVUI-04, DRVUI-05
+**Success Criteria** (what must be TRUE):
+  1. Display shows the exact number of pages and buttons defined in the config file, with each button displaying its configured label, color, icon symbol, and keystroke description
+  2. User can edit the JSON config on SD card (manually or via upload), and the display renders the updated layout after a config reload -- without rebooting the device
+  3. Repeated config reloads do not degrade performance or exhaust LVGL memory (widget-pool pattern prevents leaks across at least 10 consecutive reloads)
+**Plans**: TBD
+
+Plans:
+- [ ] 06-01: TBD
+- [ ] 06-02: TBD
+
+### Phase 7: Config Server (SoftAP + HTTP)
+**Goal**: User can wirelessly upload new hotkey configs to the display via a WiFi access point and HTTP server, with validation and seamless ESP-NOW coexistence
+**Depends on**: Phase 6
+**Requirements**: WIFI-01, WIFI-02, WIFI-03, WIFI-04, WIFI-05, WIFI-06, WIFI-07
+**Success Criteria** (what must be TRUE):
+  1. User taps a config icon in the stats header and the display enters SoftAP config mode, showing the WiFi SSID, password, and IP address on screen
+  2. User can POST a JSON config file to the HTTP server from any HTTP client (browser, curl, editor app), and the display validates the JSON, writes it to SD, and rebuilds the UI -- all without rebooting
+  3. SoftAP auto-stops after 5 minutes of inactivity, or immediately when the user taps "Apply and Exit"
+  4. Hotkey commands continue to reach the PC over ESP-NOW while config mode is active (WiFi channel pinned to avoid ESP-NOW disruption)
+  5. OTA firmware upload is available on the same HTTP server alongside config upload
+**Plans**: TBD
+
+Plans:
+- [ ] 07-01: TBD
+- [ ] 07-02: TBD
+
+### Phase 8: Desktop GUI Editor
+**Goal**: User designs hotkey layouts visually in a desktop app and deploys them directly to the device over WiFi
+**Depends on**: Phase 7
+**Requirements**: EDIT-01, EDIT-02, EDIT-03, EDIT-04, EDIT-05, EDIT-06, EDIT-07
+**Success Criteria** (what must be TRUE):
+  1. User opens the PySide6 editor app and sees a visual button grid matching the device layout, with buttons showing their configured labels, colors, and icons
+  2. User clicks any button in the grid to edit its properties (label, keyboard shortcut, color, icon) in a side panel, and can add, remove, rename, and reorder pages
+  3. User can save the layout to a local JSON file and load existing JSON files for editing
+  4. User can capture keyboard shortcuts by pressing key combos (recorder mode) instead of typing modifier names manually
+  5. User clicks "Deploy" and the config is pushed to the device over WiFi HTTP -- the device validates, saves, and rebuilds the UI without reboot
+**Plans**: TBD
+
+Plans:
+- [ ] 08-01: TBD
+- [ ] 08-02: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
+Phases execute in numeric order: 5 -> 6 -> 7 -> 8
 
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 1. Wired Command Foundation | 4/4 | Complete | 2026-02-15 |
-| 2. Wireless Link + Dual Transport | N/A | Complete (merged into Phase 1) | 2026-02-15 |
-| 3. Stats Display + Companion App | 4/4 | Complete | 2026-02-15 |
-| 4. Battery Management + Power States | 0/TBD | Not started | - |
-| 5. Configuration + GUI Editor | 0/TBD | Not started | - |
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 1. Wired Command Foundation | v1.0 | 4/4 | Complete | 2026-02-15 |
+| 2. Wireless Link (merged) | v1.0 | N/A | Complete | 2026-02-15 |
+| 3. Stats Display + Companion | v1.0 | 4/4 | Complete | 2026-02-15 |
+| 4. Battery + Power States | v1.0 | 3/3 | Complete | 2026-02-15 |
+| 5. Config Data Model + SD Loading | v1.1 | 0/TBD | Not started | - |
+| 6. Data-Driven Display UI | v1.1 | 0/TBD | Not started | - |
+| 7. Config Server (SoftAP + HTTP) | v1.1 | 0/TBD | Not started | - |
+| 8. Desktop GUI Editor | v1.1 | 0/TBD | Not started | - |

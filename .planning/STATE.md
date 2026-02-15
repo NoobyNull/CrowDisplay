@@ -4,20 +4,22 @@
 
 See: .planning/PROJECT.md (updated 2026-02-15)
 
-**Core value:** Tap a button on the display, the correct keyboard shortcut fires on the PC — reliably, with minimal latency, whether connected by wire or wirelessly.
-**Current focus:** Milestone v1.1 System Control — defining requirements
+**Core value:** Tap a button on the display, the correct keyboard shortcut fires on the PC -- reliably, with minimal latency, whether connected by wire or wirelessly.
+**Current focus:** Phase 5 - Config Data Model + SD Loading (v1.1 System Control)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-02-15 — Milestone v1.1 started
+Phase: 5 of 8 (Config Data Model + SD Loading)
+Plan: 0 of TBD in current phase
+Status: Ready to plan
+Last activity: 2026-02-15 -- Roadmap created for v1.1 milestone
+
+Progress: [##########..........] 50% (v1.0 complete, v1.1 0/4 phases)
 
 ## Performance Metrics
 
 **Velocity (v1.0):**
-- Total plans completed: 7
+- Total plans completed: 7 (across v1.0)
 - Average duration: 2min
 - Total execution time: 0.25 hours
 
@@ -38,38 +40,11 @@ Last activity: 2026-02-15 — Milestone v1.1 started
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- [Roadmap]: Build wired UART transport first, add ESP-NOW in Phase 2 (removes wireless uncertainty from early debugging) -- SUPERSEDED: went straight to ESP-NOW since bridge USB-C is dedicated to HID
-- [01-04]: ESP-NOW broadcast replaces UART link (bridge USB-C occupied by HID, no wired path available)
-- [01-04]: Forced USB D+/D- low before USB.begin() to fix JTAG-to-OTG PHY re-enumeration
-- [01-04]: board_build.arduino.extra.cdc_on_boot has no effect in espressif32@6.5.0 (removed)
-- [Roadmap]: Bridge is HID-only to PC (avoids documented USB HID+CDC composite stall bug)
-- [Roadmap]: I2C mutex from day one in Phase 1 (prevents GT911 touch corruption)
-- [01-01]: Used build_src_filter instead of src_dir for multi-env PlatformIO builds
-- [01-01]: Display lib_deps (LovyanGFX, LVGL) moved to env:display only, not shared base
-- [01-01]: Init order: Wire -> touch_init(mutex) -> display_init(PCA9557+LCD) -> gt911_discover -> lvgl_init
-- [01-02]: Keyboard only, no consumer control (media keys deferred to Phase 3 per BRDG-04)
-- [01-02]: delay(20) keystroke hold, delay(1) main loop -- bridge is maximally responsive
-- [01-02]: 64-byte poll limit per uart_poll() cycle to prevent main loop blocking
-- [01-03]: Page 3 media keys replaced with keyboard-only dev shortcuts (consumer control deferred to Phase 3)
-- [01-03]: UART1 on GPIO 10/11 for display-to-bridge link at 115200 baud
-- [01-03]: Key codes defined locally in ui.cpp (display does not include USBHIDKeyboard.h)
-- [03-01]: USBHIDVendor 63-byte reports with no size prepend (matches companion app expectations)
-- [03-01]: Stats relay is fire-and-forget -- no ACK from display for MSG_STATS
-- [03-02]: Stats header hidden by default, auto-shows on first MSG_STATS, auto-hides after 5s timeout
-- [03-02]: Generic espnow_poll_msg() queues non-ACK messages separately from ACK path
-- [03-02]: Media keys use is_media flag in Hotkey struct to dispatch via send_media_key_to_bridge()
-- [03-03]: Python with hidapi for companion app (per user discretion and research)
-- [03-03]: GPU detection chain: NVIDIA (pynvml) -> AMD (sysfs) -> 0xFF fallback
-- [03-03]: Leading 0x00 report ID byte for hidapi Linux HID writes
-- [Phase 03-04]: Verification checkpoint pattern confirmed effective for hardware integration testing
-- [04-01]: Battery module uses i2c_take/i2c_give helpers (consistent with touch module pattern)
-- [04-01]: User brightness presets tracked separately from state-machine brightness for proper wake restore
-- [04-02]: All HID writes now include 1-byte message type prefix after report ID for bridge dispatch (0x03=stats, 0x05=power, 0x06=time)
-- [04-02]: D-Bus listener in daemon thread with asyncio loop, signals main thread via threading.Event (thread-safe)
-- [04-02]: dbus-next imported inside function for graceful degradation if not installed
-- [04-03]: lv_font_montserrat_40 used for clock (48 not available in LVGL build config)
-- [04-03]: Bridge uses switch/case on type-prefix byte for extensible vendor HID dispatch
-- [04-03]: Touch activity calls power_activity() every poll (cheap, ensures idle timer resets)
+- [v1.1 Roadmap]: SD card is config storage medium (not NVS/LittleFS) -- human-readable, removable, large capacity
+- [v1.1 Roadmap]: SoftAP + HTTP for config upload (not ESP-NOW relay) -- direct WiFi avoids bridge bottleneck
+- [v1.1 Roadmap]: PySide6 desktop editor (not web UI on ESP32) -- richer UX, no flash/RAM cost on device
+- [v1.1 Roadmap]: ArduinoJson v7 with PSRAM allocator for config parsing -- avoids internal SRAM exhaustion
+- [v1.1 Roadmap]: Widget-pool pattern for dynamic UI -- prevents LVGL memory leak on config reload
 
 ### Pending Todos
 
@@ -77,12 +52,12 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Research]: USB CDC on bridge -- bridge is HID-only on native USB. Companion app will need to communicate via ESP-NOW relay or separate serial adapter.
-- [Research]: CrowPanel battery charging circuit unknown -- characterize during Phase 4 planning.
-- [Research]: LVGL memory pool may need increase to 128KB+ or PSRAM-backed allocator -- test during Phase 2/3 UI expansion.
+- [Research]: LVGL widget-pool pattern needs prototype validation in Phase 6 (memory leak risk on repeated reloads)
+- [Research]: WiFi channel pinning needs hardware test in Phase 7 (ESP-NOW packet loss during HTTP transfer)
+- [Research]: BMP icon format validation deferred to v2 (LVGL symbols only for v1.1)
 
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Started milestone v1.1 System Control
+Stopped at: Roadmap created for v1.1 System Control milestone
 Resume file: None
