@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-14)
 
 **Core value:** Tap a button on the display, the correct keyboard shortcut fires on the PC -- reliably, with minimal latency, whether connected by wire or wirelessly.
-**Current focus:** Phase 3 - Stats Display + Companion App
+**Current focus:** Phase 4 - Battery Management + Power States
 
 ## Current Position
 
-Phase: 3 of 5 (Stats Display + Companion App)
-Plan: 4 of 4 in current phase
-Status: Complete
-Last activity: 2026-02-15 -- Completed 03-04 (end-to-end verification)
+Phase: 4 of 5 (Battery Management + Power States)
+Plan: 2 of 4 in current phase
+Status: In Progress
+Last activity: 2026-02-15 -- Completed 04-02 (companion shutdown + time sync)
 
-Progress: [██████░░░░] 60%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
@@ -30,9 +30,11 @@ Progress: [██████░░░░] 60%
 | 01 | 3 | 11min | 4min |
 | 03 | 4 | 9min | 2min |
 
+| 04 | 2 | 2min | 1min |
+
 **Recent Trend:**
-- Last 5 plans: 01-03 (3min), 03-01 (2min), 03-02 (4min), 03-03 (2min), 03-04 (1min)
-- Trend: Improving
+- Last 5 plans: 03-02 (4min), 03-03 (2min), 03-04 (1min), 04-01 (~2min), 04-02 (2min)
+- Trend: Stable
 
 *Updated after each plan completion*
 
@@ -67,6 +69,9 @@ Recent decisions affecting current work:
 - [03-03]: GPU detection chain: NVIDIA (pynvml) -> AMD (sysfs) -> 0xFF fallback
 - [03-03]: Leading 0x00 report ID byte for hidapi Linux HID writes
 - [Phase 03-04]: Verification checkpoint pattern confirmed effective for hardware integration testing
+- [04-02]: All HID writes now include 1-byte message type prefix after report ID for bridge dispatch (0x03=stats, 0x05=power, 0x06=time)
+- [04-02]: D-Bus listener in daemon thread with asyncio loop, signals main thread via threading.Event (thread-safe)
+- [04-02]: dbus-next imported inside function for graceful degradation if not installed
 
 ### Pending Todos
 
@@ -81,5 +86,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 03-04-PLAN.md (Phase 3 end-to-end verification). Phase 3 complete.
+Stopped at: Completed 04-02-PLAN.md (companion shutdown + time sync)
 Resume file: None
