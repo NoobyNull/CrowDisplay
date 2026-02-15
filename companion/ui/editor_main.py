@@ -73,56 +73,80 @@ class ButtonGridWidget(QWidget):
 
         buttons_data = page.get("buttons", [])
 
+        # Clear all cells first
         for row in range(3):
             for col in range(4):
-                button_idx = row * 4 + col
                 btn = self.buttons[row][col]
+                btn.setText("")
+                btn.setStyleSheet("background-color: #f0f0f0;")
+                btn.setToolTip("")
 
-                if button_idx < len(buttons_data):
-                    button_dict = buttons_data[button_idx]
-                    label = button_dict.get("label", "")
-                    description = button_dict.get("description", "")
-                    color = button_dict.get("color", 0x3498DB)
-                    icon = button_dict.get("icon", "")
+        # Place buttons: explicit grid positions first, then auto-flow
+        auto_row, auto_col = 0, 0
+        for button_idx, button_dict in enumerate(buttons_data):
+            label = button_dict.get("label", "")
+            description = button_dict.get("description", "")
+            color = button_dict.get("color", 0x3498DB)
+            icon = button_dict.get("icon", "")
+            grid_row = button_dict.get("grid_row", -1)
+            grid_col = button_dict.get("grid_col", -1)
+            pressed_color = button_dict.get("pressed_color", 0x000000)
 
-                    # Resolve icon display: for private-use Unicode (LVGL symbols),
-                    # show the symbol name instead of the raw glyph
-                    icon_display = ""
-                    if icon:
-                        icon_bytes = icon.encode("utf-8")
-                        if icon_bytes in SYMBOL_BY_UTF8:
-                            icon_display = SYMBOL_BY_UTF8[icon_bytes][0]
-                        elif len(icon) == 1 and ord(icon) >= 0xF000:
-                            # Private-use area but not in our registry
-                            icon_display = "?"
-                        else:
-                            icon_display = icon
+            # Determine grid cell
+            if grid_row >= 0 and grid_col >= 0:
+                target_row, target_col = grid_row, grid_col
+            else:
+                target_row, target_col = auto_row, auto_col
+                auto_col += 1
+                if auto_col >= 4:
+                    auto_col = 0
+                    auto_row += 1
 
-                    # Format button text
-                    parts = []
-                    if icon_display:
-                        parts.append(icon_display)
-                    parts.append(label)
-                    if description:
-                        parts.append(description)
-                    btn.setText("\n".join(parts))
+            if target_row >= 3 or target_col >= 4:
+                continue
 
-                    # Set background color with luminance-based text contrast
-                    qcolor = self._value_to_qcolor(color)
-                    lum = 0.299 * qcolor.red() + 0.587 * qcolor.green() + 0.114 * qcolor.blue()
-                    text_color = "#000" if lum > 140 else "#FFF"
+            btn = self.buttons[target_row][target_col]
 
-                    # Selected button highlight
-                    is_selected = (self.current_page, button_idx) == self.selected_button
-                    border_style = "border: 3px solid #FFD700;" if is_selected else "border: 2px solid #555;"
-
-                    btn.setStyleSheet(
-                        f"background-color: {qcolor.name()}; color: {text_color}; "
-                        f"{border_style} border-radius: 4px;"
-                    )
+            # Resolve icon display
+            icon_display = ""
+            if icon:
+                icon_bytes = icon.encode("utf-8")
+                if icon_bytes in SYMBOL_BY_UTF8:
+                    icon_display = SYMBOL_BY_UTF8[icon_bytes][0]
+                elif len(icon) == 1 and ord(icon) >= 0xF000:
+                    icon_display = "?"
                 else:
-                    btn.setText("")
-                    btn.setStyleSheet("background-color: #f0f0f0;")
+                    icon_display = icon
+
+            # Format button text
+            parts = []
+            if icon_display:
+                parts.append(icon_display)
+            parts.append(label)
+            if description:
+                parts.append(description)
+            btn.setText("\n".join(parts))
+
+            # Tooltip with position and pressed color info
+            pos_info = f"Grid: ({target_row}, {target_col})"
+            if grid_row >= 0 and grid_col >= 0:
+                pos_info += " [explicit]"
+            pressed_info = "Pressed: auto-darken" if pressed_color == 0 else f"Pressed: #{pressed_color:06X}"
+            btn.setToolTip(f"{pos_info}\n{pressed_info}")
+
+            # Set background color with luminance-based text contrast
+            qcolor = self._value_to_qcolor(color)
+            lum = 0.299 * qcolor.red() + 0.587 * qcolor.green() + 0.114 * qcolor.blue()
+            text_color = "#000" if lum > 140 else "#FFF"
+
+            # Selected button highlight
+            is_selected = (self.current_page, button_idx) == self.selected_button
+            border_style = "border: 3px solid #FFD700;" if is_selected else "border: 2px solid #555;"
+
+            btn.setStyleSheet(
+                f"background-color: {qcolor.name()}; color: {text_color}; "
+                f"{border_style} border-radius: 4px;"
+            )
 
         self.grid_updated.emit()
 

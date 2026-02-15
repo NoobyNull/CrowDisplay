@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QColorDialog,
     QComboBox,
+    QSpinBox,
+    QCheckBox,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
@@ -89,6 +91,34 @@ class ButtonEditor(QWidget):
         self.media_key_combo.currentIndexChanged.connect(self._on_media_key_changed)
         self.media_key_combo.setVisible(False)  # Hidden by default (Hotkey mode)
 
+        # Grid positioning spinboxes
+        self.grid_row_spin = QSpinBox()
+        self.grid_row_spin.setRange(-1, 2)
+        self.grid_row_spin.setValue(-1)
+        self.grid_row_spin.setSpecialValueText("Auto")
+        self.grid_row_spin.valueChanged.connect(self._on_grid_pos_changed)
+
+        self.grid_col_spin = QSpinBox()
+        self.grid_col_spin.setRange(-1, 3)
+        self.grid_col_spin.setValue(-1)
+        self.grid_col_spin.setSpecialValueText("Auto")
+        self.grid_col_spin.valueChanged.connect(self._on_grid_pos_changed)
+
+        # Pressed color controls
+        self.auto_darken_check = QCheckBox("Auto-darken")
+        self.auto_darken_check.setChecked(True)
+        self.auto_darken_check.stateChanged.connect(self._on_auto_darken_changed)
+
+        self.pressed_color_button = QPushButton("Choose Pressed Color")
+        self.pressed_color_button.clicked.connect(self._on_pressed_color_clicked)
+        self.pressed_color_button.setVisible(False)
+        self.pressed_color_display = QLabel()
+        self.pressed_color_display.setFixedWidth(30)
+        self.pressed_color_display.setFixedHeight(30)
+        self.pressed_color_display.setStyleSheet("background-color: #000000; border: 1px solid #ccc;")
+        self.pressed_color_display.setVisible(False)
+        self._pressed_color_value = 0x000000
+
         self.apply_button = QPushButton("Apply")
         self.apply_button.clicked.connect(self._on_apply_clicked)
 
@@ -130,6 +160,27 @@ class ButtonEditor(QWidget):
         layout.addWidget(self.media_key_label)
         layout.addWidget(self.media_key_combo)
 
+        # Grid positioning section
+        layout.addWidget(QLabel("Grid Position:"))
+        grid_pos_layout = QHBoxLayout()
+        grid_pos_layout.addWidget(QLabel("Row:"))
+        grid_pos_layout.addWidget(self.grid_row_spin)
+        grid_pos_layout.addWidget(QLabel("Col:"))
+        grid_pos_layout.addWidget(self.grid_col_spin)
+        layout.addLayout(grid_pos_layout)
+        self.grid_hint_label = QLabel("Both -1 = auto-flow, both >= 0 = explicit")
+        self.grid_hint_label.setStyleSheet("color: #888; font-size: 10px;")
+        layout.addWidget(self.grid_hint_label)
+
+        # Pressed color section
+        layout.addWidget(QLabel("Pressed Color:"))
+        layout.addWidget(self.auto_darken_check)
+        pressed_color_layout = QHBoxLayout()
+        pressed_color_layout.addWidget(self.pressed_color_button)
+        pressed_color_layout.addWidget(self.pressed_color_display)
+        pressed_color_layout.addStretch()
+        layout.addLayout(pressed_color_layout)
+
         # Apply button
         layout.addStretch()
         layout.addWidget(self.apply_button)
@@ -166,6 +217,20 @@ class ButtonEditor(QWidget):
         consumer_code = button_dict.get("consumer_code", 0)
         self._set_media_key_combo(consumer_code)
 
+        # Load grid positioning
+        self.grid_row_spin.setValue(button_dict.get("grid_row", -1))
+        self.grid_col_spin.setValue(button_dict.get("grid_col", -1))
+
+        # Load pressed color
+        pressed_color = button_dict.get("pressed_color", 0x000000)
+        self._pressed_color_value = pressed_color
+        is_auto = (pressed_color == 0x000000)
+        self.auto_darken_check.setChecked(is_auto)
+        self.pressed_color_button.setVisible(not is_auto)
+        self.pressed_color_display.setVisible(not is_auto)
+        if not is_auto:
+            self._set_pressed_color_display(pressed_color)
+
         self._updating = False
 
     def get_button(self) -> dict:
@@ -183,6 +248,13 @@ class ButtonEditor(QWidget):
             modifiers = self.keyboard_recorder.current_modifiers
             keycode = self.keyboard_recorder.current_keycode
 
+        # Grid positioning
+        grid_row = self.grid_row_spin.value()
+        grid_col = self.grid_col_spin.value()
+
+        # Pressed color
+        pressed_color = 0x000000 if self.auto_darken_check.isChecked() else self._pressed_color_value
+
         return {
             "label": self.label_input.text(),
             "description": self.description_input.text(),
@@ -192,6 +264,9 @@ class ButtonEditor(QWidget):
             "modifiers": modifiers,
             "keycode": keycode,
             "consumer_code": consumer_code,
+            "grid_row": grid_row,
+            "grid_col": grid_col,
+            "pressed_color": pressed_color,
         }
 
     def _set_media_key_combo(self, consumer_code: int):
@@ -253,6 +328,46 @@ class ButtonEditor(QWidget):
         """Media key dropdown changed"""
         if not self._updating:
             self._emit_update()
+
+    def _on_grid_pos_changed(self):
+        """Grid position spinbox changed"""
+        if not self._updating:
+            # Validate: warn if partial positioning
+            row = self.grid_row_spin.value()
+            col = self.grid_col_spin.value()
+            if (row >= 0) != (col >= 0):
+                self.grid_hint_label.setText("Warning: set both row AND col, or both to Auto")
+                self.grid_hint_label.setStyleSheet("color: #E74C3C; font-size: 10px;")
+            else:
+                self.grid_hint_label.setText("Both -1 = auto-flow, both >= 0 = explicit")
+                self.grid_hint_label.setStyleSheet("color: #888; font-size: 10px;")
+            self._emit_update()
+
+    def _on_auto_darken_changed(self, state: int):
+        """Auto-darken checkbox changed"""
+        is_auto = self.auto_darken_check.isChecked()
+        self.pressed_color_button.setVisible(not is_auto)
+        self.pressed_color_display.setVisible(not is_auto)
+        if is_auto:
+            self._pressed_color_value = 0x000000
+        if not self._updating:
+            self._emit_update()
+
+    def _on_pressed_color_clicked(self):
+        """Pressed color button clicked - open color dialog"""
+        qcolor = self._value_to_qcolor(self._pressed_color_value if self._pressed_color_value else 0xFF0000)
+        new_color = QColorDialog.getColor(qcolor, self, "Choose Pressed Color")
+        if new_color.isValid():
+            self._pressed_color_value = self._qcolor_to_value(new_color)
+            self._set_pressed_color_display(self._pressed_color_value)
+            self._emit_update()
+
+    def _set_pressed_color_display(self, color_val: int):
+        """Update pressed color display widget"""
+        qcolor = self._value_to_qcolor(color_val)
+        self.pressed_color_display.setStyleSheet(
+            f"background-color: {qcolor.name()}; border: 1px solid #ccc;"
+        )
 
     def _on_apply_clicked(self):
         """Apply button clicked"""
