@@ -4,7 +4,7 @@
 #include "display_hw.h"
 #include "touch.h"
 #include "ui.h"
-#include "uart_link.h"
+#include "espnow_link.h"
 
 static uint32_t touch_timer = 0;
 
@@ -19,7 +19,7 @@ void setup() {
     gt911_discover();  // Discover GT911 (after PCA9557 reset)
     lvgl_init();       // LVGL buffers + drivers
 
-    uart_link_init();  // UART1 to bridge
+    espnow_link_init();  // ESP-NOW to bridge
 
     create_ui();       // Build hotkey tabview UI
 
@@ -38,7 +38,7 @@ void loop() {
 
     // Check for ACK from bridge (non-blocking)
     uint8_t ack_status;
-    if (uart_poll_ack(ack_status)) {
+    if (espnow_poll_ack(ack_status)) {
         Serial.printf("ACK: status=%d\n", ack_status);
         // Future: update UI status indicator
     }

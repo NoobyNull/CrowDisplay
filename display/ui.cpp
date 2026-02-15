@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include "protocol.h"
 #include "display_hw.h"
-#include "uart_link.h"
+#include "espnow_link.h"
 
 // ============================================================
 //  Key codes matching USB HID usage table (Arduino USBHIDKeyboard)

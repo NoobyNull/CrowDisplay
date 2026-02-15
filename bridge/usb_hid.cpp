@@ -16,11 +16,19 @@
 static USBHIDKeyboard Keyboard;
 
 void usb_hid_init() {
+    // Force USB D+/D- low to trigger host disconnect before switching
+    // from JTAG controller to USB-OTG/TinyUSB PHY
+    pinMode(19, OUTPUT);  // USB_D-
+    pinMode(20, OUTPUT);  // USB_D+
+    digitalWrite(19, LOW);
+    digitalWrite(20, LOW);
+    delay(100);
+
     Keyboard.begin();
     USB.productName("HotkeyBridge");
     USB.manufacturerName("CrowPanel");
     USB.begin();
-    delay(500);  // Allow USB enumeration
+    delay(1000);  // Allow USB enumeration after PHY switch
     Serial.println("USB HID keyboard initialized");
 }
 
