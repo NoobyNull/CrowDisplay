@@ -17,15 +17,40 @@ void setup() {
 }
 
 void loop() {
-    // --- Poll USB Vendor HID for incoming stats from companion app ---
+    // --- Poll USB Vendor HID for incoming messages from companion app ---
+    // Protocol: [msg_type byte] [payload...]
+    // Requires companion to send type-prefixed HID reports (MSG_STATS byte before payload)
     uint8_t vendor_buf[63];
     size_t vendor_len = 0;
     if (poll_vendor_hid(vendor_buf, vendor_len)) {
-        if (vendor_len >= sizeof(StatsPayload)) {
-            espnow_send(MSG_STATS, vendor_buf, sizeof(StatsPayload));
-            Serial.println("STATS: relayed to display");
-        } else {
-            Serial.printf("STATS: vendor report too short (%zu)\n", vendor_len);
+        if (vendor_len >= 1) {
+            uint8_t msg_type = vendor_buf[0];
+            uint8_t *payload = vendor_buf + 1;
+            size_t payload_len = vendor_len - 1;
+
+            switch (msg_type) {
+                case MSG_STATS:
+                    if (payload_len >= sizeof(StatsPayload)) {
+                        espnow_send(MSG_STATS, payload, sizeof(StatsPayload));
+                        Serial.println("STATS: relayed to display");
+                    }
+                    break;
+                case MSG_POWER_STATE:
+                    if (payload_len >= sizeof(PowerStateMsg)) {
+                        espnow_send(MSG_POWER_STATE, payload, sizeof(PowerStateMsg));
+                        Serial.printf("POWER: relayed state=%d\n", payload[0]);
+                    }
+                    break;
+                case MSG_TIME_SYNC:
+                    if (payload_len >= sizeof(TimeSyncMsg)) {
+                        espnow_send(MSG_TIME_SYNC, payload, sizeof(TimeSyncMsg));
+                        Serial.println("TIME: relayed to display");
+                    }
+                    break;
+                default:
+                    Serial.printf("VENDOR: unknown type 0x%02X len=%zu\n", msg_type, vendor_len);
+                    break;
+            }
         }
     }
 
