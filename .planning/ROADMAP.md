@@ -56,8 +56,8 @@ Plans:
 **Milestone Goal:** Make the display fully configurable -- all hotkey layouts, button properties, and visual assets defined by config files on SD card, editable via a Linux GUI app and pushed over WiFi.
 
 - [x] **Phase 5: Config Data Model + SD Loading** - JSON config schema, parser, SD card persistence with fallback defaults
-- [ ] **Phase 6: Data-Driven Display UI** - Display renders pages and buttons dynamically from parsed config struct
-- [ ] **Phase 7: Config Server (SoftAP + HTTP)** - WiFi upload of config files with validation, OTA merge, ESP-NOW coexistence
+- [x] **Phase 6: Data-Driven Display UI** - Display renders pages and buttons dynamically from parsed config struct
+- [x] **Phase 7: Config Server (SoftAP + HTTP)** - WiFi upload of config files with validation, OTA merge, ESP-NOW coexistence
 - [ ] **Phase 8: Desktop GUI Editor** - PySide6 visual layout editor with direct WiFi deploy to device
 
 ## Phase Details
@@ -87,8 +87,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 06-01-PLAN.md -- Fix config lifetime bugs, eliminate Hotkey struct, single config-driven render path
-- [ ] 06-02-PLAN.md -- Full-screen rebuild with lv_obj_clean, deferred rebuild flag, LVGL memory monitoring
+- [x] 06-01-PLAN.md -- Fix config lifetime bugs, eliminate Hotkey struct, single config-driven render path
+- [x] 06-02-PLAN.md -- Full-screen rebuild with lv_obj_clean, deferred rebuild flag, LVGL memory monitoring
 
 ### Phase 7: Config Server (SoftAP + HTTP)
 **Goal**: User can wirelessly upload new hotkey configs to the display via a WiFi access point and HTTP server, with validation and seamless ESP-NOW coexistence
@@ -103,8 +103,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 07-01-PLAN.md -- Merge OTA into unified config_server, WiFi channel pinning, inactivity timeout, error propagation fix
-- [ ] 07-02-PLAN.md -- Config mode UI screen with header icon, SSID/password/IP display, Apply & Exit button
+- [x] 07-01-PLAN.md -- Merge OTA into unified config_server, WiFi channel pinning, inactivity timeout, error propagation fix
+- [x] 07-02-PLAN.md -- Config mode UI screen with header icon, SSID/password/IP display, Apply & Exit button
 
 ### Phase 8: Desktop GUI Editor
 **Goal**: User designs hotkey layouts visually in a desktop app and deploys them directly to the device over WiFi
@@ -134,6 +134,6 @@ Phases execute in numeric order: 5 -> 6 -> 7 -> 8
 | 3. Stats Display + Companion | v1.0 | 4/4 | Complete | 2026-02-15 |
 | 4. Battery + Power States | v1.0 | 3/3 | Complete | 2026-02-15 |
 | 5. Config Data Model + SD Loading | v1.1 | 1/1 | Complete | 2026-02-15 |
-| 6. Data-Driven Display UI | v1.1 | 0/2 | Planned | - |
-| 7. Config Server (SoftAP + HTTP) | v1.1 | 0/TBD | Not started | - |
+| 6. Data-Driven Display UI | v1.1 | 2/2 | Complete | 2026-02-15 |
+| 7. Config Server (SoftAP + HTTP) | v1.1 | 2/2 | Complete | 2026-02-15 |
 | 8. Desktop GUI Editor | v1.1 | 0/TBD | Not started | - |
