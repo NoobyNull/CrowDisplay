@@ -2,39 +2,32 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-14)
+See: .planning/PROJECT.md (updated 2026-02-15)
 
-**Core value:** Tap a button on the display, the correct keyboard shortcut fires on the PC -- reliably, with minimal latency, whether connected by wire or wirelessly.
-**Current focus:** Phase 4 - Battery Management + Power States
+**Core value:** Tap a button on the display, the correct keyboard shortcut fires on the PC — reliably, with minimal latency, whether connected by wire or wirelessly.
+**Current focus:** Milestone v1.1 System Control — defining requirements
 
 ## Current Position
 
-Phase: 4 of 5 (Battery Management + Power States)
-Plan: 3 of 4 in current phase
-Status: In Progress
-Last activity: 2026-02-15 -- Completed 04-03 (display UI integration + bridge relay)
-
-Progress: [█████████░] 85%
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-02-15 — Milestone v1.1 started
 
 ## Performance Metrics
 
-**Velocity:**
+**Velocity (v1.0):**
 - Total plans completed: 7
 - Average duration: 2min
 - Total execution time: 0.25 hours
 
-**By Phase:**
+**By Phase (v1.0):**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01 | 3 | 11min | 4min |
 | 03 | 4 | 9min | 2min |
-
 | 04 | 3 | 5min | 2min |
-
-**Recent Trend:**
-- Last 5 plans: 03-03 (2min), 03-04 (1min), 04-01 (~2min), 04-02 (2min), 04-03 (3min)
-- Trend: Stable
 
 *Updated after each plan completion*
 
@@ -91,5 +84,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 04-03-PLAN.md (display UI integration + bridge relay)
+Stopped at: Started milestone v1.1 System Control
 Resume file: None

@@ -8,49 +8,57 @@ A wireless desktop command center built around the Elcrow CrowPanel 7.0" touchsc
 
 Tap a button on the display, the correct keyboard shortcut fires on the PC — reliably, with minimal latency, whether connected by wire or wirelessly.
 
+## Current Milestone: v1.1 System Control
+
+**Goal:** Make the display fully configurable — all hotkey layouts, button properties, and visual assets defined by config files on SD card, editable via a Linux GUI app and pushed over WiFi.
+
+**Target features:**
+- SD card as config + asset storage (JSON config, button icon images, backgrounds)
+- Data-driven display UI (reads config at boot, renders pages/buttons dynamically)
+- Fully flexible layouts (variable pages, variable buttons per page, variable sizes/positions)
+- Full button customization (keystroke bindings, labels, colors, icon images, sizes, positions)
+- SoftAP + HTTP server on display for receiving config/asset uploads
+- Python GUI layout editor (extend companion app) for designing and pushing layouts
+
 ## Requirements
 
 ### Validated
 
-- Display renders an LVGL-based touchscreen UI on the CrowPanel 7.0" (800x480 RGB565, LovyanGFX + LVGL v8.3.11) — existing
-- GT911 capacitive touch input works via direct I2C polling — existing
-- Touch events trigger hotkey button callbacks in LVGL — existing
-- BLE HID keyboard sends modifier+key combos to the PC — existing (env:running)
-- USB HID keyboard sends modifier+key combos to the PC — existing (env:test, backup code)
-- 4x3 grid of styled hotkey buttons with press feedback — existing
-- PCA9557 I/O expander handles GT911 touch reset sequence — existing
-- Double-buffered LVGL rendering in PSRAM — existing
-- PlatformIO build system with ESP32-S3 target — existing
+- ✓ Dual-ESP32 architecture: CrowPanel display + ESP32-S3 USB bridge as separate firmware targets — v1.0 Phase 1
+- ✓ ESP-NOW wireless communication between display and bridge (bidirectional) — v1.0 Phase 1
+- ✓ Shared binary protocol with SOF framing, message types, CRC8 — v1.0 Phase 1
+- ✓ Bridge recognized as USB HID keyboard by PC (no drivers) — v1.0 Phase 1
+- ✓ Bridge relays hotkey commands as USB HID keystrokes — v1.0 Phase 1
+- ✓ Bridge supports modifier+key combos and media keys — v1.0 Phase 1/3
+- ✓ Multi-page hotkey grid with swipe navigation and press feedback — v1.0 Phase 1
+- ✓ Live PC stats streaming (CPU/RAM/GPU/net/disk) via Python companion app — v1.0 Phase 3
+- ✓ Persistent stats header bar with device status (battery, link, brightness) — v1.0 Phase 3/4
+- ✓ Battery-powered display with LiPo, voltage monitoring, brightness control — v1.0 Phase 4
+- ✓ Power state machine (ACTIVE → DIMMED → CLOCK_MODE) with companion shutdown signal — v1.0 Phase 4
+- ✓ Clock mode with time display, auto-wake on bridge reconnect — v1.0 Phase 4
+- ✓ I2C bus mutex prevents GT911 touch corruption — v1.0 Phase 1
+- ✓ LVGL v8.3.11 UI on LovyanGFX with double-buffered PSRAM rendering — existing
 
 ### Active
 
-- [ ] Dual-ESP32 architecture: CrowPanel display + ESP32-S3 USB bridge as separate firmware targets
-- [ ] ESP-NOW wireless communication between display and bridge (bidirectional)
-- [ ] UART wired communication between display and bridge (bidirectional)
-- [ ] Dual-link transport: UART and ESP-NOW active simultaneously with seamless fallback
-- [ ] Bridge recognized as USB HID keyboard by PC
-- [ ] Bridge relays hotkey commands from display to PC as USB HID keystrokes
-- [ ] Companion desktop app streams live PC stats (CPU, RAM, GPU, network, disk) to bridge via USB serial
-- [ ] Bridge forwards PC stats to display over active transport link
-- [ ] Persistent stats header bar on display showing live PC metrics and device status (battery %, brightness, ESP-NOW link)
-- [ ] Configurable hotkey grid with swipeable pages below the stats header
-- [ ] Desktop GUI app for designing hotkey layout (buttons, shortcuts, pages) — pushes config to display via bridge
-- [ ] Battery-powered display with LiPo + USB charging
-- [ ] Battery level monitoring and display in stats header
-- [ ] Display brightness control accessible from stats header
-- [ ] ESP-NOW connection status indicator in stats header
-- [ ] Clock mode when PC is off: dim screen showing time and battery level
-- [ ] Companion app sends explicit shutdown signal before PC powers off
-- [ ] Display wakes from clock mode when bridge comes online
+- [ ] SD card storage for config files and image assets (icons, backgrounds)
+- [ ] Data-driven UI: display reads layout config from SD card and renders dynamically
+- [ ] Fully flexible page layouts (variable button count, sizes, positions per page)
+- [ ] Full button customization (keystroke, label, color, icon image, size, position)
+- [ ] SoftAP WiFi mode on display for config upload
+- [ ] HTTP server on display for receiving config + asset files from GUI editor
+- [ ] Python GUI layout editor for designing hotkey layouts with visual preview
+- [ ] Config push from GUI editor to display over WiFi/HTTP
 
 ### Out of Scope
 
 - BLE HID connection to PC — replaced by USB HID on the bridge
 - Physical dock/cradle with pogo pins — just a cable for now
-- Web-based configuration interface — using desktop GUI app instead
 - Mobile app — desktop companion only
 - Audio output or speaker integration
-- OTA firmware updates (can add later)
+- Config transfer via bridge/ESP-NOW — replaced by direct WiFi SoftAP + HTTP
+- NVS/LittleFS config storage — SD card is the storage medium
+- Web-based configurator hosted on ESP32 — dedicated desktop GUI app instead
 
 ## Context
 
@@ -90,4 +98,4 @@ Tap a button on the display, the correct keyboard shortcut fires on the PC — r
 | Clock mode over deep sleep | Keeps ESP-NOW listener active for fast wake. User can glance at time/battery. Trade-off: higher standby power. | — Pending |
 
 ---
-*Last updated: 2026-02-14 after initialization*
+*Last updated: 2026-02-15 after milestone v1.1 System Control started*
