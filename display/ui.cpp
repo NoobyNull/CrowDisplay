@@ -1,6 +1,9 @@
 #include <lvgl.h>
 #include <Arduino.h>
 #include <ctime>
+#include <cmath>
+#include <vector>
+#include <SD.h>
 #include "protocol.h"
 #include "config.h"
 #include "display_hw.h"
@@ -57,10 +60,39 @@ static lv_obj_t *config_info_label = nullptr;
 // Stats header labels (row 1: cpu%, ram%, gpu%, cpu_temp, gpu_temp; row 2: net_up, net_down, disk%)
 static lv_obj_t *stat_labels[8] = {};
 
+// Picture frame mode state
+static lv_obj_t *picture_frame_screen = nullptr;
+static lv_obj_t *slideshow_img = nullptr;
+static lv_obj_t *slideshow_fallback_label = nullptr;
+static std::vector<String> slideshow_files;
+static size_t slideshow_index = 0;
+static lv_timer_t *slideshow_timer = nullptr;
+
+// Standby mode state
+static lv_obj_t *standby_screen = nullptr;
+static lv_obj_t *standby_time_label = nullptr;
+static lv_obj_t *standby_stats_label = nullptr;
+
+// Analog clock widgets (on clock_screen)
+static lv_obj_t *analog_clock_face = nullptr;
+static lv_obj_t *analog_hour_hand = nullptr;
+static lv_obj_t *analog_min_hand = nullptr;
+static lv_point_t hour_points[2];
+static lv_point_t min_points[2];
+
+// LVGL SD card filesystem driver state
+static bool sd_fs_registered = false;
+
 // Forward declarations
 void update_clock_time();
 void show_config_screen();
 void hide_config_screen();
+static void init_picture_frame_mode();
+static void cleanup_picture_frame_mode();
+static void init_standby_mode();
+static void load_next_slideshow_image();
+static void slideshow_timer_cb(lv_timer_t *timer);
+static void lvgl_register_sd_driver();
 
 // ============================================================
 //  Brightness Button Callback
@@ -103,7 +135,7 @@ static void btn_event_cb(lv_event_t *e) {
 // ============================================================
 static lv_obj_t *create_hotkey_button(lv_obj_t *parent, const ButtonConfig *btn_cfg) {
     lv_obj_t *btn = lv_btn_create(parent);
-    lv_obj_set_size(btn, 170, 90);
+    // Grid layout auto-sizes based on cell dimensions (no fixed size)
     lv_obj_add_flag(btn, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, (void *)btn_cfg);
 
@@ -116,8 +148,16 @@ static lv_obj_t *create_hotkey_button(lv_obj_t *parent, const ButtonConfig *btn_
     lv_obj_set_style_shadow_opa(btn, LV_OPA_30, LV_PART_MAIN);
     lv_obj_set_style_border_width(btn, 0, LV_PART_MAIN);
 
-    // Pressed style: darken + shrink for visual feedback (DISP-03)
-    lv_obj_set_style_bg_color(btn, lv_color_darken(lv_color_hex(btn_cfg->color), LV_OPA_30), LV_STATE_PRESSED);
+    // Pressed style: configurable color + shrink for visual feedback (DISP-03)
+    lv_color_t pressed_clr;
+    if (btn_cfg->pressed_color == 0x000000) {
+        // Auto-darken if not explicitly set
+        pressed_clr = lv_color_darken(lv_color_hex(btn_cfg->color), LV_OPA_30);
+    } else {
+        // Use explicit pressed color
+        pressed_clr = lv_color_hex(btn_cfg->pressed_color);
+    }
+    lv_obj_set_style_bg_color(btn, pressed_clr, LV_STATE_PRESSED);
     lv_obj_set_style_transform_width(btn, -3, LV_STATE_PRESSED);
     lv_obj_set_style_transform_height(btn, -3, LV_STATE_PRESSED);
 
@@ -453,6 +493,10 @@ static void create_ui_widgets(lv_obj_t *screen, const AppConfig *cfg) {
     lv_obj_set_style_border_color(tab_btns, lv_color_hex(0x3498DB), LV_PART_ITEMS | LV_STATE_CHECKED);
     lv_obj_set_style_text_font(tab_btns, &lv_font_montserrat_16, LV_PART_MAIN);
 
+    // Grid descriptors: 4 columns x 3 rows with equal fractional units
+    static lv_coord_t col_dsc[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
+    static lv_coord_t row_dsc[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
+
     // Create pages from config (single config-driven path)
     const ProfileConfig* active_profile = cfg->get_active_profile();
     if (active_profile) {
@@ -460,15 +504,37 @@ static void create_ui_widgets(lv_obj_t *screen, const AppConfig *cfg) {
             const PageConfig& page = active_profile->pages[i];
             lv_obj_t *tab = lv_tabview_add_tab(tabview, page.name.c_str());
 
-            lv_obj_set_flex_flow(tab, LV_FLEX_FLOW_ROW_WRAP);
-            lv_obj_set_flex_align(tab, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY);
-            lv_obj_set_style_pad_all(tab, 10, LV_PART_MAIN);
-            lv_obj_set_style_pad_row(tab, 10, LV_PART_MAIN);
-            lv_obj_set_style_pad_column(tab, 10, LV_PART_MAIN);
+            // Grid layout: 4 columns x 3 rows
+            lv_obj_set_layout(tab, LV_LAYOUT_GRID);
+            lv_obj_set_grid_dsc_array(tab, col_dsc, row_dsc);
+            lv_obj_set_style_pad_all(tab, 6, LV_PART_MAIN);
+            lv_obj_set_style_pad_row(tab, 6, LV_PART_MAIN);
+            lv_obj_set_style_pad_column(tab, 6, LV_PART_MAIN);
             lv_obj_set_style_bg_color(tab, lv_color_hex(0x1a1a2e), LV_PART_MAIN);
 
+            // Track auto-flow position for buttons without explicit grid placement
+            int auto_row = 0, auto_col = 0;
+
             for (size_t j = 0; j < page.buttons.size(); j++) {
-                create_hotkey_button(tab, &page.buttons[j]);
+                const ButtonConfig& btn_cfg = page.buttons[j];
+                lv_obj_t *btn = create_hotkey_button(tab, &btn_cfg);
+
+                if (btn_cfg.grid_row >= 0 && btn_cfg.grid_col >= 0) {
+                    // Explicit positioning
+                    lv_obj_set_grid_cell(btn,
+                        LV_GRID_ALIGN_STRETCH, btn_cfg.grid_col, 1,
+                        LV_GRID_ALIGN_STRETCH, btn_cfg.grid_row, 1);
+                } else {
+                    // Auto-flow: place in next available cell
+                    lv_obj_set_grid_cell(btn,
+                        LV_GRID_ALIGN_STRETCH, auto_col, 1,
+                        LV_GRID_ALIGN_STRETCH, auto_row, 1);
+                    auto_col++;
+                    if (auto_col >= GRID_COLS) {
+                        auto_col = 0;
+                        auto_row++;
+                    }
+                }
             }
         }
     } else {
