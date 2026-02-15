@@ -5,8 +5,11 @@
 #include "touch.h"
 #include "ui.h"
 #include "espnow_link.h"
+#include "protocol.h"
 
 static uint32_t touch_timer = 0;
+static uint32_t last_stats_time = 0;
+static bool stats_active = false;
 
 void setup() {
     Serial.begin(115200);
@@ -40,7 +43,25 @@ void loop() {
     uint8_t ack_status;
     if (espnow_poll_ack(ack_status)) {
         Serial.printf("ACK: status=%d\n", ack_status);
-        // Future: update UI status indicator
+    }
+
+    // Poll for incoming messages (MSG_STATS, etc.)
+    uint8_t msg_type;
+    uint8_t msg_payload[PROTO_MAX_PAYLOAD];
+    uint8_t msg_len;
+    if (espnow_poll_msg(msg_type, msg_payload, msg_len)) {
+        if (msg_type == MSG_STATS && msg_len >= sizeof(StatsPayload)) {
+            update_stats((const StatsPayload *)msg_payload);
+            last_stats_time = millis();
+            stats_active = true;
+        }
+    }
+
+    // Stats timeout: hide header if no stats received for 5 seconds
+    if (stats_active && (millis() - last_stats_time > 5000)) {
+        hide_stats_header();
+        stats_active = false;
+        Serial.println("Stats timeout -- header hidden");
     }
 
     delay(5);
