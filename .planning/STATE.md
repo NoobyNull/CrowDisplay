@@ -70,6 +70,7 @@ Recent decisions affecting current work:
 3. **Add button sizing options and variable dimensions** (ui) -- 1x1, 2x1, 1x2, 2x2 grid spans per button (ADV-01)
 4. **Forward host OS notifications to display as toast overlays** (general) -- D-Bus notification listener with app filter, MSG_NOTIFICATION protocol, toast popup on display
 5. **Configurable stats header with selectable and placeable monitors** (ui) -- user picks which stats to show, arranges order/position, expanded monitor types (20+ via psutil/pynvml)
+6. **Add display modes: standby, macro pad, picture frame, clock** (ui) -- 4 user-selectable modes with analog/digital clock, SD card slideshow, standby screen-off
 
 ### Blockers/Concerns
 
