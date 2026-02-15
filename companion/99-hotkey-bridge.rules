@@ -1,0 +1,12 @@
+# Allow non-root access to HotkeyBridge USB HID device
+#
+# Install:
+#   sudo cp 99-hotkey-bridge.rules /etc/udev/rules.d/
+#
+# Reload:
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# This rule grants the logged-in user access to the hidraw device
+# for the ESP32-S3 bridge (Espressif VID 0x303A, PID 0x0002).
+
+KERNEL=="hidraw*", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="0002", TAG+="uaccess"
