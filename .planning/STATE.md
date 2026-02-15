@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 ## Current Position
 
 Phase: 6 of 8 (Data-Driven Display UI)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-02-15 -- Phase 5 complete (Config Data Model + SD Loading)
+Plan: 1 of 2 in current phase (06-01 complete)
+Status: Executing wave 2
+Last activity: 2026-02-15 -- Plan 06-01 complete (config lifetime fix, Hotkey struct eliminated)
 
 Progress: [############........] 62% (v1.0 complete, v1.1 1/4 phases)
 
