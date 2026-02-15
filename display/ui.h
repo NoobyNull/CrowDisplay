@@ -1,7 +1,12 @@
 #pragma once
 #include "protocol.h"
+#include "config.h"
 
-void create_ui();  // Build the complete hotkey UI
+// Build the complete hotkey UI from AppConfig (config required, no hardcoded fallback)
+void create_ui(const AppConfig* cfg);
+
+// Rebuild UI after configuration change (re-create pages without reboot)
+void rebuild_ui(const AppConfig* cfg);
 
 // Update stats header with new metrics from companion app.
 // Shows the header on first call. Pass nullptr to hide (timeout).
@@ -15,7 +20,13 @@ void show_clock_mode();      // Switch to clock screen (called by power state ma
 void show_hotkey_view();     // Switch back to main screen (called on wake)
 
 // Device status update (call from main loop every ~5s or on change)
-void update_device_status(uint8_t battery_pct, bool espnow_linked, uint8_t brightness_level);
+void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_level);
 
 // Update clock display (call in clock mode from main loop)
 void update_clock_time();
+
+// Show OTA mode overlay with IP address
+void show_ota_screen(const char *ip);
+
+// Hide OTA overlay, return to normal view
+void hide_ota_screen();

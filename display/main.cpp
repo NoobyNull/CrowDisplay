@@ -9,6 +9,10 @@
 #include "protocol.h"
 #include "battery.h"
 #include "power.h"
+#include "sdcard.h"
+#include "ota.h"
+#include "config.h"
+#include "config_server.h"
 
 static uint32_t touch_timer = 0;
 static uint32_t last_stats_time = 0;
@@ -21,9 +25,14 @@ static uint32_t clock_update_timer = 0;
 static uint32_t last_bridge_msg_time = 0;
 static const uint32_t BRIDGE_LINK_TIMEOUT_MS = 10000;  // 10s to consider link stale
 
+// Global config with program lifetime (ButtonConfig* in LVGL events point into this)
+static AppConfig g_app_config;
+
 void setup() {
     Serial.begin(115200);
     Serial.println("\n=== Display Unit Starting ===");
+    Serial.printf("PSRAM: %d bytes (free %d)\n", ESP.getPsramSize(), ESP.getFreePsram());
+    Serial.printf("Heap: %d bytes (free %d)\n", ESP.getHeapSize(), ESP.getFreeHeap());
 
     Wire.begin(19, 20);  // I2C SDA=19, SCL=20
 
@@ -34,8 +43,15 @@ void setup() {
 
     espnow_link_init();  // ESP-NOW to bridge
     battery_init();      // Try to find MAX17048 (non-fatal if absent)
+    sdcard_init();       // Mount TF Card if present (non-fatal if absent)
 
-    create_ui();       // Build hotkey tabview UI
+    // Load configuration from SD card (or use defaults)
+    g_app_config = config_load();
+    Serial.printf("Config: loaded profile '%s' with %zu page(s)\n",
+                  g_app_config.active_profile_name.c_str(),
+                  g_app_config.profiles.empty() ? 0 : g_app_config.get_active_profile()->pages.size());
+
+    create_ui(&g_app_config);  // Build hotkey tabview UI with loaded config
 
     power_init();      // Set initial power state to ACTIVE
 
@@ -53,6 +69,16 @@ void loop() {
 
     // Drive LVGL
     lvgl_tick();
+
+    // OTA polling (ArduinoOTA + web server)
+    if (ota_active()) {
+        ota_poll();
+    }
+
+    // Config server polling (WiFi SoftAP + config upload)
+    if (config_server_active()) {
+        config_server_poll();
+    }
 
     // Power state machine update (checks idle timeout)
     power_update();
@@ -107,12 +133,12 @@ void loop() {
         Serial.println("Stats timeout -- header hidden");
     }
 
-    // Device status update (every 5 seconds)
+    // Device status + ping (every 5 seconds)
     if (millis() - device_status_timer >= 5000) {
         device_status_timer = millis();
-        BatteryState bat = battery_read();
+        espnow_send(MSG_PING, nullptr, 0);  // Heartbeat to get fresh RSSI
         bool link_ok = (millis() - last_bridge_msg_time) < BRIDGE_LINK_TIMEOUT_MS;
-        update_device_status(bat.percent, link_ok, get_backlight());
+        update_device_status(espnow_get_rssi(), link_ok, get_backlight());
     }
 
     // Clock mode: update time display every 30 seconds
