@@ -116,11 +116,12 @@ Plans:
   3. User can save the layout to a local JSON file and load existing JSON files for editing
   4. User can capture keyboard shortcuts by pressing key combos (recorder mode) instead of typing modifier names manually
   5. User clicks "Deploy" and the config is pushed to the device over WiFi HTTP -- the device validates, saves, and rebuilds the UI without reboot
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 08-01: TBD
-- [ ] 08-02: TBD
+- [ ] 08-01-PLAN.md -- Fix data translation layer: keycode mapping, LVGL symbol encoding, keyboard recorder, icon picker
+- [ ] 08-02-PLAN.md -- Wire up corrected mappings: media key support, page rename/reorder, grid polish
+- [ ] 08-03-PLAN.md -- End-to-end verification checkpoint: human tests full editor workflow
 
 ## Progress
 
