@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 ## Current Position
 
 Phase: 5 of 8 (Config Data Model + SD Loading)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-02-15 -- Roadmap created for v1.1 milestone
+Plan: 1 of 1 in current phase (complete)
+Status: Phase execution complete, pending verification
+Last activity: 2026-02-15 -- Plan 05-01 executed (ArduinoJson v7 migration + config gaps)
 
-Progress: [##########..........] 50% (v1.0 complete, v1.1 0/4 phases)
+Progress: [###########.........] 55% (v1.0 complete, v1.1 phase 5 executed)
 
 ## Performance Metrics
 
@@ -23,13 +23,14 @@ Progress: [##########..........] 50% (v1.0 complete, v1.1 0/4 phases)
 - Average duration: 2min
 - Total execution time: 0.25 hours
 
-**By Phase (v1.0):**
+**By Phase (v1.0 + v1.1):**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01 | 3 | 11min | 4min |
 | 03 | 4 | 9min | 2min |
 | 04 | 3 | 5min | 2min |
+| 05 | 1 | 5min | 5min |
 
 *Updated after each plan completion*
 
@@ -45,10 +46,14 @@ Recent decisions affecting current work:
 - [v1.1 Roadmap]: PySide6 desktop editor (not web UI on ESP32) -- richer UX, no flash/RAM cost on device
 - [v1.1 Roadmap]: ArduinoJson v7 with PSRAM allocator for config parsing -- avoids internal SRAM exhaustion
 - [v1.1 Roadmap]: Widget-pool pattern for dynamic UI -- prevents LVGL memory leak on config reload
+- [Phase 5]: ps_malloc() for all buffers >4KB, free() on all return paths
+- [Phase 5]: FAT rename requires explicit remove of target first
+- [Phase 5]: Config version mismatch logs warning but still loads (forward compatibility)
+- [Phase 5]: Raw string literals need custom delimiters when HTML contains )"
 
 ### Pending Todos
 
-None yet.
+None.
 
 ### Blockers/Concerns
 
@@ -59,5 +64,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Roadmap created for v1.1 System Control milestone
+Stopped at: Phase 5 plan 05-01 executed, pending phase verification
 Resume file: None
