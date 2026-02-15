@@ -67,6 +67,7 @@ Recent decisions affecting current work:
 
 1. **Make buttons positionable with variable count per page** (ui) -- variable button count, grid positioning, button reorder within pages
 2. **Add button depressed color to config schema** (ui) -- separate pressed/depressed color per button, with auto-darken default
+3. **Add button sizing options and variable dimensions** (ui) -- 1x1, 2x1, 1x2, 2x2 grid spans per button (ADV-01)
 
 ### Blockers/Concerns
 
