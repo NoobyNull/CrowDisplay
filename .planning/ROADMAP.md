@@ -30,11 +30,13 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Buttons show visible press feedback (color darken + shrink) on tap, confirming the touch registered
   4. Bridge ESP32-S3 appears as a standard USB HID keyboard on the PC with no driver installation required
   5. Touch input remains stable with no I2C bus corruption during sustained use (mutex-protected bus access)
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
+- [ ] 01-01-PLAN.md — Project restructure: dual-firmware architecture, shared protocol header, display hardware skeleton with I2C mutex
+- [ ] 01-02-PLAN.md — Bridge firmware: USB HID keyboard, UART receive with SOF parser, hotkey command dispatch
+- [ ] 01-03-PLAN.md — Display firmware: multi-page hotkey UI with tabview, icons, colors, press feedback, UART transmit
+- [ ] 01-04-PLAN.md — End-to-end verification checkpoint: human tests full hotkey pipeline
 
 ### Phase 2: Wireless Link + Dual Transport
 **Goal**: Display and bridge communicate wirelessly over ESP-NOW with automatic failover between wired and wireless links
