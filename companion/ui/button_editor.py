@@ -1,0 +1,291 @@
+"""
+Button Editor Panel: Side panel for editing button properties
+
+Provides fields for label, color, icon, action type (hotkey/media key),
+keyboard shortcut recorder, and media key dropdown.
+Changes emit signals for live preview in button grid.
+"""
+
+from PySide6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QColorDialog,
+    QComboBox,
+)
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
+
+from companion.config_manager import ACTION_HOTKEY, ACTION_MEDIA_KEY, MOD_NONE
+from companion.ui.icon_picker import IconPicker
+from companion.ui.keyboard_recorder import KeyboardRecorder
+
+# Common USB HID consumer control codes for media keys
+# Format: (display_name, consumer_code)
+MEDIA_KEY_OPTIONS = [
+    ("Play/Pause", 0xCD),
+    ("Next Track", 0xB5),
+    ("Previous Track", 0xB6),
+    ("Stop", 0xB7),
+    ("Volume Up", 0xE9),
+    ("Volume Down", 0xEA),
+    ("Mute", 0xE2),
+    ("Browser Home", 0x0223),
+    ("Browser Back", 0x0224),
+]
+
+
+class ButtonEditor(QWidget):
+    """Side panel for editing button properties"""
+
+    # Signal emitted when button properties change
+    # Payload: updated button dict
+    button_updated = Signal(dict)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.current_button = None
+        self.current_page_idx = 0
+        self.current_button_idx = 0
+        self._updating = False  # Flag to prevent recursion during updates
+
+        # Create widgets
+        self.label_input = QLineEdit()
+        self.label_input.setMaxLength(16)
+        self.label_input.setPlaceholderText("Button label")
+        self.label_input.textChanged.connect(self._on_label_changed)
+
+        self.description_input = QLineEdit()
+        self.description_input.setMaxLength(32)
+        self.description_input.setPlaceholderText("Description (e.g., Super+1)")
+        self.description_input.textChanged.connect(self._on_description_changed)
+
+        self.color_button = QPushButton("Choose Color")
+        self.color_button.setStyleSheet("background-color: #3498DB; color: white;")
+        self.color_button.clicked.connect(self._on_color_clicked)
+        self.color_display = QLabel()
+        self.color_display.setFixedWidth(30)
+        self.color_display.setFixedHeight(30)
+        self.color_display.setStyleSheet("border: 1px solid #ccc;")
+
+        self.icon_picker = IconPicker()
+        self.icon_picker.icon_selected.connect(self._on_icon_changed)
+
+        self.action_type_combo = QComboBox()
+        self.action_type_combo.addItem("Hotkey", ACTION_HOTKEY)
+        self.action_type_combo.addItem("Media Key", ACTION_MEDIA_KEY)
+        self.action_type_combo.currentIndexChanged.connect(self._on_action_type_changed)
+
+        self.keyboard_recorder = KeyboardRecorder()
+        self.keyboard_recorder.shortcut_confirmed.connect(self._on_shortcut_confirmed)
+
+        # Media key dropdown
+        self.media_key_combo = QComboBox()
+        for name, code in MEDIA_KEY_OPTIONS:
+            self.media_key_combo.addItem(f"{name} (0x{code:02X})", code)
+        self.media_key_combo.currentIndexChanged.connect(self._on_media_key_changed)
+        self.media_key_combo.setVisible(False)  # Hidden by default (Hotkey mode)
+
+        self.apply_button = QPushButton("Apply")
+        self.apply_button.clicked.connect(self._on_apply_clicked)
+
+        # Layout
+        layout = QVBoxLayout(self)
+
+        # Label section
+        layout.addWidget(QLabel("Label:"))
+        layout.addWidget(self.label_input)
+
+        # Description section
+        layout.addWidget(QLabel("Description:"))
+        layout.addWidget(self.description_input)
+
+        # Color section
+        layout.addWidget(QLabel("Color:"))
+        color_layout = QHBoxLayout()
+        color_layout.addWidget(self.color_button)
+        color_layout.addWidget(self.color_display)
+        color_layout.addStretch()
+        layout.addLayout(color_layout)
+
+        # Icon section
+        layout.addWidget(QLabel("Icon:"))
+        layout.addWidget(self.icon_picker)
+
+        # Action type section
+        layout.addWidget(QLabel("Action Type:"))
+        layout.addWidget(self.action_type_combo)
+
+        # Shortcut section (hotkey mode)
+        self.shortcut_label = QLabel("Shortcut:")
+        layout.addWidget(self.shortcut_label)
+        layout.addWidget(self.keyboard_recorder)
+
+        # Media key section (media key mode)
+        self.media_key_label = QLabel("Media Key:")
+        self.media_key_label.setVisible(False)
+        layout.addWidget(self.media_key_label)
+        layout.addWidget(self.media_key_combo)
+
+        # Apply button
+        layout.addStretch()
+        layout.addWidget(self.apply_button)
+
+        self.setLayout(layout)
+        self.setMinimumWidth(280)
+
+    def load_button(self, button_dict: dict, page_idx: int, button_idx: int):
+        """Load button data into editor"""
+        self._updating = True
+
+        self.current_button = button_dict
+        self.current_page_idx = page_idx
+        self.current_button_idx = button_idx
+
+        self.label_input.setText(button_dict.get("label", ""))
+        self.description_input.setText(button_dict.get("description", ""))
+
+        color = button_dict.get("color", 0x3498DB)
+        self._set_color_display(color)
+
+        icon = button_dict.get("icon", "")
+        self.icon_picker.set_symbol(icon)
+
+        action_type = button_dict.get("action_type", ACTION_HOTKEY)
+        self.action_type_combo.setCurrentIndex(0 if action_type == ACTION_HOTKEY else 1)
+        self._update_action_type_visibility(action_type)
+
+        modifiers = button_dict.get("modifiers", MOD_NONE)
+        keycode = button_dict.get("keycode", 0)
+        self.keyboard_recorder.set_shortcut(modifiers, keycode)
+
+        # Load media key consumer code
+        consumer_code = button_dict.get("consumer_code", 0)
+        self._set_media_key_combo(consumer_code)
+
+        self._updating = False
+
+    def get_button(self) -> dict:
+        """Get current button data from editor"""
+        action_type = self.action_type_combo.currentData()
+
+        if action_type == ACTION_MEDIA_KEY:
+            # Media key mode: read consumer code from dropdown
+            consumer_code = self.media_key_combo.currentData() or 0
+            modifiers = 0
+            keycode = 0
+        else:
+            # Hotkey mode: read from keyboard recorder
+            consumer_code = 0
+            modifiers = self.keyboard_recorder.current_modifiers
+            keycode = self.keyboard_recorder.current_keycode
+
+        return {
+            "label": self.label_input.text(),
+            "description": self.description_input.text(),
+            "color": self._get_color_value(),
+            "icon": self.icon_picker.get_symbol(),
+            "action_type": action_type,
+            "modifiers": modifiers,
+            "keycode": keycode,
+            "consumer_code": consumer_code,
+        }
+
+    def _set_media_key_combo(self, consumer_code: int):
+        """Set media key combo to matching consumer code value."""
+        for i in range(self.media_key_combo.count()):
+            if self.media_key_combo.itemData(i) == consumer_code:
+                self.media_key_combo.setCurrentIndex(i)
+                return
+        # If not found, just select first item
+        if self.media_key_combo.count() > 0:
+            self.media_key_combo.setCurrentIndex(0)
+
+    def _update_action_type_visibility(self, action_type: int):
+        """Show/hide shortcut recorder vs media key dropdown based on action type."""
+        is_hotkey = (action_type == ACTION_HOTKEY)
+        self.keyboard_recorder.setVisible(is_hotkey)
+        self.shortcut_label.setVisible(is_hotkey)
+        self.media_key_combo.setVisible(not is_hotkey)
+        self.media_key_label.setVisible(not is_hotkey)
+
+    def _on_label_changed(self):
+        """Label text changed"""
+        if not self._updating:
+            self._emit_update()
+
+    def _on_description_changed(self):
+        """Description text changed"""
+        if not self._updating:
+            self._emit_update()
+
+    def _on_color_clicked(self):
+        """Color button clicked - open color dialog"""
+        color_val = self._get_color_value()
+        qcolor = self._value_to_qcolor(color_val)
+
+        new_color = QColorDialog.getColor(qcolor, self, "Choose Button Color")
+        if new_color.isValid():
+            color_val = self._qcolor_to_value(new_color)
+            self._set_color_display(color_val)
+            self._emit_update()
+
+    def _on_icon_changed(self, icon_str: str):
+        """Icon picker changed"""
+        if not self._updating:
+            self._emit_update()
+
+    def _on_action_type_changed(self, index: int):
+        """Action type combo changed"""
+        action_type = self.action_type_combo.currentData()
+        self._update_action_type_visibility(action_type)
+        if not self._updating:
+            self._emit_update()
+
+    def _on_shortcut_confirmed(self, modifiers: int, keycode: int):
+        """Keyboard recorder confirmed shortcut"""
+        self._emit_update()
+
+    def _on_media_key_changed(self, index: int):
+        """Media key dropdown changed"""
+        if not self._updating:
+            self._emit_update()
+
+    def _on_apply_clicked(self):
+        """Apply button clicked"""
+        button_data = self.get_button()
+        self.button_updated.emit(button_data)
+
+    def _emit_update(self):
+        """Emit button_updated signal with current data"""
+        button_data = self.get_button()
+        self.button_updated.emit(button_data)
+
+    def _set_color_display(self, color_val: int):
+        """Update color display widget"""
+        qcolor = self._value_to_qcolor(color_val)
+        self.color_display.setStyleSheet(f"background-color: {qcolor.name()}; border: 1px solid #ccc;")
+
+    def _get_color_value(self) -> int:
+        """Get color value from display widget"""
+        style = self.color_display.styleSheet()
+        # Extract hex color from background-color: #RRGGBB
+        if "background-color:" in style:
+            hex_str = style.split("background-color:")[1].split(";")[0].strip()
+            if hex_str.startswith("#"):
+                return int(hex_str[1:], 16)
+        return 0x3498DB  # Default fallback
+
+    def _value_to_qcolor(self, color_val: int) -> QColor:
+        """Convert RGB hex value to QColor"""
+        r = (color_val >> 16) & 0xFF
+        g = (color_val >> 8) & 0xFF
+        b = color_val & 0xFF
+        return QColor(r, g, b)
+
+    def _qcolor_to_value(self, qcolor: QColor) -> int:
+        """Convert QColor to RGB hex value"""
+        return (qcolor.red() << 16) | (qcolor.green() << 8) | qcolor.blue()
