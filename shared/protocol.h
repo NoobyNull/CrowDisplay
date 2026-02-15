@@ -17,10 +17,12 @@
 // --- Message Types ---------------------------------------------------
 
 enum MsgType : uint8_t {
-    MSG_HOTKEY     = 0x01,  // Display -> Bridge: fire keystroke
-    MSG_HOTKEY_ACK = 0x02,  // Bridge -> Display: keystroke delivered
-    MSG_STATS      = 0x03,  // Bridge -> Display: system stats payload
-    MSG_MEDIA_KEY  = 0x04,  // Display -> Bridge: consumer control key
+    MSG_HOTKEY      = 0x01,  // Display -> Bridge: fire keystroke
+    MSG_HOTKEY_ACK  = 0x02,  // Bridge -> Display: keystroke delivered
+    MSG_STATS       = 0x03,  // Bridge -> Display: system stats payload
+    MSG_MEDIA_KEY   = 0x04,  // Display -> Bridge: consumer control key
+    MSG_POWER_STATE = 0x05,  // Bridge -> Display: PC power state change
+    MSG_TIME_SYNC   = 0x06,  // Bridge -> Display: epoch time from companion
 };
 
 // --- Payload Structs -------------------------------------------------
@@ -47,6 +49,17 @@ struct __attribute__((packed)) StatsPayload {
 
 struct __attribute__((packed)) MediaKeyMsg {
     uint16_t consumer_code;   // USB HID consumer control usage code (e.g. 0x00CD = play/pause)
+};
+
+#define POWER_SHUTDOWN 0
+#define POWER_WAKE     1
+
+struct __attribute__((packed)) PowerStateMsg {
+    uint8_t state;            // POWER_SHUTDOWN (0) or POWER_WAKE (1)
+};
+
+struct __attribute__((packed)) TimeSyncMsg {
+    uint32_t epoch_seconds;   // Unix timestamp from companion (little-endian)
 };
 
 // --- Modifier Masks --------------------------------------------------
