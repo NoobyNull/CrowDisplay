@@ -146,3 +146,17 @@ void lvgl_init() {
 void lvgl_tick() {
   lv_timer_handler();
 }
+
+// ============================================================
+// Brightness control wrappers
+// ============================================================
+static uint8_t current_brightness = 200;
+
+void set_backlight(uint8_t level) {
+  current_brightness = level;
+  lcd.setBrightness(level);
+}
+
+uint8_t get_backlight() {
+  return current_brightness;
+}
