@@ -65,7 +65,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None.
+1. **Make buttons positionable with variable count per page** (ui) -- variable button count, grid positioning, button reorder within pages
 
 ### Blockers/Concerns
 
