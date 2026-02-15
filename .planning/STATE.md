@@ -10,27 +10,27 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 ## Current Position
 
 Phase: 1 of 5 (Wired Command Foundation)
-Plan: 2 of 4 in current phase
+Plan: 3 of 4 in current phase
 Status: Executing
-Last activity: 2026-02-15 -- Completed 01-02-PLAN.md
+Last activity: 2026-02-15 -- Completed 01-03-PLAN.md
 
-Progress: [██░░░░░░░░] 10%
+Progress: [███░░░░░░░] 15%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2
+- Total plans completed: 3
 - Average duration: 4min
-- Total execution time: 0.13 hours
+- Total execution time: 0.18 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01 | 2 | 8min | 4min |
+| 01 | 3 | 11min | 4min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5min), 01-02 (3min)
+- Last 5 plans: 01-01 (5min), 01-02 (3min), 01-03 (3min)
 - Trend: Accelerating
 
 *Updated after each plan completion*
@@ -51,6 +51,9 @@ Recent decisions affecting current work:
 - [01-02]: Keyboard only, no consumer control (media keys deferred to Phase 3 per BRDG-04)
 - [01-02]: delay(20) keystroke hold, delay(1) main loop -- bridge is maximally responsive
 - [01-02]: 64-byte poll limit per uart_poll() cycle to prevent main loop blocking
+- [01-03]: Page 3 media keys replaced with keyboard-only dev shortcuts (consumer control deferred to Phase 3)
+- [01-03]: UART1 on GPIO 10/11 for display-to-bridge link at 115200 baud
+- [01-03]: Key codes defined locally in ui.cpp (display does not include USBHIDKeyboard.h)
 
 ### Pending Todos
 
@@ -65,5 +68,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 01-02-PLAN.md (bridge USB HID keyboard + UART receive + dispatch loop)
+Stopped at: Completed 01-03-PLAN.md (display hotkey UI + UART transmit module)
 Resume file: None
