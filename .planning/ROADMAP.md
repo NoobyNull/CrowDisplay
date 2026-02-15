@@ -100,11 +100,11 @@ Plans:
   3. SoftAP auto-stops after 5 minutes of inactivity, or immediately when the user taps "Apply and Exit"
   4. Hotkey commands continue to reach the PC over ESP-NOW while config mode is active (WiFi channel pinned to avoid ESP-NOW disruption)
   5. OTA firmware upload is available on the same HTTP server alongside config upload
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 07-01: TBD
-- [ ] 07-02: TBD
+- [ ] 07-01-PLAN.md -- Merge OTA into unified config_server, WiFi channel pinning, inactivity timeout, error propagation fix
+- [ ] 07-02-PLAN.md -- Config mode UI screen with header icon, SSID/password/IP display, Apply & Exit button
 
 ### Phase 8: Desktop GUI Editor
 **Goal**: User designs hotkey layouts visually in a desktop app and deploys them directly to the device over WiFi
