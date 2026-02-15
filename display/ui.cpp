@@ -1,8 +1,11 @@
 #include <lvgl.h>
 #include <Arduino.h>
+#include <ctime>
 #include "protocol.h"
 #include "display_hw.h"
 #include "espnow_link.h"
+#include "battery.h"
+#include "power.h"
 
 // ============================================================
 //  Key codes matching USB HID usage table (Arduino USBHIDKeyboard)
@@ -129,8 +132,32 @@ static lv_obj_t *status_label = nullptr;
 static lv_obj_t *stats_header = nullptr;
 static bool stats_visible = false;
 
+// Device status header labels
+static lv_obj_t *batt_label = nullptr;
+static lv_obj_t *link_label = nullptr;
+static lv_obj_t *bright_btn = nullptr;
+
+// Clock mode screen
+static lv_obj_t *main_screen = nullptr;
+static lv_obj_t *clock_screen = nullptr;
+static lv_obj_t *clock_time_label = nullptr;
+static lv_obj_t *clock_batt_label = nullptr;
+
 // Stats header labels (row 1: cpu%, ram%, gpu%, cpu_temp, gpu_temp; row 2: net_up, net_down, disk%)
 static lv_obj_t *stat_labels[8] = {};
+
+// Forward declarations
+void update_clock_time();
+
+// ============================================================
+//  Brightness Button Callback
+// ============================================================
+static void brightness_event_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_CLICKED) {
+        power_cycle_brightness();
+    }
+}
 
 // ============================================================
 //  Button Event Handler
@@ -353,9 +380,80 @@ void hide_stats_header() {
 }
 
 // ============================================================
+//  Public: update_device_status() -- Update header indicators
+// ============================================================
+void update_device_status(uint8_t battery_pct, bool espnow_linked, uint8_t brightness_level) {
+    // Battery label
+    if (batt_label) {
+        if (battery_pct == 0xFF) {
+            lv_label_set_text(batt_label, "BAT N/A");
+            lv_obj_set_style_text_color(batt_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
+        } else {
+            lv_label_set_text_fmt(batt_label, "BAT %d%%", battery_pct);
+            if (battery_pct > 50)
+                lv_obj_set_style_text_color(batt_label, lv_color_hex(CLR_GREEN), LV_PART_MAIN);
+            else if (battery_pct >= 20)
+                lv_obj_set_style_text_color(batt_label, lv_color_hex(CLR_YELLOW), LV_PART_MAIN);
+            else
+                lv_obj_set_style_text_color(batt_label, lv_color_hex(CLR_RED), LV_PART_MAIN);
+        }
+    }
+
+    // Link indicator
+    if (link_label) {
+        if (espnow_linked)
+            lv_obj_set_style_text_color(link_label, lv_color_hex(0x2ECC71), LV_PART_MAIN);
+        else
+            lv_obj_set_style_text_color(link_label, lv_color_hex(0x7F8C8D), LV_PART_MAIN);
+    }
+
+    // Brightness indicator is static (tap does the cycling)
+    (void)brightness_level;
+}
+
+// ============================================================
+//  Public: show_clock_mode() -- Switch to clock screen
+// ============================================================
+void show_clock_mode() {
+    if (clock_screen) {
+        update_clock_time();
+        lv_scr_load(clock_screen);
+    }
+}
+
+// ============================================================
+//  Public: show_hotkey_view() -- Switch back to main screen
+// ============================================================
+void show_hotkey_view() {
+    if (main_screen) {
+        lv_scr_load(main_screen);
+    }
+}
+
+// ============================================================
+//  Public: update_clock_time() -- Refresh clock display
+// ============================================================
+void update_clock_time() {
+    if (!clock_time_label || !clock_batt_label) return;
+
+    time_t now = time(nullptr);
+    struct tm *tm = localtime(&now);
+    lv_label_set_text_fmt(clock_time_label, "%02d:%02d", tm->tm_hour, tm->tm_min);
+
+    BatteryState bat = battery_read();
+    if (bat.available)
+        lv_label_set_text_fmt(clock_batt_label, "BAT %d%%", bat.percent);
+    else
+        lv_label_set_text(clock_batt_label, "BAT N/A");
+}
+
+// ============================================================
 //  Public: create_ui() -- Build the complete hotkey tabview UI
 // ============================================================
 void create_ui() {
+    // Save reference to the main screen before adding widgets
+    main_screen = lv_scr_act();
+
     // Dark background
     lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x0f0f23), LV_PART_MAIN);
 
@@ -368,18 +466,60 @@ void create_ui() {
     lv_obj_set_style_radius(header, 0, LV_PART_MAIN);
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
+    // Title on the left
     lv_obj_t *title = lv_label_create(header);
-    lv_label_set_text(title, LV_SYMBOL_KEYBOARD "  Hyprland Hotkeys");
+    lv_label_set_text(title, LV_SYMBOL_KEYBOARD "  Hotkeys");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_set_style_text_color(title, lv_color_hex(0xE0E0E0), LV_PART_MAIN);
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 15, 0);
 
-    // Status label
+    // Status label (center-ish)
     status_label = lv_label_create(header);
     lv_label_set_text(status_label, LV_SYMBOL_USB " Ready");
     lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_set_style_text_color(status_label, lv_color_hex(0x2ECC71), LV_PART_MAIN);
-    lv_obj_align(status_label, LV_ALIGN_RIGHT_MID, -15, 0);
+    lv_obj_align(status_label, LV_ALIGN_CENTER, 0, 0);
+
+    // Device status indicators on the right side of header
+    // Battery label
+    batt_label = lv_label_create(header);
+    lv_label_set_text(batt_label, "BAT --%");
+    lv_obj_set_style_text_font(batt_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(batt_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
+    lv_obj_align(batt_label, LV_ALIGN_RIGHT_MID, -15, 0);
+
+    // Link indicator
+    link_label = lv_label_create(header);
+    lv_label_set_text(link_label, LV_SYMBOL_WIFI);
+    lv_obj_set_style_text_font(link_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(link_label, lv_color_hex(0x7F8C8D), LV_PART_MAIN);  // grey initially
+    lv_obj_align(link_label, LV_ALIGN_RIGHT_MID, -105, 0);
+
+    // Brightness button (tappable)
+    bright_btn = lv_label_create(header);
+    lv_label_set_text(bright_btn, LV_SYMBOL_IMAGE);
+    lv_obj_set_style_text_font(bright_btn, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_set_style_text_color(bright_btn, lv_color_hex(CLR_YELLOW), LV_PART_MAIN);
+    lv_obj_align(bright_btn, LV_ALIGN_RIGHT_MID, -135, 0);
+    lv_obj_add_flag(bright_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(bright_btn, brightness_event_cb, LV_EVENT_CLICKED, nullptr);
+
+    // --- Clock mode screen (created but not loaded) ---
+    clock_screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(clock_screen, lv_color_hex(0x0f0f23), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(clock_screen, LV_OPA_COVER, LV_PART_MAIN);
+
+    clock_time_label = lv_label_create(clock_screen);
+    lv_label_set_text(clock_time_label, "00:00");
+    lv_obj_set_style_text_font(clock_time_label, &lv_font_montserrat_40, LV_PART_MAIN);
+    lv_obj_set_style_text_color(clock_time_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_align(clock_time_label, LV_ALIGN_CENTER, 0, -30);
+
+    clock_batt_label = lv_label_create(clock_screen);
+    lv_label_set_text(clock_batt_label, "BAT --%");
+    lv_obj_set_style_text_font(clock_batt_label, &lv_font_montserrat_22, LV_PART_MAIN);
+    lv_obj_set_style_text_color(clock_batt_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
+    lv_obj_align(clock_batt_label, LV_ALIGN_CENTER, 0, 30);
 
     // Stats header (hidden by default, shown on first MSG_STATS)
     create_stats_header();
@@ -404,5 +544,5 @@ void create_ui() {
         create_hotkey_page(tab, pages[i]);
     }
 
-    Serial.println("UI created: 3 Hyprland pages (Windows/System/Media), 36 hotkey buttons, stats header ready");
+    Serial.println("UI created: 3 pages, 36 buttons, stats header, device status, clock screen ready");
 }
