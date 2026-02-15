@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Tap a button on the display, the correct keyboard shortcut fires on the PC -- reliably, with minimal latency, whether connected by wire or wirelessly.
-**Current focus:** v1.1 milestone complete. No active phase.
+**Current focus:** Phase 9 - Tweaks and Break-Fix (v0.9.1)
 
 ## Current Position
 
-Phase: 8 of 8 (Desktop GUI Editor) -- COMPLETE
-Plan: 3 of 3 in current phase (all complete)
-Status: Phase 8 complete, v1.1 milestone shipped
-Last activity: 2026-02-15 -- Phase 8 complete (desktop GUI editor, beta test approved)
+Phase: 9 of 9 (Tweaks and Break-Fix v0.9.1)
+Plan: 0 of TBD in current phase
+Status: Ready to plan
+Last activity: 2026-02-15 -- Phase 9 added (tweaks, break-fix, new features from beta testing)
 
-Progress: [####################] 100% (v1.0 complete, v1.1 complete)
+Progress: [##################..] 89% (v1.0 complete, v1.1 beta, v0.9.1 pending)
 
 ## Performance Metrics
 

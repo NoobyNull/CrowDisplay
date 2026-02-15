@@ -3,7 +3,8 @@
 ## Milestones
 
 - [x] **v1.0 MVP** - Phases 1-4 (shipped 2026-02-15)
-- [x] **v1.1 System Control** - Phases 5-8 (shipped 2026-02-15)
+- [x] **v0.8 System Control (beta)** - Phases 5-8 (shipped 2026-02-15)
+- [ ] **v0.9.1 Tweaks and Break-Fix** - Phase 9 (in progress)
 
 ## Phases
 
@@ -51,7 +52,7 @@ Plans:
 
 </details>
 
-## v1.1 System Control (Shipped 2026-02-15)
+## v0.8 System Control — beta (Shipped 2026-02-15)
 
 **Milestone Goal:** Make the display fully configurable -- all hotkey layouts, button properties, and visual assets defined by config files on SD card, editable via a Linux GUI app and pushed over WiFi.
 
@@ -126,7 +127,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 5 -> 6 -> 7 -> 8
+Phases execute in numeric order: 5 -> 6 -> 7 -> 8 -> 9
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -134,7 +135,28 @@ Phases execute in numeric order: 5 -> 6 -> 7 -> 8
 | 2. Wireless Link (merged) | v1.0 | N/A | Complete | 2026-02-15 |
 | 3. Stats Display + Companion | v1.0 | 4/4 | Complete | 2026-02-15 |
 | 4. Battery + Power States | v1.0 | 3/3 | Complete | 2026-02-15 |
-| 5. Config Data Model + SD Loading | v1.1 | 1/1 | Complete | 2026-02-15 |
-| 6. Data-Driven Display UI | v1.1 | 2/2 | Complete | 2026-02-15 |
-| 7. Config Server (SoftAP + HTTP) | v1.1 | 2/2 | Complete | 2026-02-15 |
-| 8. Desktop GUI Editor | v1.1 | 3/3 | Complete | 2026-02-15 |
+| 5. Config Data Model + SD Loading | v0.8 | 1/1 | Complete | 2026-02-15 |
+| 6. Data-Driven Display UI | v0.8 | 2/2 | Complete | 2026-02-15 |
+| 7. Config Server (SoftAP + HTTP) | v0.8 | 2/2 | Complete | 2026-02-15 |
+| 8. Desktop GUI Editor | v0.8 | 3/3 | Complete | 2026-02-15 |
+| 9. Tweaks and Break-Fix | v0.9.1 | 0/TBD | Not started | - |
+
+## v0.9.1 Tweaks and Break-Fix
+
+**Milestone Goal:** Polish the beta into a solid release -- fix editor/firmware gaps from beta testing, add configurable UI features, expand system integration.
+
+### Phase 9: Tweaks and Break-Fix (v0.9.1)
+**Goal**: Fix beta issues and add missing features identified during v0.8 testing -- button grid flexibility, UI polish, system integration, display modes
+**Depends on**: Phase 8
+**Requirements**: Derived from beta testing todos (v0.9.1.1 - v0.9.1.6)
+**Success Criteria** (what must be TRUE):
+  1. Buttons are positionable with variable count per page (v0.9.1.1)
+  2. Button depressed/pressed color is configurable per button (v0.9.1.2)
+  3. Buttons support variable sizes: 1x1, 2x1, 1x2, 2x2 grid spans (v0.9.1.3)
+  4. Host OS notifications forward to display as toast overlays with app filtering (v0.9.1.4)
+  5. Stats header monitors are selectable and placeable with expanded monitor types (v0.9.1.5)
+  6. Four display modes available: standby, macro pad, picture frame, clock with analog+digital (v0.9.1.6)
+**Plans**: TBD
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 9 to break down)
