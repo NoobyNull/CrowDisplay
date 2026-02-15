@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 Phase: 3 of 5 (Stats Display + Companion App)
 Plan: 3 of 4 in current phase
 Status: Executing
-Last activity: 2026-02-15 -- Completed 03-03 (Python companion app)
+Last activity: 2026-02-15 -- Completed 03-02 (display UI rework)
 
 Progress: [██████░░░░] 55%
 
@@ -28,11 +28,11 @@ Progress: [██████░░░░] 55%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01 | 3 | 11min | 4min |
-| 03 | 2 | 4min | 2min |
+| 03 | 3 | 8min | 3min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5min), 01-02 (3min), 01-03 (3min), 03-01 (2min), 03-03 (2min)
-- Trend: Accelerating
+- Last 5 plans: 01-02 (3min), 01-03 (3min), 03-01 (2min), 03-02 (4min), 03-03 (2min)
+- Trend: Stable
 
 *Updated after each plan completion*
 
@@ -60,6 +60,9 @@ Recent decisions affecting current work:
 - [01-03]: Key codes defined locally in ui.cpp (display does not include USBHIDKeyboard.h)
 - [03-01]: USBHIDVendor 63-byte reports with no size prepend (matches companion app expectations)
 - [03-01]: Stats relay is fire-and-forget -- no ACK from display for MSG_STATS
+- [03-02]: Stats header hidden by default, auto-shows on first MSG_STATS, auto-hides after 5s timeout
+- [03-02]: Generic espnow_poll_msg() queues non-ACK messages separately from ACK path
+- [03-02]: Media keys use is_media flag in Hotkey struct to dispatch via send_media_key_to_bridge()
 - [03-03]: Python with hidapi for companion app (per user discretion and research)
 - [03-03]: GPU detection chain: NVIDIA (pynvml) -> AMD (sysfs) -> 0xFF fallback
 - [03-03]: Leading 0x00 report ID byte for hidapi Linux HID writes
@@ -77,5 +80,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 03-03-PLAN.md (Python companion app). Ready for 03-04.
+Stopped at: Completed 03-02-PLAN.md (display UI rework for Hyprland + stats header). Ready for 03-03.
 Resume file: None
