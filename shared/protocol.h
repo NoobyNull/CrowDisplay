@@ -23,7 +23,8 @@ enum MsgType : uint8_t {
     MSG_MEDIA_KEY   = 0x04,  // Display -> Bridge: consumer control key
     MSG_POWER_STATE = 0x05,  // Bridge -> Display: PC power state change
     MSG_TIME_SYNC   = 0x06,  // Bridge -> Display: epoch time from companion
-    MSG_PING        = 0x07,  // Display -> Bridge: heartbeat (bridge replies with ACK)
+    MSG_PING         = 0x07,  // Display -> Bridge: heartbeat (bridge replies with ACK)
+    MSG_NOTIFICATION = 0x08,  // Bridge -> Display: desktop notification
 };
 
 // --- Stat Type Enum (for TLV stats protocol) ------------------------
@@ -117,6 +118,14 @@ struct __attribute__((packed)) PowerStateMsg {
 struct __attribute__((packed)) TimeSyncMsg {
     uint32_t epoch_seconds;   // Unix timestamp from companion (little-endian)
 };
+
+struct __attribute__((packed)) NotificationMsg {
+    char app_name[32];   // Source app (null-terminated, truncated)
+    char summary[100];   // Notification title
+    char body[116];      // Notification body (truncated to fit)
+};
+// Total: 248 bytes, fits within 250-byte ESP-NOW limit
+static_assert(sizeof(NotificationMsg) == 248, "NotificationMsg must be 248 bytes");
 
 // --- Modifier Masks --------------------------------------------------
 
