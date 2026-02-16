@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 ## Current Position
 
 Phase: 9 of 9 (Tweaks and Break-Fix v0.9.1)
-Plan: 5 of 5 in current phase
-Status: Executing
-Last activity: 2026-02-15 -- Completed 09-03 Configurable Stats Header with TLV Protocol
+Plan: 5 of 5 in current phase (COMPLETE)
+Status: Phase Complete
+Last activity: 2026-02-16 -- Completed 09-05 Desktop Notification Forwarding
 
-Progress: [###################.] 96% (v1.0 complete, v1.1 beta, v0.9.1 3/5 plans have summaries)
+Progress: [####################] 100% (v1.0 complete, v1.1 beta, v0.9.1 5/5 plans have summaries)
 
 ## Performance Metrics
 
@@ -34,7 +34,7 @@ Progress: [###################.] 96% (v1.0 complete, v1.1 beta, v0.9.1 3/5 plans
 | 06 | 2 | 6min | 3min |
 | 07 | 2 | 11min | 5.5min |
 | 08 | 3 | 7min | 2.3min |
-| 09 | 3 | ~56min | ~19min |
+| 09 | 5 | ~60min | ~12min |
 
 *Updated after each plan completion*
 
@@ -72,6 +72,11 @@ Recent decisions affecting current work:
 - [Phase 9]: TLV stats protocol with first-byte heuristic for backward compat (count <= 0x14 = TLV, > 0x14 = legacy)
 - [Phase 9]: Max 8 configurable stats in header, position-based ordering
 - [Phase 9]: pynvml for extended GPU metrics (memory, power, frequency)
+- [Phase 9]: NotificationMsg 248 bytes (32+100+116) fits ESP-NOW 250-byte limit
+- [Phase 9]: Notifications disabled by default, opt-in via notifications_enabled config flag
+- [Phase 9]: Empty notification_filter = forward ALL notifications
+- [Phase 9]: Toast overlay replaces previous (no stacking) to prevent LVGL memory leaks
+- [Phase 9]: D-Bus session bus eavesdrop via AddMatch for Notify method calls
 
 ### Pending Todos
 
@@ -89,6 +94,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-15
-Stopped at: Completed 09-03-PLAN.md (Configurable Stats Header with TLV Protocol)
+Last session: 2026-02-16
+Stopped at: Completed 09-05-PLAN.md (Desktop Notification Forwarding) -- Phase 9 complete
 Resume file: None
