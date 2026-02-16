@@ -386,6 +386,8 @@ static void button_to_json(JsonObject obj, const ButtonConfig& btn) {
     obj["grid_row"] = btn.grid_row;
     obj["grid_col"] = btn.grid_col;
     obj["pressed_color"] = btn.pressed_color;
+    obj["col_span"] = btn.col_span;
+    obj["row_span"] = btn.row_span;
 }
 
 // Helper: Deserialize button from JSON object
@@ -404,6 +406,10 @@ static void json_to_button(JsonObject obj, ButtonConfig& btn) {
     if (!obj["grid_col"].isNull()) btn.grid_col = obj["grid_col"].as<int8_t>();
     if (!obj["pressed_color"].isNull()) btn.pressed_color = obj["pressed_color"].as<uint32_t>();
 
+    // Grid span fields (v0.9.1 - default 1 if missing for backward compat)
+    btn.col_span = obj["col_span"] | (uint8_t)1;
+    btn.row_span = obj["row_span"] | (uint8_t)1;
+
     // Validate grid positioning constraints
     if (btn.grid_row < -1 || btn.grid_row >= GRID_ROWS) {
         Serial.printf("CONFIG: WARNING - grid_row %d out of range [-1,%d], clamping\n",
@@ -421,6 +427,36 @@ static void json_to_button(JsonObject obj, ButtonConfig& btn) {
                       btn.grid_row, btn.grid_col);
         btn.grid_row = -1;
         btn.grid_col = -1;
+    }
+
+    // Validate col_span
+    if (btn.col_span < 1 || btn.col_span > 4) {
+        Serial.printf("CONFIG: WARNING - col_span=%d invalid, clamping to 1\n", btn.col_span);
+        btn.col_span = 1;
+    }
+
+    // Validate row_span
+    if (btn.row_span < 1 || btn.row_span > 3) {
+        Serial.printf("CONFIG: WARNING - row_span=%d invalid, clamping to 1\n", btn.row_span);
+        btn.row_span = 1;
+    }
+
+    // Validate span doesn't exceed grid bounds (only for explicitly positioned buttons)
+    if (btn.grid_col >= 0 && btn.grid_col + btn.col_span > GRID_COLS) {
+        Serial.printf("CONFIG: WARNING - col %d + span %d exceeds grid, clamping span\n",
+                      btn.grid_col, btn.col_span);
+        btn.col_span = GRID_COLS - btn.grid_col;
+    }
+    if (btn.grid_row >= 0 && btn.grid_row + btn.row_span > GRID_ROWS) {
+        Serial.printf("CONFIG: WARNING - row %d + span %d exceeds grid, clamping span\n",
+                      btn.grid_row, btn.row_span);
+        btn.row_span = GRID_ROWS - btn.grid_row;
+    }
+
+    // Auto-flow buttons ignore span (force 1x1)
+    if (btn.grid_row < 0 || btn.grid_col < 0) {
+        btn.col_span = 1;
+        btn.row_span = 1;
     }
 }
 

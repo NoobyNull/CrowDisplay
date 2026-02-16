@@ -57,12 +57,15 @@ struct ButtonConfig {
     int8_t grid_row;          // -1 = auto-flow (default), 0-2 = explicit row
     int8_t grid_col;          // -1 = auto-flow (default), 0-3 = explicit column
     uint32_t pressed_color;   // 0x000000 = auto-darken (default), else explicit color
+    uint8_t col_span;         // Column span: 1-4 (default 1, only for explicit positioning)
+    uint8_t row_span;         // Row span: 1-3 (default 1, only for explicit positioning)
 
     // Constructor with defaults
     ButtonConfig()
         : label(""), description(""), color(0xFFFFFF), icon(""),
           action_type(ACTION_HOTKEY), modifiers(0), keycode(0),
-          consumer_code(0), grid_row(-1), grid_col(-1), pressed_color(0x000000) {}
+          consumer_code(0), grid_row(-1), grid_col(-1), pressed_color(0x000000),
+          col_span(1), row_span(1) {}
 };
 
 // ============================================================
