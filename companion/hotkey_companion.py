@@ -32,12 +32,15 @@ import os
 import threading
 import asyncio
 
+from companion.action_executor import execute_action
+from companion.config_manager import get_config_manager
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 VENDOR_ID = 0x303A          # Espressif
-PRODUCT_ID = 0x0002         # Default ESP32-S3 TinyUSB
+PRODUCT_ID = 0x1001         # CrowPanel HotkeyBridge
 PRODUCT_STRING = "HotkeyBridge"
 UPDATE_INTERVAL = 1.0       # Seconds between stat reports (1 Hz)
 
@@ -75,6 +78,7 @@ MSG_STATS        = 0x03
 MSG_POWER_STATE  = 0x05
 MSG_TIME_SYNC    = 0x06
 MSG_NOTIFICATION = 0x08
+MSG_BUTTON_PRESS = 0x0B
 
 # Power state values
 POWER_SHUTDOWN = 0
@@ -269,7 +273,7 @@ def _run_notification_listener(app_filter, callback):
         loop.close()
 
 
-def send_notification_to_display(device, app_name, summary, body):
+def send_notification_to_display(device, app_name, summary, body, hid_lock=None):
     """Encode and send a MSG_NOTIFICATION payload to the bridge.
 
     NotificationMsg: app_name[32] + summary[100] + body[116] = 248 bytes.
@@ -284,7 +288,11 @@ def send_notification_to_display(device, app_name, summary, body):
                body_bytes.ljust(116, b'\x00'))
 
     try:
-        device.write(b"\x00" + bytes([MSG_NOTIFICATION]) + payload)
+        if hid_lock:
+            with hid_lock:
+                device.write(b"\x06" + bytes([MSG_NOTIFICATION]) + payload)
+        else:
+            device.write(b"\x06" + bytes([MSG_NOTIFICATION]) + payload)
     except (IOError, OSError) as exc:
         logging.debug("Failed to send notification: %s", exc)
 
@@ -312,29 +320,108 @@ def load_notification_config(config_path=None):
 
 
 # ---------------------------------------------------------------------------
+# Vendor HID read thread
+# ---------------------------------------------------------------------------
+
+def _vendor_read_thread(device, hid_lock, config_mgr):
+    """Background thread: reads vendor HID input reports from bridge."""
+    global running
+    while running:
+        try:
+            with hid_lock:
+                data = device.read(63, timeout_ms=100)
+            if data and len(data) >= 3:
+                msg_type = data[0]
+                if msg_type == MSG_BUTTON_PRESS:
+                    page_idx = data[1]
+                    widget_idx = data[2]
+                    logging.info("Button press: page=%d widget=%d", page_idx, widget_idx)
+                    # Execute action on a separate thread to avoid blocking reads
+                    threading.Thread(
+                        target=execute_action,
+                        args=(config_mgr, page_idx, widget_idx),
+                        daemon=True
+                    ).start()
+        except (IOError, OSError):
+            logging.warning("Vendor HID read error, device may have disconnected")
+            break
+        except Exception as exc:
+            logging.debug("Vendor read thread error: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Config file watcher
+# ---------------------------------------------------------------------------
+
+def _start_config_watcher(config_path, config_mgr):
+    """Start watching config file for changes, reload on modification."""
+    try:
+        from watchdog.observers import Observer
+        from watchdog.events import FileSystemEventHandler
+    except ImportError:
+        logging.warning("watchdog not installed -- config auto-reload disabled. "
+                       "Install with: pip install watchdog")
+        return None
+
+    class ConfigReloadHandler(FileSystemEventHandler):
+        def __init__(self):
+            self._timer = None
+            self._debounce_sec = 0.5
+
+        def on_modified(self, event):
+            if os.path.abspath(event.src_path) == os.path.abspath(config_path):
+                if self._timer:
+                    self._timer.cancel()
+                self._timer = threading.Timer(self._debounce_sec, self._reload)
+                self._timer.start()
+
+        def _reload(self):
+            if config_mgr.load_json_file(config_path):
+                logging.info("Config reloaded from %s", config_path)
+            else:
+                logging.warning("Config reload failed from %s", config_path)
+
+    observer = Observer()
+    handler = ConfigReloadHandler()
+    observer.schedule(handler, os.path.dirname(os.path.abspath(config_path)), recursive=False)
+    observer.daemon = True
+    observer.start()
+    logging.info("Config file watcher started for %s", config_path)
+    return observer
+
+
+# ---------------------------------------------------------------------------
 # Power state and time sync helpers
 # ---------------------------------------------------------------------------
 
-def send_power_state(device, state):
+def send_power_state(device, state, hid_lock=None):
     """Send a MSG_POWER_STATE message to the bridge.
 
     Packet: [0x00 report ID] [0x05 MSG_POWER_STATE] [state byte]
     """
     try:
-        device.write(b"\x00" + bytes([MSG_POWER_STATE, state]))
+        if hid_lock:
+            with hid_lock:
+                device.write(b"\x06" + bytes([MSG_POWER_STATE, state]))
+        else:
+            device.write(b"\x06" + bytes([MSG_POWER_STATE, state]))
         logging.info("Sent power state: %s", "SHUTDOWN" if state == POWER_SHUTDOWN else "WAKE")
     except (IOError, OSError) as exc:
         logging.warning("Failed to send power state: %s", exc)
 
 
-def send_time_sync(device):
+def send_time_sync(device, hid_lock=None):
     """Send a MSG_TIME_SYNC message with current epoch seconds.
 
     Packet: [0x00 report ID] [0x06 MSG_TIME_SYNC] [uint32 LE epoch]
     """
     epoch = int(time.time())
     try:
-        device.write(b"\x00" + bytes([MSG_TIME_SYNC]) + struct.pack("<I", epoch))
+        if hid_lock:
+            with hid_lock:
+                device.write(b"\x06" + bytes([MSG_TIME_SYNC]) + struct.pack("<I", epoch))
+        else:
+            device.write(b"\x06" + bytes([MSG_TIME_SYNC]) + struct.pack("<I", epoch))
     except (IOError, OSError) as exc:
         logging.debug("Failed to send time sync: %s", exc)
 
@@ -867,11 +954,29 @@ def main():
         logging.info("Shutting down (no bridge connected)")
         return
 
+    # Thread-safe HID device access
+    hid_lock = threading.Lock()
+
+    # Initialize config manager for action execution
+    config_mgr = get_config_manager()
+    config_mgr.load_json_file(config_path)
+
+    # Start config file watcher for auto-reload
+    config_watcher = _start_config_watcher(config_path, config_mgr)
+
+    # Start vendor HID read thread (receives button presses from bridge)
+    vendor_thread = threading.Thread(
+        target=_vendor_read_thread,
+        args=(device, hid_lock, config_mgr),
+        daemon=True,
+    )
+    vendor_thread.start()
+
     # Start notification listener if enabled (needs device reference for callback)
     if notif_enabled and device is not None:
         notif_thread = threading.Thread(
             target=_run_notification_listener,
-            args=(notif_filter, lambda app, s, b: send_notification_to_display(device, app, s, b)),
+            args=(notif_filter, lambda app, s, b: send_notification_to_display(device, app, s, b, hid_lock)),
             daemon=True,
         )
         notif_thread.start()
@@ -892,7 +997,7 @@ def main():
         # Check for system shutdown signal from D-Bus
         if shutdown_event.is_set():
             logging.info("System shutdown detected, notifying bridge...")
-            send_power_state(device, POWER_SHUTDOWN)
+            send_power_state(device, POWER_SHUTDOWN, hid_lock)
             logging.info("Shutdown signal sent to bridge")
             running = False
             break
@@ -908,7 +1013,8 @@ def main():
         try:
             # Leading 0x00 is the HID report ID byte required by hidapi on
             # Linux. 0x03 is the MSG_STATS type prefix for bridge dispatch.
-            device.write(b"\x00" + bytes([MSG_STATS]) + packed)
+            with hid_lock:
+                device.write(b"\x06" + bytes([MSG_STATS]) + packed)
         except (IOError, OSError) as exc:
             logging.warning("HID write failed (device disconnected?): %s", exc)
             try:
@@ -937,7 +1043,7 @@ def main():
 
         # Send time sync alongside stats (same error handling)
         if device is not None:
-            send_time_sync(device)
+            send_time_sync(device, hid_lock)
 
     # Clean shutdown
     if device is not None:
