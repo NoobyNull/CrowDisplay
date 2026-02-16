@@ -26,7 +26,11 @@ MOD_GUI = 0x08
 # Config constraints
 CONFIG_VERSION = 1
 CONFIG_MAX_PAGES = 16
-CONFIG_MAX_BUTTONS = 16
+CONFIG_MAX_BUTTONS = 12  # 4x3 grid capacity
+
+# Grid dimensions
+GRID_COLS = 4
+GRID_ROWS = 3
 
 # Default colors (hex RGB)
 DEFAULT_COLORS = {
@@ -73,8 +77,11 @@ class ConfigManager:
                                     "modifiers": MOD_NONE,
                                     "keycode": 0,
                                     "consumer_code": 0,
+                                    "grid_row": -1,
+                                    "grid_col": -1,
+                                    "pressed_color": 0,
                                 }
-                                for i in range(12)  # 4×3 grid
+                                for i in range(12)  # 4x3 grid
                             ],
                         },
                         {
@@ -89,6 +96,9 @@ class ConfigManager:
                                     "modifiers": MOD_NONE,
                                     "keycode": 0,
                                     "consumer_code": 0,
+                                    "grid_row": -1,
+                                    "grid_col": -1,
+                                    "pressed_color": 0,
                                 }
                                 for i in range(12)
                             ],
@@ -105,6 +115,9 @@ class ConfigManager:
                                     "modifiers": MOD_NONE,
                                     "keycode": 0,
                                     "consumer_code": 0,
+                                    "grid_row": -1,
+                                    "grid_col": -1,
+                                    "pressed_color": 0,
                                 }
                                 for i in range(12)
                             ],
@@ -201,6 +214,9 @@ class ConfigManager:
                     "modifiers": MOD_NONE,
                     "keycode": 0,
                     "consumer_code": 0,
+                    "grid_row": -1,
+                    "grid_col": -1,
+                    "pressed_color": 0,
                 }
                 for _ in range(12)
             ],
@@ -309,6 +325,22 @@ class ConfigManager:
                     return False, f"Page {pi} button {bi}: invalid color"
                 if button.get("action_type") not in (ACTION_HOTKEY, ACTION_MEDIA_KEY):
                     return False, f"Page {pi} button {bi}: invalid action_type"
+
+                # Validate grid positioning (v0.9.1)
+                grid_row = button.get("grid_row", -1)
+                grid_col = button.get("grid_col", -1)
+                if not isinstance(grid_row, int) or grid_row < -1 or grid_row >= GRID_ROWS:
+                    return False, f"Page {pi} button {bi}: grid_row {grid_row} out of range [-1, {GRID_ROWS - 1}]"
+                if not isinstance(grid_col, int) or grid_col < -1 or grid_col >= GRID_COLS:
+                    return False, f"Page {pi} button {bi}: grid_col {grid_col} out of range [-1, {GRID_COLS - 1}]"
+                # Partial positioning check: both must be set together
+                if (grid_row >= 0) != (grid_col >= 0):
+                    return False, f"Page {pi} button {bi}: partial grid position (row={grid_row}, col={grid_col}); set both or neither"
+
+                # Validate pressed_color
+                pressed_color = button.get("pressed_color", 0)
+                if isinstance(pressed_color, int) and (pressed_color < 0 or pressed_color > 0xFFFFFF):
+                    return False, f"Page {pi} button {bi}: pressed_color out of range [0, 0xFFFFFF]"
 
         return True, ""
 
