@@ -1,8 +1,9 @@
 """
 Button Editor Panel: Side panel for editing button properties
 
-Provides fields for label, color, icon, action type (hotkey/media key),
-keyboard shortcut recorder, and media key dropdown.
+Provides fields for label, color, icon, action type (5 types),
+keyboard shortcut recorder, media key dropdown, app picker,
+shell command input, and URL input.
 Changes emit signals for live preview in button grid.
 """
 
@@ -14,16 +15,23 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QColorDialog,
-    QComboBox,
     QSpinBox,
     QCheckBox,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 
-from companion.config_manager import ACTION_HOTKEY, ACTION_MEDIA_KEY, MOD_NONE
+from companion.config_manager import (
+    ACTION_HOTKEY,
+    ACTION_MEDIA_KEY,
+    ACTION_LAUNCH_APP,
+    ACTION_SHELL_CMD,
+    ACTION_OPEN_URL,
+    MOD_NONE,
+)
 from companion.ui.icon_picker import IconPicker
 from companion.ui.keyboard_recorder import KeyboardRecorder
+from companion.ui.no_scroll_combo import NoScrollComboBox
 
 # Common USB HID consumer control codes for media keys
 # Format: (display_name, consumer_code)
@@ -53,6 +61,7 @@ class ButtonEditor(QWidget):
         self.current_page_idx = 0
         self.current_button_idx = 0
         self._updating = False  # Flag to prevent recursion during updates
+        self._apps_loaded = False  # Lazy-load flag for app picker
 
         # Create widgets
         self.label_input = QLineEdit()
@@ -76,20 +85,69 @@ class ButtonEditor(QWidget):
         self.icon_picker = IconPicker()
         self.icon_picker.icon_selected.connect(self._on_icon_changed)
 
-        self.action_type_combo = QComboBox()
-        self.action_type_combo.addItem("Hotkey", ACTION_HOTKEY)
+        # Action type combo with 5 options
+        self.action_type_combo = NoScrollComboBox()
+        self.action_type_combo.addItem("Keyboard Shortcut", ACTION_HOTKEY)
         self.action_type_combo.addItem("Media Key", ACTION_MEDIA_KEY)
+        self.action_type_combo.addItem("Launch App", ACTION_LAUNCH_APP)
+        self.action_type_combo.addItem("Shell Command", ACTION_SHELL_CMD)
+        self.action_type_combo.addItem("Open URL", ACTION_OPEN_URL)
         self.action_type_combo.currentIndexChanged.connect(self._on_action_type_changed)
 
+        # Keyboard shortcut recorder (for ACTION_HOTKEY)
         self.keyboard_recorder = KeyboardRecorder()
         self.keyboard_recorder.shortcut_confirmed.connect(self._on_shortcut_confirmed)
 
-        # Media key dropdown
-        self.media_key_combo = QComboBox()
+        # Media key dropdown (for ACTION_MEDIA_KEY)
+        self.media_key_combo = NoScrollComboBox()
         for name, code in MEDIA_KEY_OPTIONS:
             self.media_key_combo.addItem(f"{name} (0x{code:02X})", code)
         self.media_key_combo.currentIndexChanged.connect(self._on_media_key_changed)
-        self.media_key_combo.setVisible(False)  # Hidden by default (Hotkey mode)
+        self.media_key_combo.setVisible(False)
+
+        # Launch App section (for ACTION_LAUNCH_APP)
+        self.app_picker_combo = NoScrollComboBox()
+        self.app_picker_combo.currentIndexChanged.connect(self._on_app_selected)
+        self.app_picker_combo.setVisible(False)
+
+        self.launch_cmd_input = QLineEdit()
+        self.launch_cmd_input.setPlaceholderText("Launch command (auto-filled from app)")
+        self.launch_cmd_input.textChanged.connect(self._on_launch_field_changed)
+        self.launch_cmd_input.setVisible(False)
+
+        self.launch_wm_class_input = QLineEdit()
+        self.launch_wm_class_input.setPlaceholderText("WM_CLASS (for focus-or-launch)")
+        self.launch_wm_class_input.textChanged.connect(self._on_launch_field_changed)
+        self.launch_wm_class_input.setVisible(False)
+
+        self.focus_or_launch_check = QCheckBox("Focus existing window if running")
+        self.focus_or_launch_check.setChecked(True)
+        self.focus_or_launch_check.stateChanged.connect(self._on_focus_or_launch_changed)
+        self.focus_or_launch_check.setVisible(False)
+
+        # Shell Command section (for ACTION_SHELL_CMD)
+        self.shell_cmd_input = QLineEdit()
+        self.shell_cmd_input.setPlaceholderText("e.g., notify-send 'Hello'")
+        self.shell_cmd_input.textChanged.connect(self._on_shell_cmd_changed)
+        self.shell_cmd_input.setVisible(False)
+
+        # Open URL section (for ACTION_OPEN_URL)
+        self.url_input = QLineEdit()
+        self.url_input.setPlaceholderText("https://example.com")
+        self.url_input.textChanged.connect(self._on_url_changed)
+        self.url_input.setVisible(False)
+
+        # Labels for new sections (hidden by default)
+        self.launch_label = QLabel("Application:")
+        self.launch_label.setVisible(False)
+        self.launch_cmd_label = QLabel("Launch Command:")
+        self.launch_cmd_label.setVisible(False)
+        self.launch_wm_class_label = QLabel("WM_CLASS:")
+        self.launch_wm_class_label.setVisible(False)
+        self.shell_label = QLabel("Shell Command:")
+        self.shell_label.setVisible(False)
+        self.url_label = QLabel("URL:")
+        self.url_label.setVisible(False)
 
         # Grid positioning spinboxes
         self.grid_row_spin = QSpinBox()
@@ -174,6 +232,23 @@ class ButtonEditor(QWidget):
         layout.addWidget(self.media_key_label)
         layout.addWidget(self.media_key_combo)
 
+        # Launch App section
+        layout.addWidget(self.launch_label)
+        layout.addWidget(self.app_picker_combo)
+        layout.addWidget(self.launch_cmd_label)
+        layout.addWidget(self.launch_cmd_input)
+        layout.addWidget(self.launch_wm_class_label)
+        layout.addWidget(self.launch_wm_class_input)
+        layout.addWidget(self.focus_or_launch_check)
+
+        # Shell Command section
+        layout.addWidget(self.shell_label)
+        layout.addWidget(self.shell_cmd_input)
+
+        # Open URL section
+        layout.addWidget(self.url_label)
+        layout.addWidget(self.url_input)
+
         # Grid positioning section
         layout.addWidget(QLabel("Grid Position:"))
         grid_pos_layout = QHBoxLayout()
@@ -212,6 +287,21 @@ class ButtonEditor(QWidget):
         self.setLayout(layout)
         self.setMinimumWidth(280)
 
+    def _ensure_apps_loaded(self):
+        """Lazy-load the applications list into app_picker_combo."""
+        if self._apps_loaded:
+            return
+        self._apps_loaded = True
+        self.app_picker_combo.clear()
+        self.app_picker_combo.addItem("(Custom)", None)
+        try:
+            from companion.app_scanner import scan_applications
+            apps = scan_applications()
+            for app in apps:
+                self.app_picker_combo.addItem(app.name, app)
+        except Exception:
+            pass  # App scanning failure is non-fatal
+
     def load_button(self, button_dict: dict, page_idx: int, button_idx: int):
         """Load button data into editor"""
         self._updating = True
@@ -230,7 +320,11 @@ class ButtonEditor(QWidget):
         self.icon_picker.set_symbol(icon)
 
         action_type = button_dict.get("action_type", ACTION_HOTKEY)
-        self.action_type_combo.setCurrentIndex(0 if action_type == ACTION_HOTKEY else 1)
+        # Find the correct index by matching itemData
+        for i in range(self.action_type_combo.count()):
+            if self.action_type_combo.itemData(i) == action_type:
+                self.action_type_combo.setCurrentIndex(i)
+                break
         self._update_action_type_visibility(action_type)
 
         modifiers = button_dict.get("modifiers", MOD_NONE)
@@ -240,6 +334,17 @@ class ButtonEditor(QWidget):
         # Load media key consumer code
         consumer_code = button_dict.get("consumer_code", 0)
         self._set_media_key_combo(consumer_code)
+
+        # Load launch app fields
+        self.launch_cmd_input.setText(button_dict.get("launch_command", ""))
+        self.launch_wm_class_input.setText(button_dict.get("launch_wm_class", ""))
+        self.focus_or_launch_check.setChecked(button_dict.get("launch_focus_or_launch", True))
+
+        # Load shell command
+        self.shell_cmd_input.setText(button_dict.get("shell_command", ""))
+
+        # Load URL
+        self.url_input.setText(button_dict.get("url", ""))
 
         # Load grid positioning
         self.grid_row_spin.setValue(button_dict.get("grid_row", -1))
@@ -269,15 +374,17 @@ class ButtonEditor(QWidget):
         action_type = self.action_type_combo.currentData()
 
         if action_type == ACTION_MEDIA_KEY:
-            # Media key mode: read consumer code from dropdown
             consumer_code = self.media_key_combo.currentData() or 0
             modifiers = 0
             keycode = 0
-        else:
-            # Hotkey mode: read from keyboard recorder
+        elif action_type == ACTION_HOTKEY:
             consumer_code = 0
             modifiers = self.keyboard_recorder.current_modifiers
             keycode = self.keyboard_recorder.current_keycode
+        else:
+            consumer_code = 0
+            modifiers = 0
+            keycode = 0
 
         # Grid positioning
         grid_row = self.grid_row_spin.value()
@@ -310,6 +417,11 @@ class ButtonEditor(QWidget):
             "pressed_color": pressed_color,
             "col_span": col_span,
             "row_span": row_span,
+            "launch_command": self.launch_cmd_input.text(),
+            "launch_wm_class": self.launch_wm_class_input.text(),
+            "launch_focus_or_launch": self.focus_or_launch_check.isChecked(),
+            "shell_command": self.shell_cmd_input.text(),
+            "url": self.url_input.text(),
         }
 
     def _set_media_key_combo(self, consumer_code: int):
@@ -323,12 +435,38 @@ class ButtonEditor(QWidget):
             self.media_key_combo.setCurrentIndex(0)
 
     def _update_action_type_visibility(self, action_type: int):
-        """Show/hide shortcut recorder vs media key dropdown based on action type."""
+        """Show/hide action-specific widgets based on action type."""
+        # Shortcut section
         is_hotkey = (action_type == ACTION_HOTKEY)
         self.keyboard_recorder.setVisible(is_hotkey)
         self.shortcut_label.setVisible(is_hotkey)
-        self.media_key_combo.setVisible(not is_hotkey)
-        self.media_key_label.setVisible(not is_hotkey)
+
+        # Media key section
+        is_media = (action_type == ACTION_MEDIA_KEY)
+        self.media_key_combo.setVisible(is_media)
+        self.media_key_label.setVisible(is_media)
+
+        # Launch app section
+        is_launch = (action_type == ACTION_LAUNCH_APP)
+        self.launch_label.setVisible(is_launch)
+        self.app_picker_combo.setVisible(is_launch)
+        self.launch_cmd_label.setVisible(is_launch)
+        self.launch_cmd_input.setVisible(is_launch)
+        self.launch_wm_class_label.setVisible(is_launch)
+        self.launch_wm_class_input.setVisible(is_launch)
+        self.focus_or_launch_check.setVisible(is_launch)
+        if is_launch:
+            self._ensure_apps_loaded()
+
+        # Shell command section
+        is_shell = (action_type == ACTION_SHELL_CMD)
+        self.shell_label.setVisible(is_shell)
+        self.shell_cmd_input.setVisible(is_shell)
+
+        # URL section
+        is_url = (action_type == ACTION_OPEN_URL)
+        self.url_label.setVisible(is_url)
+        self.url_input.setVisible(is_url)
 
     def _on_label_changed(self):
         """Label text changed"""
@@ -369,6 +507,41 @@ class ButtonEditor(QWidget):
 
     def _on_media_key_changed(self, index: int):
         """Media key dropdown changed"""
+        if not self._updating:
+            self._emit_update()
+
+    def _on_app_selected(self, index: int):
+        """App picker dropdown selection changed."""
+        if self._updating:
+            return
+        app = self.app_picker_combo.currentData()
+        if app is None:
+            # (Custom) selected -- don't auto-fill
+            return
+        # Auto-fill launch command and WM_CLASS from AppEntry
+        self._updating = True
+        self.launch_cmd_input.setText(app.exec_cmd)
+        self.launch_wm_class_input.setText(app.wm_class if hasattr(app, 'wm_class') and app.wm_class else app.name)
+        self._updating = False
+        self._emit_update()
+
+    def _on_launch_field_changed(self):
+        """Launch command or WM_CLASS text changed."""
+        if not self._updating:
+            self._emit_update()
+
+    def _on_focus_or_launch_changed(self, state: int):
+        """Focus-or-launch checkbox changed."""
+        if not self._updating:
+            self._emit_update()
+
+    def _on_shell_cmd_changed(self):
+        """Shell command text changed."""
+        if not self._updating:
+            self._emit_update()
+
+    def _on_url_changed(self):
+        """URL text changed."""
         if not self._updating:
             self._emit_update()
 
