@@ -554,6 +554,20 @@ AppConfig config_load() {
         cfg.brightness_level = doc["brightness_level"].as<uint8_t>();
     }
 
+    // Parse display mode settings (v0.9.1) -- defaults if missing
+    cfg.default_mode = doc["default_mode"] | (uint8_t)0;  // MODE_HOTKEYS
+    cfg.slideshow_interval_sec = doc["slideshow_interval_sec"] | (uint16_t)30;
+    cfg.clock_analog = doc["clock_analog"] | false;
+
+    // Validate default_mode range
+    if (cfg.default_mode > 3) {
+        Serial.printf("CONFIG: WARNING - invalid default_mode=%d, using MODE_HOTKEYS\n", cfg.default_mode);
+        cfg.default_mode = 0;
+    }
+    // Validate slideshow interval
+    if (cfg.slideshow_interval_sec < 5) cfg.slideshow_interval_sec = 5;
+    if (cfg.slideshow_interval_sec > 300) cfg.slideshow_interval_sec = 300;
+
     cfg.profiles.clear();
     if (!doc["profiles"].isNull()) {
         JsonArray profiles_array = doc["profiles"].as<JsonArray>();
@@ -658,6 +672,11 @@ bool config_save(const AppConfig& config) {
     doc["version"] = CONFIG_VERSION;
     doc["active_profile_name"] = config.active_profile_name.c_str();
     doc["brightness_level"] = config.brightness_level;
+
+    // Display mode settings (v0.9.1)
+    doc["default_mode"] = config.default_mode;
+    doc["slideshow_interval_sec"] = config.slideshow_interval_sec;
+    doc["clock_analog"] = config.clock_analog;
 
     JsonArray profiles_array = doc["profiles"].to<JsonArray>();
     for (const auto& profile : config.profiles) {

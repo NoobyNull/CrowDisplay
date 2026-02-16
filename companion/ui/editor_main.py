@@ -19,6 +19,16 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QInputDialog,
     QDialog,
+    QGroupBox,
+    QComboBox,
+    QSpinBox,
+    QCheckBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QColorDialog,
+    QAbstractItemView,
+    QScrollArea,
 )
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QColor, QFont, QKeySequence, QAction
@@ -236,6 +246,33 @@ class EditorMainWindow(QMainWindow):
         self.button_editor.button_updated.connect(self._on_button_updated)
         right_layout.addWidget(self.button_editor)
 
+        # Display Modes panel
+        display_group = QGroupBox("Display Modes")
+        display_layout = QGridLayout()
+
+        display_layout.addWidget(QLabel("Default mode:"), 0, 0)
+        self.mode_dropdown = QComboBox()
+        self.mode_dropdown.addItems(["Hotkeys", "Clock", "Picture Frame", "Standby"])
+        self.mode_dropdown.currentIndexChanged.connect(self._on_display_mode_changed)
+        display_layout.addWidget(self.mode_dropdown, 0, 1)
+
+        display_layout.addWidget(QLabel("Slideshow interval (sec):"), 1, 0)
+        self.slideshow_spinbox = QSpinBox()
+        self.slideshow_spinbox.setRange(5, 300)
+        self.slideshow_spinbox.setValue(30)
+        self.slideshow_spinbox.valueChanged.connect(self._on_display_mode_changed)
+        display_layout.addWidget(self.slideshow_spinbox, 1, 1)
+
+        self.analog_checkbox = QCheckBox("Analog clock")
+        self.analog_checkbox.stateChanged.connect(self._on_display_mode_changed)
+        display_layout.addWidget(self.analog_checkbox, 2, 0, 1, 2)
+
+        display_group.setLayout(display_layout)
+        right_layout.addWidget(display_group)
+
+        # Load display mode settings from config
+        self._load_display_mode_settings()
+
         # Deploy button
         self.deploy_btn = QPushButton("Deploy to Device")
         self.deploy_btn.setMinimumHeight(40)
@@ -418,6 +455,19 @@ class EditorMainWindow(QMainWindow):
                 self.statusBar().showMessage(f"Saved: {file_path}")
             else:
                 QMessageBox.critical(self, "Error", f"Failed to save: {file_path}")
+
+    def _load_display_mode_settings(self):
+        """Load display mode settings from config into UI"""
+        config = self.config_manager.config
+        self.mode_dropdown.setCurrentIndex(config.get("default_mode", 0))
+        self.slideshow_spinbox.setValue(config.get("slideshow_interval_sec", 30))
+        self.analog_checkbox.setChecked(config.get("clock_analog", False))
+
+    def _on_display_mode_changed(self):
+        """Display mode settings changed in UI"""
+        self.config_manager.config["default_mode"] = self.mode_dropdown.currentIndex()
+        self.config_manager.config["slideshow_interval_sec"] = self.slideshow_spinbox.value()
+        self.config_manager.config["clock_analog"] = self.analog_checkbox.isChecked()
 
     def _on_deploy_clicked(self):
         """Deploy button clicked"""

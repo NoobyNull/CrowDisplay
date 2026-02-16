@@ -61,6 +61,9 @@ class ConfigManager:
             "version": CONFIG_VERSION,
             "active_profile_name": "Default",
             "brightness_level": 100,
+            "default_mode": 0,
+            "slideshow_interval_sec": 30,
+            "clock_analog": False,
             "profiles": [
                 {
                     "name": "Default",
@@ -284,6 +287,19 @@ class ConfigManager:
         # Check version
         if self.config.get("version") != CONFIG_VERSION:
             return False, "Config version mismatch"
+
+        # Check display mode settings
+        default_mode = self.config.get("default_mode", 0)
+        if not isinstance(default_mode, int) or default_mode < 0 or default_mode > 3:
+            return False, f"Invalid default_mode: {default_mode} (must be 0-3)"
+
+        slideshow_interval = self.config.get("slideshow_interval_sec", 30)
+        if not isinstance(slideshow_interval, int) or slideshow_interval < 5 or slideshow_interval > 300:
+            return False, f"Invalid slideshow_interval_sec: {slideshow_interval} (must be 5-300)"
+
+        clock_analog = self.config.get("clock_analog", False)
+        if not isinstance(clock_analog, bool):
+            return False, "clock_analog must be a boolean"
 
         # Check profiles
         profiles = self.config.get("profiles", [])
