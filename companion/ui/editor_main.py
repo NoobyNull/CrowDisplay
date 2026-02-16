@@ -47,6 +47,7 @@ from PySide6.QtGui import (
     QPen,
     QBrush,
     QPainter,
+    QPixmap,
     QDrag,
 )
 
@@ -64,6 +65,9 @@ from companion.config_manager import (
     WIDGET_TYPE_MAX,
     ACTION_HOTKEY,
     ACTION_MEDIA_KEY,
+    ACTION_LAUNCH_APP,
+    ACTION_SHELL_CMD,
+    ACTION_OPEN_URL,
     MOD_NONE,
     DISPLAY_WIDTH,
     DISPLAY_HEIGHT,
@@ -75,7 +79,16 @@ from companion.config_manager import (
 from companion.ui.icon_picker import IconPicker
 from companion.ui.keyboard_recorder import KeyboardRecorder
 from companion.ui.deploy_dialog import DeployDialog
+from companion.ui.no_scroll_combo import NoScrollComboBox
 from companion.lvgl_symbols import SYMBOL_BY_UTF8
+import os
+import threading
+from pathlib import Path
+
+# Default config path for auto-save/load
+DEFAULT_CONFIG_DIR = Path.home() / ".config" / "crowpanel"
+DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.json"
+DEFAULT_ICONS_DIR = DEFAULT_CONFIG_DIR / "icons"
 
 # Stat type dropdown options: (display_name, type_id)
 STAT_TYPE_OPTIONS = [
@@ -229,7 +242,7 @@ class StatsHeaderPanel(QGroupBox):
         row = self.table.rowCount()
         self.table.insertRow(row)
 
-        combo = QComboBox()
+        combo = NoScrollComboBox()
         for name, tid in STAT_TYPE_OPTIONS:
             combo.addItem(name, tid)
         for i, (_, tid) in enumerate(STAT_TYPE_OPTIONS):
@@ -498,6 +511,7 @@ class CanvasWidgetItem(QGraphicsRectItem):
         self.widget_dict = widget_dict
         self.widget_idx = widget_idx
         self._suppress_notify = True
+        self._icon_pixmap = None  # QPixmap cache for icon image
 
         self.setFlag(QGraphicsItem.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
@@ -519,6 +533,11 @@ class CanvasWidgetItem(QGraphicsRectItem):
         self._h = h
         self.setRect(0, 0, w, h)
         self._update_appearance()
+
+    def set_icon_pixmap(self, pixmap):
+        """Set a QPixmap to render as the button icon image."""
+        self._icon_pixmap = pixmap
+        self.update()
 
     def update_from_dict(self, widget_dict):
         """Update appearance from widget dict (called when properties change)."""
@@ -580,8 +599,13 @@ class CanvasWidgetItem(QGraphicsRectItem):
         qcolor = _int_to_qcolor(color)
 
         if wtype == WIDGET_HOTKEY_BUTTON:
-            self.setBrush(QBrush(qcolor))
-            self.setPen(QPen(qcolor.darker(130), 2))
+            if bg_color:
+                bg_qcolor = _int_to_qcolor(bg_color)
+                self.setBrush(QBrush(bg_qcolor))
+                self.setPen(QPen(bg_qcolor.darker(130), 2))
+            else:
+                self.setBrush(QBrush(QColor(0, 0, 0, 0)))
+                self.setPen(QPen(QColor("#555"), 1, Qt.DashLine))
         elif wtype == WIDGET_STATUS_BAR:
             bg = _int_to_qcolor(bg_color) if bg_color else QColor("#16213e")
             self.setBrush(QBrush(bg))
@@ -647,10 +671,36 @@ class CanvasWidgetItem(QGraphicsRectItem):
                 painter.drawRect(rect.adjusted(1, 1, -1, -1))
 
     def _paint_hotkey_button(self, painter, rect, qcolor):
-        lum = 0.299 * qcolor.red() + 0.587 * qcolor.green() + 0.114 * qcolor.blue()
-        text_color = QColor("#000") if lum > 140 else QColor("#FFF")
+        text_color = qcolor  # color field is now the text/foreground color
 
-        # Icon
+        label = self.widget_dict.get("label", "")
+
+        # If we have an icon pixmap (from image picker), draw it
+        if self._icon_pixmap and not self._icon_pixmap.isNull():
+            # Scale pixmap to fit ~60% width, ~50% height area
+            icon_w = max(16, int(rect.width() * 0.6))
+            icon_h = max(16, int(rect.height() * 0.5))
+            scaled = self._icon_pixmap.scaled(
+                icon_w, icon_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
+            if label:
+                # Image on top, label below
+                img_x = rect.center().x() - scaled.width() / 2
+                img_y = rect.top() + 4
+                painter.drawPixmap(int(img_x), int(img_y), scaled)
+                painter.setPen(text_color)
+                painter.setFont(QFont("Arial", 8))
+                label_rect = QRectF(rect.left(), img_y + scaled.height() + 2,
+                                    rect.width(), rect.bottom() - (img_y + scaled.height() + 2))
+                painter.drawText(label_rect, Qt.AlignHCenter | Qt.AlignTop, label)
+            else:
+                # Center the image
+                img_x = rect.center().x() - scaled.width() / 2
+                img_y = rect.center().y() - scaled.height() / 2
+                painter.drawPixmap(int(img_x), int(img_y), scaled)
+            return
+
+        # Fall back to symbol icon
         icon = self.widget_dict.get("icon", "")
         icon_display = ""
         if icon:
@@ -659,8 +709,6 @@ class CanvasWidgetItem(QGraphicsRectItem):
                 icon_display = SYMBOL_BY_UTF8[icon_bytes][0]
             else:
                 icon_display = "?"
-
-        label = self.widget_dict.get("label", "")
 
         painter.setPen(text_color)
         if icon_display and label:
@@ -1249,6 +1297,7 @@ class PropertiesPanel(QScrollArea):
 
         for spin in (self.x_spin, self.y_spin, self.w_spin, self.h_spin):
             spin.valueChanged.connect(self._on_position_changed)
+            spin.setFocusPolicy(Qt.StrongFocus)
 
         # Common group: label + color
         common_group = QGroupBox("Common")
@@ -1271,6 +1320,9 @@ class PropertiesPanel(QScrollArea):
         self.bg_color_btn.setFixedSize(40, 24)
         self.bg_color_btn.clicked.connect(self._on_bg_color_clicked)
         color_row.addWidget(self.bg_color_btn)
+        self.bg_transparent_cb = QCheckBox("Transparent")
+        self.bg_transparent_cb.stateChanged.connect(self._on_bg_transparent_changed)
+        color_row.addWidget(self.bg_transparent_cb)
         color_row.addStretch()
         common_layout.addLayout(color_row)
 
@@ -1280,6 +1332,12 @@ class PropertiesPanel(QScrollArea):
         # Hotkey Button group
         self.hotkey_group = QGroupBox("Hotkey Button")
         hotkey_layout = QVBoxLayout()
+
+        # Quick-fill from installed app
+        self.from_app_btn = QPushButton("From App...")
+        self.from_app_btn.setToolTip("Pick an installed application to auto-fill icon, label, and description")
+        self.from_app_btn.clicked.connect(self._on_from_app_clicked)
+        hotkey_layout.addWidget(self.from_app_btn)
 
         hotkey_layout.addWidget(QLabel("Description:"))
         self.description_input = QLineEdit()
@@ -1318,9 +1376,12 @@ class PropertiesPanel(QScrollArea):
         self._pending_icon_image_data = {}  # keyed by widget_idx: (filename, bytes)
 
         hotkey_layout.addWidget(QLabel("Action Type:"))
-        self.action_type_combo = QComboBox()
-        self.action_type_combo.addItem("Hotkey", ACTION_HOTKEY)
+        self.action_type_combo = NoScrollComboBox()
+        self.action_type_combo.addItem("Keyboard Shortcut", ACTION_HOTKEY)
         self.action_type_combo.addItem("Media Key", ACTION_MEDIA_KEY)
+        self.action_type_combo.addItem("Launch App", ACTION_LAUNCH_APP)
+        self.action_type_combo.addItem("Shell Command", ACTION_SHELL_CMD)
+        self.action_type_combo.addItem("Open URL", ACTION_OPEN_URL)
         self.action_type_combo.currentIndexChanged.connect(self._on_action_type_changed)
         hotkey_layout.addWidget(self.action_type_combo)
 
@@ -1333,12 +1394,66 @@ class PropertiesPanel(QScrollArea):
         self.media_key_label = QLabel("Media Key:")
         self.media_key_label.setVisible(False)
         hotkey_layout.addWidget(self.media_key_label)
-        self.media_key_combo = QComboBox()
+        self.media_key_combo = NoScrollComboBox()
         for name, code in MEDIA_KEY_OPTIONS:
             self.media_key_combo.addItem(f"{name} (0x{code:02X})", code)
         self.media_key_combo.currentIndexChanged.connect(self._on_property_changed)
         self.media_key_combo.setVisible(False)
         hotkey_layout.addWidget(self.media_key_combo)
+
+        # Launch App section
+        self.launch_app_label = QLabel("Application:")
+        self.launch_app_label.setVisible(False)
+        hotkey_layout.addWidget(self.launch_app_label)
+        self.app_picker_combo = NoScrollComboBox()
+        self.app_picker_combo.setVisible(False)
+        self.app_picker_combo.currentIndexChanged.connect(self._on_app_picker_changed)
+        hotkey_layout.addWidget(self.app_picker_combo)
+        self._apps_loaded = False
+
+        self.launch_cmd_label = QLabel("Launch Command:")
+        self.launch_cmd_label.setVisible(False)
+        hotkey_layout.addWidget(self.launch_cmd_label)
+        self.launch_cmd_input = QLineEdit()
+        self.launch_cmd_input.setPlaceholderText("Exec command (auto-filled)")
+        self.launch_cmd_input.setVisible(False)
+        self.launch_cmd_input.textChanged.connect(self._on_property_changed)
+        hotkey_layout.addWidget(self.launch_cmd_input)
+
+        self.launch_wm_class_label = QLabel("WM_CLASS:")
+        self.launch_wm_class_label.setVisible(False)
+        hotkey_layout.addWidget(self.launch_wm_class_label)
+        self.launch_wm_class_input = QLineEdit()
+        self.launch_wm_class_input.setPlaceholderText("WM_CLASS (for focus-or-launch)")
+        self.launch_wm_class_input.setVisible(False)
+        self.launch_wm_class_input.textChanged.connect(self._on_property_changed)
+        hotkey_layout.addWidget(self.launch_wm_class_input)
+
+        self.focus_or_launch_check = QCheckBox("Focus existing window if running")
+        self.focus_or_launch_check.setChecked(True)
+        self.focus_or_launch_check.setVisible(False)
+        self.focus_or_launch_check.stateChanged.connect(self._on_property_changed)
+        hotkey_layout.addWidget(self.focus_or_launch_check)
+
+        # Shell Command section
+        self.shell_cmd_label = QLabel("Shell Command:")
+        self.shell_cmd_label.setVisible(False)
+        hotkey_layout.addWidget(self.shell_cmd_label)
+        self.shell_cmd_input = QLineEdit()
+        self.shell_cmd_input.setPlaceholderText("e.g., notify-send 'Hello'")
+        self.shell_cmd_input.setVisible(False)
+        self.shell_cmd_input.textChanged.connect(self._on_property_changed)
+        hotkey_layout.addWidget(self.shell_cmd_input)
+
+        # Open URL section
+        self.url_label = QLabel("URL:")
+        self.url_label.setVisible(False)
+        hotkey_layout.addWidget(self.url_label)
+        self.url_input = QLineEdit()
+        self.url_input.setPlaceholderText("https://example.com")
+        self.url_input.setVisible(False)
+        self.url_input.textChanged.connect(self._on_property_changed)
+        hotkey_layout.addWidget(self.url_input)
 
         pressed_row = QHBoxLayout()
         self.auto_darken_check = QCheckBox("Auto-darken")
@@ -1360,7 +1475,7 @@ class PropertiesPanel(QScrollArea):
         self.stat_group = QGroupBox("Stat Monitor")
         stat_layout = QVBoxLayout()
         stat_layout.addWidget(QLabel("Stat Type:"))
-        self.stat_type_combo = QComboBox()
+        self.stat_type_combo = NoScrollComboBox()
         for name, tid in STAT_TYPE_OPTIONS:
             self.stat_type_combo.addItem(name, tid)
         self.stat_type_combo.currentIndexChanged.connect(self._on_stat_type_changed)
@@ -1396,13 +1511,13 @@ class PropertiesPanel(QScrollArea):
         self.text_group = QGroupBox("Text Label")
         text_layout = QVBoxLayout()
         text_layout.addWidget(QLabel("Font Size:"))
-        self.font_size_combo = QComboBox()
+        self.font_size_combo = NoScrollComboBox()
         for size in [12, 14, 16, 20, 22, 28, 40]:
             self.font_size_combo.addItem(str(size), size)
         self.font_size_combo.currentIndexChanged.connect(self._on_property_changed)
         text_layout.addWidget(self.font_size_combo)
         text_layout.addWidget(QLabel("Alignment:"))
-        self.text_align_combo = QComboBox()
+        self.text_align_combo = NoScrollComboBox()
         self.text_align_combo.addItem("Left", 0)
         self.text_align_combo.addItem("Center", 1)
         self.text_align_combo.addItem("Right", 2)
@@ -1421,6 +1536,7 @@ class PropertiesPanel(QScrollArea):
         self.thickness_spin = QSpinBox()
         self.thickness_spin.setRange(1, 8)
         self.thickness_spin.setValue(2)
+        self.thickness_spin.setFocusPolicy(Qt.StrongFocus)
         self.thickness_spin.valueChanged.connect(self._on_property_changed)
         sep_layout.addWidget(self.thickness_spin)
         self.separator_group.setLayout(sep_layout)
@@ -1466,7 +1582,10 @@ class PropertiesPanel(QScrollArea):
         # Common
         self.label_input.setText(widget_dict.get("label", ""))
         self._set_color_btn(self.color_btn, widget_dict.get("color", 0xFFFFFF))
-        self._set_color_btn(self.bg_color_btn, widget_dict.get("bg_color", 0))
+        bg_val = widget_dict.get("bg_color", 0)
+        self._set_color_btn(self.bg_color_btn, bg_val)
+        self.bg_transparent_cb.setChecked(bg_val == 0)
+        self.bg_color_btn.setEnabled(bg_val != 0)
 
         # Show/hide type-specific groups
         self._hide_all_groups()
@@ -1502,12 +1621,28 @@ class PropertiesPanel(QScrollArea):
                 self.icon_image_preview.clear()
 
             action_type = widget_dict.get("action_type", ACTION_HOTKEY)
-            self.action_type_combo.setCurrentIndex(0 if action_type == ACTION_HOTKEY else 1)
+            # Find correct index by matching itemData
+            for i in range(self.action_type_combo.count()):
+                if self.action_type_combo.itemData(i) == action_type:
+                    self.action_type_combo.setCurrentIndex(i)
+                    break
             self._update_action_visibility(action_type)
             self.keyboard_recorder.set_shortcut(
                 widget_dict.get("modifiers", 0), widget_dict.get("keycode", 0)
             )
             self._set_media_key_combo(widget_dict.get("consumer_code", 0))
+
+            # Load launch app fields
+            self.launch_cmd_input.setText(widget_dict.get("launch_command", ""))
+            self.launch_wm_class_input.setText(widget_dict.get("launch_wm_class", ""))
+            self.focus_or_launch_check.setChecked(widget_dict.get("launch_focus_or_launch", True))
+
+            # Load shell command
+            self.shell_cmd_input.setText(widget_dict.get("shell_command", ""))
+
+            # Load URL
+            self.url_input.setText(widget_dict.get("url", ""))
+
             pressed = widget_dict.get("pressed_color", 0)
             self.auto_darken_check.setChecked(pressed == 0)
             self.pressed_color_btn.setVisible(pressed != 0)
@@ -1570,7 +1705,7 @@ class PropertiesPanel(QScrollArea):
         d["height"] = self.h_spin.value()
         d["label"] = self.label_input.text()
         d["color"] = self.color_btn.property("color_value") or 0xFFFFFF
-        d["bg_color"] = self.bg_color_btn.property("color_value") or 0
+        d["bg_color"] = 0 if self.bg_transparent_cb.isChecked() else (self.bg_color_btn.property("color_value") or 0)
 
         wtype = d.get("widget_type", WIDGET_HOTKEY_BUTTON)
 
@@ -1589,10 +1724,22 @@ class PropertiesPanel(QScrollArea):
                 d["consumer_code"] = self.media_key_combo.currentData() or 0
                 d["modifiers"] = 0
                 d["keycode"] = 0
-            else:
+            elif action_type == ACTION_HOTKEY:
                 d["consumer_code"] = 0
                 d["modifiers"] = self.keyboard_recorder.current_modifiers
                 d["keycode"] = self.keyboard_recorder.current_keycode
+            else:
+                d["consumer_code"] = 0
+                d["modifiers"] = 0
+                d["keycode"] = 0
+
+            # Always include all action-type fields
+            d["launch_command"] = self.launch_cmd_input.text()
+            d["launch_wm_class"] = self.launch_wm_class_input.text()
+            d["launch_focus_or_launch"] = self.focus_or_launch_check.isChecked()
+            d["shell_command"] = self.shell_cmd_input.text()
+            d["url"] = self.url_input.text()
+
             d["pressed_color"] = 0 if self.auto_darken_check.isChecked() else (
                 self.pressed_color_btn.property("color_value") or 0xFF0000
             )
@@ -1647,11 +1794,129 @@ class PropertiesPanel(QScrollArea):
             self._emit_update()
 
     def _update_action_visibility(self, action_type):
+        """Show/hide action-specific widgets based on selected action type."""
+        # Shortcut section
         is_hotkey = (action_type == ACTION_HOTKEY)
         self.keyboard_recorder.setVisible(is_hotkey)
         self.shortcut_label.setVisible(is_hotkey)
-        self.media_key_combo.setVisible(not is_hotkey)
-        self.media_key_label.setVisible(not is_hotkey)
+
+        # Media key section
+        is_media = (action_type == ACTION_MEDIA_KEY)
+        self.media_key_combo.setVisible(is_media)
+        self.media_key_label.setVisible(is_media)
+
+        # Launch app section
+        is_launch = (action_type == ACTION_LAUNCH_APP)
+        self.launch_app_label.setVisible(is_launch)
+        self.app_picker_combo.setVisible(is_launch)
+        self.launch_cmd_label.setVisible(is_launch)
+        self.launch_cmd_input.setVisible(is_launch)
+        self.launch_wm_class_label.setVisible(is_launch)
+        self.launch_wm_class_input.setVisible(is_launch)
+        self.focus_or_launch_check.setVisible(is_launch)
+        if is_launch:
+            self._ensure_apps_loaded()
+
+        # Shell command section
+        is_shell = (action_type == ACTION_SHELL_CMD)
+        self.shell_cmd_label.setVisible(is_shell)
+        self.shell_cmd_input.setVisible(is_shell)
+
+        # URL section
+        is_url = (action_type == ACTION_OPEN_URL)
+        self.url_label.setVisible(is_url)
+        self.url_input.setVisible(is_url)
+
+    def _ensure_apps_loaded(self):
+        """Lazy-load applications list into app_picker_combo."""
+        if self._apps_loaded:
+            return
+        self._apps_loaded = True
+        self.app_picker_combo.clear()
+        self.app_picker_combo.addItem("(Custom)", None)
+        try:
+            from companion.app_scanner import scan_applications
+            apps = scan_applications()
+            for app in apps:
+                self.app_picker_combo.addItem(app.name, app)
+        except Exception:
+            pass
+
+    def _on_app_picker_changed(self, index):
+        """App picker dropdown changed -- auto-fill launch fields."""
+        if self._updating:
+            return
+        app = self.app_picker_combo.currentData()
+        if app is None:
+            return
+        self._updating = True
+        self.launch_cmd_input.setText(app.exec_cmd)
+        wm_class = app.wm_class if hasattr(app, 'wm_class') and app.wm_class else app.name
+        self.launch_wm_class_input.setText(wm_class)
+        self._updating = False
+        if not self._updating:
+            self._emit_update()
+
+    def _on_from_app_clicked(self):
+        """Open app picker dialog and auto-fill button from selected app."""
+        from companion.ui.app_picker_dialog import AppPickerDialog
+
+        dialog = AppPickerDialog(self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        app = dialog.get_selected_app()
+        if not app:
+            return
+
+        self._updating = True
+
+        # Set label (truncate to fit)
+        name = app.name[:20]
+        self.label_input.setText(name)
+
+        # Set description from exec command (clean up %u, %U, etc.)
+        import re
+        clean_exec = re.sub(r'\s*%[a-zA-Z]', '', app.exec_cmd).strip()
+        self.description_input.setText(clean_exec[:32])
+
+        self._updating = False
+
+        # Process icon if available
+        if app.icon_path:
+            try:
+                from companion.image_optimizer import optimize_for_widget
+                w = self.w_spin.value()
+                h = self.h_spin.value()
+                png_data = optimize_for_widget(app.icon_path, w, h)
+
+                # Sanitize filename
+                safe_name = "".join(
+                    c if c.isalnum() or c in "-_" else "_"
+                    for c in app.icon_name
+                )
+                filename = f"{safe_name}.png"
+
+                # Store for deploy
+                self._pending_icon_image_data[self._widget_idx] = (filename, png_data)
+
+                # Update UI
+                self.icon_image_label.setText(f"{filename} ({len(png_data)} bytes)")
+                self.icon_image_clear_btn.setVisible(True)
+
+                # Show preview
+                from PySide6.QtGui import QPixmap
+                pixmap = QPixmap()
+                pixmap.loadFromData(png_data, "PNG")
+                self.icon_image_preview.setPixmap(
+                    pixmap.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                )
+                self.icon_image_preview.setVisible(True)
+            except Exception as e:
+                # Icon processing failed, no big deal — label/desc still set
+                self.icon_image_label.setText(f"Icon error: {e}")
+
+        self._emit_update()
 
     def _on_icon_image_browse(self):
         """Open file dialog to pick an icon image."""
@@ -1735,6 +2000,14 @@ class PropertiesPanel(QScrollArea):
             if not self._updating:
                 self._emit_update()
 
+    def _on_bg_transparent_changed(self, state):
+        checked = state == Qt.Checked.value if hasattr(Qt.Checked, 'value') else state == 2
+        self.bg_color_btn.setEnabled(not checked)
+        if checked:
+            self._set_color_btn(self.bg_color_btn, 0)
+        if not self._updating:
+            self._emit_update()
+
     def _on_pressed_color_clicked(self):
         current = self.pressed_color_btn.property("color_value") or 0xFF0000
         qc = _int_to_qcolor(current)
@@ -1775,6 +2048,7 @@ class EditorMainWindow(QMainWindow):
         super().__init__(parent)
         self.config_manager = config_manager
         self.current_page = 0
+        self._current_file_path = None  # Track last saved/loaded file path
         self.setWindowTitle("CrowPanel Editor")
         self.setMinimumSize(1100, 700)
 
@@ -1824,6 +2098,13 @@ class EditorMainWindow(QMainWindow):
         page_layout.addWidget(self.remove_page_btn)
         page_layout.addWidget(self.rename_page_btn)
 
+        # Test Action button
+        self.test_action_btn = QPushButton("Test Action")
+        self.test_action_btn.setStyleSheet("background-color: #E67E22; color: white; font-weight: bold;")
+        self.test_action_btn.setToolTip("Fire the currently configured action on this PC")
+        self.test_action_btn.clicked.connect(self._on_test_action_clicked)
+        page_layout.addWidget(self.test_action_btn)
+
         # Deploy button
         self.deploy_btn = QPushButton("Deploy")
         self.deploy_btn.setStyleSheet("background-color: #2ECC71; color: white; font-weight: bold;")
@@ -1857,7 +2138,7 @@ class EditorMainWindow(QMainWindow):
         display_group = QGroupBox("Display Modes")
         display_layout = QGridLayout()
         display_layout.addWidget(QLabel("Default mode:"), 0, 0)
-        self.mode_dropdown = QComboBox()
+        self.mode_dropdown = NoScrollComboBox()
         self.mode_dropdown.addItems(["Hotkeys", "Clock", "Picture Frame", "Standby"])
         self.mode_dropdown.currentIndexChanged.connect(self._on_display_mode_changed)
         display_layout.addWidget(self.mode_dropdown, 0, 1)
@@ -1865,6 +2146,7 @@ class EditorMainWindow(QMainWindow):
         self.slideshow_spinbox = QSpinBox()
         self.slideshow_spinbox.setRange(5, 300)
         self.slideshow_spinbox.setValue(30)
+        self.slideshow_spinbox.setFocusPolicy(Qt.StrongFocus)
         self.slideshow_spinbox.valueChanged.connect(self._on_display_mode_changed)
         display_layout.addWidget(self.slideshow_spinbox, 1, 1)
         self.analog_checkbox = QCheckBox("Analog clock")
@@ -1906,12 +2188,67 @@ class EditorMainWindow(QMainWindow):
         # Status bar
         self.statusBar().showMessage("Ready")
 
-        # Load initial state
+        # Auto-load last config (or default)
+        self._auto_load_config()
+        self._load_saved_images()
+
+        # Load initial state from config
         self._load_display_mode_settings()
         self.stats_panel.load_from_config()
         self.notifications_panel.load_from_config()
         self._rebuild_canvas()
         self._update_page_display()
+
+        # Start maximized (expanded, not fullscreen)
+        self.showMaximized()
+
+    def _auto_load_config(self):
+        """Load config from default path if it exists."""
+        if DEFAULT_CONFIG_PATH.is_file():
+            if self.config_manager.load_json_file(str(DEFAULT_CONFIG_PATH)):
+                self._current_file_path = str(DEFAULT_CONFIG_PATH)
+                self.statusBar().showMessage(f"Loaded: {DEFAULT_CONFIG_PATH}")
+
+    def _auto_save_config(self):
+        """Save config and icon images to the current file path (or default)."""
+        path = self._current_file_path or str(DEFAULT_CONFIG_PATH)
+        DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        self.config_manager.save_json_file(path)
+        self._save_pending_images()
+
+    def _save_pending_images(self):
+        """Persist pending icon images to ~/.config/crowpanel/icons/."""
+        pending = self.properties_panel.get_pending_images()
+        if not pending:
+            return
+        DEFAULT_ICONS_DIR.mkdir(parents=True, exist_ok=True)
+        for widget_idx, (filename, png_data) in pending.items():
+            icon_file = DEFAULT_ICONS_DIR / filename
+            icon_file.write_bytes(png_data)
+
+    def _load_saved_images(self):
+        """Restore icon images from disk into pending_icon_image_data."""
+        if not DEFAULT_ICONS_DIR.is_dir():
+            return
+        # Walk all pages/widgets looking for icon_path entries
+        for page_idx in range(self.config_manager.get_page_count()):
+            page = self.config_manager.get_page(page_idx)
+            if not page:
+                continue
+            for widget_idx, widget in enumerate(page.get("widgets", [])):
+                icon_path = widget.get("icon_path", "")
+                if not icon_path:
+                    continue
+                filename = os.path.basename(icon_path)
+                local_file = DEFAULT_ICONS_DIR / filename
+                if local_file.is_file():
+                    png_data = local_file.read_bytes()
+                    self.properties_panel._pending_icon_image_data[widget_idx] = (filename, png_data)
+
+    def closeEvent(self, event):
+        """Auto-save config on window close."""
+        self._auto_save_config()
+        super().closeEvent(event)
 
     def _create_menu_bar(self):
         menubar = self.menuBar()
@@ -1925,9 +2262,13 @@ class EditorMainWindow(QMainWindow):
         open_action.setShortcut(QKeySequence("Ctrl+O"))
         open_action.triggered.connect(self._on_file_open)
 
-        save_action = file_menu.addAction("Save...")
+        save_action = file_menu.addAction("Save")
         save_action.setShortcut(QKeySequence("Ctrl+S"))
         save_action.triggered.connect(self._on_file_save)
+
+        save_as_action = file_menu.addAction("Save As...")
+        save_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        save_as_action.triggered.connect(self._on_file_save_as)
 
         file_menu.addSeparator()
 
@@ -1950,8 +2291,15 @@ class EditorMainWindow(QMainWindow):
             return
 
         widgets = page.get("widgets", [])
+        pending = self.properties_panel.get_pending_images()
         for idx, widget_dict in enumerate(widgets):
             item = CanvasWidgetItem(widget_dict, idx)
+            # Restore icon pixmap from pending image data
+            if idx in pending:
+                from PySide6.QtGui import QPixmap
+                pixmap = QPixmap()
+                pixmap.loadFromData(pending[idx][1], "PNG")
+                item.set_icon_pixmap(pixmap)
             self.canvas_scene.addItem(item)
             self._canvas_items[idx] = item
 
@@ -2067,7 +2415,17 @@ class EditorMainWindow(QMainWindow):
         self.config_manager.set_widget(self.current_page, widget_idx, widget_dict)
         # Update the canvas item appearance
         if widget_idx in self._canvas_items:
-            self._canvas_items[widget_idx].update_from_dict(widget_dict)
+            item = self._canvas_items[widget_idx]
+            item.update_from_dict(widget_dict)
+            # Sync icon pixmap from pending image data
+            pending = self.properties_panel.get_pending_images()
+            if widget_idx in pending:
+                from PySide6.QtGui import QPixmap
+                pixmap = QPixmap()
+                pixmap.loadFromData(pending[widget_idx][1], "PNG")
+                item.set_icon_pixmap(pixmap)
+            else:
+                item.set_icon_pixmap(None)
             self.canvas_scene.update_handles()
 
     # -- Page navigation --
@@ -2135,11 +2493,13 @@ class EditorMainWindow(QMainWindow):
             self.statusBar().showMessage("Created new config")
 
     def _on_file_open(self):
+        start_dir = str(Path(self._current_file_path).parent) if self._current_file_path else ""
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Open Config File", "", "JSON Files (*.json)"
+            self, "Open Config File", start_dir, "JSON Files (*.json)"
         )
         if file_path:
             if self.config_manager.load_json_file(file_path):
+                self._current_file_path = file_path
                 self.current_page = 0
                 self.properties_panel.clear_selection()
                 self._rebuild_canvas()
@@ -2152,15 +2512,32 @@ class EditorMainWindow(QMainWindow):
                 QMessageBox.critical(self, "Error", f"Failed to load: {file_path}")
 
     def _on_file_save(self):
+        """Save to current path (or default). No dialog."""
         is_valid, error_msg = self.config_manager.validate()
         if not is_valid:
             QMessageBox.critical(self, "Validation Error", error_msg)
             return
+        path = self._current_file_path or str(DEFAULT_CONFIG_PATH)
+        DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        if self.config_manager.save_json_file(path):
+            self._current_file_path = path
+            self.statusBar().showMessage(f"Saved: {path}")
+        else:
+            QMessageBox.critical(self, "Error", f"Failed to save: {path}")
+
+    def _on_file_save_as(self):
+        """Save to a user-chosen path."""
+        is_valid, error_msg = self.config_manager.validate()
+        if not is_valid:
+            QMessageBox.critical(self, "Validation Error", error_msg)
+            return
+        start_dir = str(Path(self._current_file_path).parent) if self._current_file_path else ""
         file_path, _ = QFileDialog.getSaveFileName(
-            self, "Save Config File", "", "JSON Files (*.json)"
+            self, "Save Config File", start_dir, "JSON Files (*.json)"
         )
         if file_path:
             if self.config_manager.save_json_file(file_path):
+                self._current_file_path = file_path
                 self.statusBar().showMessage(f"Saved: {file_path}")
             else:
                 QMessageBox.critical(self, "Error", f"Failed to save: {file_path}")
@@ -2184,14 +2561,55 @@ class EditorMainWindow(QMainWindow):
     def _on_notifications_changed(self):
         self.statusBar().showMessage("Notification settings updated")
 
+    def _on_test_action_clicked(self):
+        """Fire the currently configured action directly on the PC."""
+        widget_dict = self.properties_panel._get_widget_dict()
+        if widget_dict is None:
+            self.statusBar().showMessage("No widget selected -- select a hotkey button first")
+            return
+
+        wtype = widget_dict.get("widget_type", WIDGET_HOTKEY_BUTTON)
+        if wtype != WIDGET_HOTKEY_BUTTON:
+            self.statusBar().showMessage("Test Action only works on hotkey buttons")
+            return
+
+        self.statusBar().showMessage("Testing action...")
+
+        def _run_test():
+            try:
+                from companion.action_executor import (
+                    _exec_launch_app,
+                    _exec_shell_cmd,
+                    _exec_open_url,
+                    _exec_keyboard_shortcut,
+                    _exec_media_key,
+                )
+                action_type = widget_dict.get("action_type", ACTION_HOTKEY)
+                if action_type == ACTION_LAUNCH_APP:
+                    _exec_launch_app(widget_dict)
+                elif action_type == ACTION_SHELL_CMD:
+                    _exec_shell_cmd(widget_dict)
+                elif action_type == ACTION_OPEN_URL:
+                    _exec_open_url(widget_dict)
+                elif action_type == ACTION_MEDIA_KEY:
+                    _exec_media_key(widget_dict)
+                elif action_type == ACTION_HOTKEY:
+                    _exec_keyboard_shortcut(widget_dict)
+            except Exception as exc:
+                import logging
+                logging.error("Test action failed: %s", exc)
+
+        threading.Thread(target=_run_test, daemon=True).start()
+
     def _on_deploy_clicked(self):
         is_valid, error_msg = self.config_manager.validate()
         if not is_valid:
             QMessageBox.critical(self, "Validation Error", error_msg)
             return
         # Gather pending icon images from properties panel
-        pending_images = self.props_panel.get_pending_images()
+        pending_images = self.properties_panel.get_pending_images()
         deploy_dialog = DeployDialog(self.config_manager, self, pending_images=pending_images)
         result = deploy_dialog.exec()
         if result == QDialog.Accepted:
-            self.statusBar().showMessage("Config deployed to device")
+            self._auto_save_config()
+            self.statusBar().showMessage("Config deployed and saved")
