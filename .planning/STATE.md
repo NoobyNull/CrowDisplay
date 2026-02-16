@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 ## Current Position
 
 Phase: 9 of 9 (Tweaks and Break-Fix v0.9.1)
-Plan: 1 of 5 in current phase
+Plan: 5 of 5 in current phase
 Status: Executing
-Last activity: 2026-02-15 -- Completed 09-01 Grid Layout + Positioning + Pressed Color
+Last activity: 2026-02-15 -- Completed 09-04 Display Modes (picture frame, clock, standby)
 
-Progress: [##################..] 91% (v1.0 complete, v1.1 beta, v0.9.1 1/5)
+Progress: [###################.] 96% (v1.0 complete, v1.1 beta, v0.9.1 4/5)
 
 ## Performance Metrics
 
@@ -63,6 +63,8 @@ Recent decisions affecting current work:
 - [Phase 8]: Icon picker stores UTF-8 decoded strings (not symbol names) -- matches device JSON format directly
 - [Phase 8]: 9 consumer control codes in media key dropdown (Play/Pause, Next, Prev, Stop, Vol+, Vol-, Mute, Browser Home/Back)
 - [Phase 8]: Gold border (#FFD700) for selected button, luminance threshold 140 for text contrast
+- [Phase 9]: DisplayMode orthogonal to PowerState -- mode controls UI, power controls brightness
+- [Phase 9]: LVGL custom filesystem driver (S: letter) for SD card image access in picture frame mode
 - [Phase 9]: LVGL grid layout (4x3 FR units) replaces flex row-wrap -- enables explicit positioning and variable sizing
 - [Phase 9]: grid_row/grid_col = -1 means auto-flow, >= 0 means explicit cell placement
 - [Phase 9]: pressed_color = 0x000000 means auto-darken, non-zero = explicit RGB
@@ -85,5 +87,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 09-01-PLAN.md (Grid Layout + Positioning + Pressed Color)
+Stopped at: Completed 09-04-PLAN.md (Display Modes)
 Resume file: None
