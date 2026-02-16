@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 ## Current Position
 
 Phase: 9 of 9 (Tweaks and Break-Fix v0.9.1)
-Plan: 0 of 5 in current phase
-Status: Plans complete, ready to execute
-Last activity: 2026-02-15 -- Phase 9 planned (5 plans: grid layout, sizing, stats, display modes, notifications)
+Plan: 1 of 5 in current phase
+Status: Executing
+Last activity: 2026-02-15 -- Completed 09-01 Grid Layout + Positioning + Pressed Color
 
-Progress: [##################..] 89% (v1.0 complete, v1.1 beta, v0.9.1 pending)
+Progress: [##################..] 91% (v1.0 complete, v1.1 beta, v0.9.1 1/5)
 
 ## Performance Metrics
 
@@ -34,6 +34,7 @@ Progress: [##################..] 89% (v1.0 complete, v1.1 beta, v0.9.1 pending)
 | 06 | 2 | 6min | 3min |
 | 07 | 2 | 11min | 5.5min |
 | 08 | 3 | 7min | 2.3min |
+| 09 | 1 | 6min | 6min |
 
 *Updated after each plan completion*
 
@@ -62,6 +63,10 @@ Recent decisions affecting current work:
 - [Phase 8]: Icon picker stores UTF-8 decoded strings (not symbol names) -- matches device JSON format directly
 - [Phase 8]: 9 consumer control codes in media key dropdown (Play/Pause, Next, Prev, Stop, Vol+, Vol-, Mute, Browser Home/Back)
 - [Phase 8]: Gold border (#FFD700) for selected button, luminance threshold 140 for text contrast
+- [Phase 9]: LVGL grid layout (4x3 FR units) replaces flex row-wrap -- enables explicit positioning and variable sizing
+- [Phase 9]: grid_row/grid_col = -1 means auto-flow, >= 0 means explicit cell placement
+- [Phase 9]: pressed_color = 0x000000 means auto-darken, non-zero = explicit RGB
+- [Phase 9]: CONFIG_MAX_BUTTONS reduced from 16 to 12 (4x3 grid capacity)
 
 ### Pending Todos
 
@@ -80,5 +85,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: v1.1 milestone complete, all phases shipped
+Stopped at: Completed 09-01-PLAN.md (Grid Layout + Positioning + Pressed Color)
 Resume file: None
