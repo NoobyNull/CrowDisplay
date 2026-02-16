@@ -4,7 +4,8 @@
 
 - [x] **v1.0 MVP** - Phases 1-4 (shipped 2026-02-15)
 - [x] **v0.8 System Control (beta)** - Phases 5-8 (shipped 2026-02-15)
-- [x] **v0.9.1 Tweaks and Break-Fix** - Phase 9 (in progress) (completed 2026-02-16)
+- [x] **v0.9.1 Tweaks and Break-Fix** - Phase 9 (completed 2026-02-16)
+- [x] **v0.9.2 Companion Actions** - Phase 10 (completed 2026-02-16)
 
 ## Phases
 
@@ -139,7 +140,8 @@ Phases execute in numeric order: 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 6. Data-Driven Display UI | v0.8 | 2/2 | Complete | 2026-02-15 |
 | 7. Config Server (SoftAP + HTTP) | v0.8 | 2/2 | Complete | 2026-02-15 |
 | 8. Desktop GUI Editor | v0.8 | 3/3 | Complete | 2026-02-15 |
-| 9. Tweaks and Break-Fix | v0.9.1 | Complete    | 2026-02-16 | - |
+| 9. Tweaks and Break-Fix | v0.9.1 | Complete | 2026-02-16 |
+| 10. Companion Action Execution | v0.9.2 | Complete | 2026-02-16 |
 
 ## v0.9.1 Tweaks and Break-Fix
 
@@ -159,11 +161,11 @@ Phases execute in numeric order: 5 -> 6 -> 7 -> 8 -> 9 -> 10
 **Plans**: 5 plans
 
 Plans:
-- [ ] 09-01-PLAN.md -- Grid layout + positioning + pressed color (v0.9.1.1 + v0.9.1.2)
-- [ ] 09-02-PLAN.md -- Variable button sizing with grid spans (v0.9.1.3)
-- [ ] 09-03-PLAN.md -- Configurable stats header with TLV protocol (v0.9.1.5)
-- [ ] 09-04-PLAN.md -- Display modes: standby, hotkeys, picture frame, clock (v0.9.1.6)
-- [ ] 09-05-PLAN.md -- Host OS notification forwarding with app filtering (v0.9.1.4)
+- [x] 09-01-PLAN.md -- Grid layout + positioning + pressed color (v0.9.1.1 + v0.9.1.2)
+- [x] 09-02-PLAN.md -- Variable button sizing with grid spans (v0.9.1.3)
+- [x] 09-03-PLAN.md -- Configurable stats header with TLV protocol (v0.9.1.5)
+- [x] 09-04-PLAN.md -- Display modes: standby, hotkeys, picture frame, clock (v0.9.1.6)
+- [x] 09-05-PLAN.md -- Host OS notification forwarding with app filtering (v0.9.1.4)
 
 ### Phase 10: Companion Action Execution
 
@@ -172,6 +174,15 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
-- [ ] 10-01-PLAN.md -- Protocol + firmware: MSG_BUTTON_PRESS message, display sends page+widget, bridge relays via vendor HID
-- [ ] 10-02-PLAN.md -- Companion action execution: action_executor module, vendor HID read thread, config file watcher
-- [ ] 10-03-PLAN.md -- Editor UX: 5 action types, app picker, test button, scroll wheel fix, window maximize
+- [x] 10-01-PLAN.md -- Protocol + firmware: MSG_BUTTON_PRESS message, display sends page+widget, bridge relays via vendor HID
+- [x] 10-02-PLAN.md -- Companion action execution: action_executor module, vendor HID read thread, config file watcher
+- [x] 10-03-PLAN.md -- Editor UX: 5 action types, app picker, test button, scroll wheel fix, window maximize
+
+### Phase 11: Hardware Buttons + System Actions
+
+**Goal:** PCF8575 button/encoder reading, quadrature decoder, system action types (page nav, mode change, sleep, brightness, config), configurable hardware inputs with same action system as touchscreen buttons, editor UI
+**Depends on:** Phase 10
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 11 to break down)
