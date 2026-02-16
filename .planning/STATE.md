@@ -85,6 +85,10 @@ Recent decisions affecting current work:
 1. **Execute image support plan from Claude plans** (ui) -- add custom image icons to hotkey buttons via BMP on SD card, Pillow optimizer, HTTP upload endpoint
 2. **Companion executes button actions instead of blind keyboard shortcuts** (companion) -- bridge forwards MSG_HOTKEY to vendor HID, companion intercepts and launches apps/commands directly
 
+### Roadmap Evolution
+
+- Phase 10 added: Companion Action Execution
+
 ### Blockers/Concerns
 
 - [Research]: WiFi channel pinning needs hardware test (ESP-NOW packet loss during HTTP transfer) -- implemented but untested on hardware

@@ -164,3 +164,12 @@ Plans:
 - [ ] 09-03-PLAN.md -- Configurable stats header with TLV protocol (v0.9.1.5)
 - [ ] 09-04-PLAN.md -- Display modes: standby, hotkeys, picture frame, clock (v0.9.1.6)
 - [ ] 09-05-PLAN.md -- Host OS notification forwarding with app filtering (v0.9.1.4)
+
+### Phase 10: Companion Action Execution
+
+**Goal:** Companion service intercepts button presses from the bridge via vendor HID and executes configured actions (launch apps, open URLs, run commands) instead of relying on blind keyboard shortcuts
+**Depends on:** Phase 9
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 10 to break down)
