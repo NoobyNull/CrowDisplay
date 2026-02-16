@@ -10,6 +10,9 @@ Holds the AppConfig dict (profile hierarchy) and provides:
 """
 
 import json
+import os
+import uuid
+from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 
@@ -74,6 +77,11 @@ SNAP_GRID = 10
 WIDGET_MIN_W = 40
 WIDGET_MIN_H = 30
 
+# Default config paths
+DEFAULT_CONFIG_DIR = Path.home() / ".config" / "crowpanel"
+DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.json"
+DEFAULT_ICONS_DIR = DEFAULT_CONFIG_DIR / "icons"
+
 # Stat type range (must match shared/protocol.h StatType enum)
 STAT_TYPE_MIN = 1
 STAT_TYPE_MAX = 20  # 0x14
@@ -102,6 +110,7 @@ def make_default_widget(widget_type: int, x: int = 0, y: int = 0) -> Dict[str, A
     w, h = WIDGET_DEFAULT_SIZES.get(widget_type, (180, 100))
     widget = {
         "widget_type": widget_type,
+        "widget_id": str(uuid.uuid4()),
         "x": x,
         "y": y,
         "width": w,
@@ -249,6 +258,15 @@ def _migrate_v1_config(config: Dict[str, Any]) -> Dict[str, Any]:
     return config
 
 
+def ensure_widget_ids(config: Dict[str, Any]) -> None:
+    """Backfill widget_id on any widget that lacks one (backward compat for old configs)."""
+    for profile in config.get("profiles", []):
+        for page in profile.get("pages", []):
+            for widget in page.get("widgets", []):
+                if "widget_id" not in widget:
+                    widget["widget_id"] = str(uuid.uuid4())
+
+
 class ConfigManager:
     """Manages in-memory AppConfig with JSON I/O and validation"""
 
@@ -303,6 +321,7 @@ class ConfigManager:
                 }
             ],
         }
+        ensure_widget_ids(self.config)
         self._emit_changed()
 
     def load_json_file(self, path: str) -> bool:
@@ -319,6 +338,7 @@ class ConfigManager:
                 data = _migrate_v1_config(data)
 
             self.config = data
+            ensure_widget_ids(self.config)
             self._emit_changed()
             return True
         except (json.JSONDecodeError, FileNotFoundError, IOError):

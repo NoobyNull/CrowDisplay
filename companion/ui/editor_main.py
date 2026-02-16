@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QMenu,
 )
-from PySide6.QtCore import Qt, Signal, QSize, QRectF, QPointF, QMimeData, QTimer
+from PySide6.QtCore import Qt, Signal, QSize, QRectF, QPointF, QMimeData, QTimer, QMetaObject, Q_ARG
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -74,6 +74,9 @@ from companion.config_manager import (
     SNAP_GRID,
     WIDGET_MIN_W,
     WIDGET_MIN_H,
+    DEFAULT_CONFIG_DIR,
+    DEFAULT_CONFIG_PATH,
+    DEFAULT_ICONS_DIR,
     make_default_widget,
 )
 from companion.ui.icon_picker import IconPicker
@@ -84,11 +87,6 @@ from companion.lvgl_symbols import SYMBOL_BY_UTF8
 import os
 import threading
 from pathlib import Path
-
-# Default config path for auto-save/load
-DEFAULT_CONFIG_DIR = Path.home() / ".config" / "crowpanel"
-DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.json"
-DEFAULT_ICONS_DIR = DEFAULT_CONFIG_DIR / "icons"
 
 # Stat type dropdown options: (display_name, type_id)
 STAT_TYPE_OPTIONS = [
@@ -510,6 +508,7 @@ class CanvasWidgetItem(QGraphicsRectItem):
 
         self.widget_dict = widget_dict
         self.widget_idx = widget_idx
+        self.widget_id = widget_dict.get("widget_id", "")
         self._suppress_notify = True
         self._icon_pixmap = None  # QPixmap cache for icon image
 
@@ -788,10 +787,16 @@ class CanvasWidgetItem(QGraphicsRectItem):
         painter.setPen(Qt.NoPen)
         dot_r = 4
         spacing = 14
+        # Read actual page count from scene
+        page_count = 1
+        if self.scene() and hasattr(self.scene(), 'page_count'):
+            page_count = max(1, self.scene().page_count)
         cx = rect.center().x()
         cy = rect.center().y()
-        for i in range(3):
-            x = cx + (i - 1) * spacing
+        total_w = (page_count - 1) * spacing
+        start_x = cx - total_w / 2
+        for i in range(page_count):
+            x = start_x + i * spacing
             if i == 0:
                 painter.setBrush(QBrush(qcolor))
             else:
@@ -911,9 +916,9 @@ class ResizeHandle(QGraphicsRectItem):
 class CanvasScene(QGraphicsScene):
     """The 800x480 display canvas with grid lines and widget management."""
 
-    widget_selected = Signal(int)    # widget_idx
+    widget_selected = Signal(str)    # widget_id
     widget_deselected = Signal()
-    widget_geometry_changed = Signal(int, int, int, int, int)  # idx, x, y, w, h
+    widget_geometry_changed = Signal(str, int, int, int, int)  # widget_id, x, y, w, h
     widget_dropped = Signal(int, int, int)  # type, x, y
 
     def __init__(self, parent=None):
@@ -923,6 +928,7 @@ class CanvasScene(QGraphicsScene):
         self._tracked_item = None
         self._clipboard = []  # list of widget dicts for copy/paste
         self._multi_move_origin = None  # for group drag
+        self.page_count = 1  # updated by EditorMainWindow when pages change
 
     def drawBackground(self, painter, rect):
         # Fill everything outside the canvas dark
@@ -947,7 +953,7 @@ class CanvasScene(QGraphicsScene):
         if len(selected) == 1:
             item = selected[0]
             self._show_handles(item)
-            self.widget_selected.emit(item.widget_idx)
+            self.widget_selected.emit(item.widget_id)
         else:
             self._clear_handles()
             self.widget_deselected.emit()
@@ -955,13 +961,13 @@ class CanvasScene(QGraphicsScene):
     def on_widget_moved(self, item):
         """Called when a widget item has been moved."""
         x, y = int(item.pos().x()), int(item.pos().y())
-        self.widget_geometry_changed.emit(item.widget_idx, x, y, item._w, item._h)
+        self.widget_geometry_changed.emit(item.widget_id, x, y, item._w, item._h)
         self.update_handles()
 
     def on_widget_resized(self, item):
         """Called when a widget item has been resized (handle released)."""
         x, y = int(item.pos().x()), int(item.pos().y())
-        self.widget_geometry_changed.emit(item.widget_idx, x, y, item._w, item._h)
+        self.widget_geometry_changed.emit(item.widget_id, x, y, item._w, item._h)
 
     def _show_handles(self, item):
         """Show resize handles around the given item."""
@@ -1112,7 +1118,7 @@ class CanvasScene(QGraphicsScene):
         elif action in page_actions:
             target_page = action.data()
             if hasattr(self, "_on_move_to_page"):
-                self._on_move_to_page([i.widget_idx for i in selected], target_page)
+                self._on_move_to_page([i.widget_id for i in selected], target_page)
 
     def _copy_selected(self, selected):
         """Copy selected widget dicts to clipboard."""
@@ -1142,7 +1148,7 @@ class CanvasScene(QGraphicsScene):
             self.removeItem(item)
         self._clear_handles()
         if hasattr(self, "_on_delete_callback"):
-            self._on_delete_callback([item.widget_idx for item in selected])
+            self._on_delete_callback([item.widget_id for item in selected])
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Delete or event.key() == Qt.Key_Backspace:
@@ -1249,7 +1255,7 @@ class ItemsPalette(QListWidget):
 class PropertiesPanel(QScrollArea):
     """Right sidebar for editing selected widget properties."""
 
-    widget_updated = Signal(int, dict)  # widget_idx, updated widget_dict
+    widget_updated = Signal(str, dict)  # widget_id, updated widget_dict
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1258,6 +1264,7 @@ class PropertiesPanel(QScrollArea):
         self.setMaximumWidth(320)
         self._updating = False
         self._widget_idx = -1
+        self._widget_id = ""
         self._widget_dict = None
 
         container = QWidget()
@@ -1373,7 +1380,7 @@ class PropertiesPanel(QScrollArea):
         hotkey_layout.addWidget(self.icon_image_preview)
 
         # Internal state for pending image upload
-        self._pending_icon_image_data = {}  # keyed by widget_idx: (filename, bytes)
+        self._pending_icon_image_data = {}  # keyed by widget_id: (filename, bytes)
 
         hotkey_layout.addWidget(QLabel("Action Type:"))
         self.action_type_combo = NoScrollComboBox()
@@ -1559,6 +1566,7 @@ class PropertiesPanel(QScrollArea):
     def clear_selection(self):
         """Clear the properties panel (no widget selected)."""
         self._widget_idx = -1
+        self._widget_id = ""
         self._widget_dict = None
         self.type_label.setText("No widget selected")
         self._hide_all_groups()
@@ -1568,6 +1576,7 @@ class PropertiesPanel(QScrollArea):
         self._updating = True
         self._widget_dict = widget_dict
         self._widget_idx = widget_idx
+        self._widget_id = widget_dict.get("widget_id", "")
 
         wtype = widget_dict.get("widget_type", WIDGET_HOTKEY_BUTTON)
         type_name = WIDGET_TYPE_NAMES.get(wtype, f"Type {wtype}")
@@ -1597,9 +1606,9 @@ class PropertiesPanel(QScrollArea):
 
             # Restore image picker state
             icon_path = widget_dict.get("icon_path", "")
-            if widget_idx in self._pending_icon_image_data:
-                filename = self._pending_icon_image_data[widget_idx][0]
-                data = self._pending_icon_image_data[widget_idx][1]
+            if self._widget_id in self._pending_icon_image_data:
+                filename = self._pending_icon_image_data[self._widget_id][0]
+                data = self._pending_icon_image_data[self._widget_id][1]
                 self.icon_image_label.setText(f"{filename} ({len(data)} bytes)")
                 self.icon_image_clear_btn.setVisible(True)
                 from PySide6.QtGui import QPixmap
@@ -1713,8 +1722,8 @@ class PropertiesPanel(QScrollArea):
             d["description"] = self.description_input.text()
             d["icon"] = self.icon_picker.get_symbol()
             # Set icon_path if an image is pending for this widget
-            if self._widget_idx in self._pending_icon_image_data:
-                filename = self._pending_icon_image_data[self._widget_idx][0]
+            if self._widget_id in self._pending_icon_image_data:
+                filename = self._pending_icon_image_data[self._widget_id][0]
                 d["icon_path"] = f"/icons/{filename}"
             else:
                 d["icon_path"] = ""
@@ -1898,7 +1907,7 @@ class PropertiesPanel(QScrollArea):
                 filename = f"{safe_name}.png"
 
                 # Store for deploy
-                self._pending_icon_image_data[self._widget_idx] = (filename, png_data)
+                self._pending_icon_image_data[self._widget_id] = (filename, png_data)
 
                 # Update UI
                 self.icon_image_label.setText(f"{filename} ({len(png_data)} bytes)")
@@ -1941,7 +1950,7 @@ class PropertiesPanel(QScrollArea):
             filename = f"{safe_name}.png"
 
             # Store for deploy
-            self._pending_icon_image_data[self._widget_idx] = (filename, png_data)
+            self._pending_icon_image_data[self._widget_id] = (filename, png_data)
 
             # Update UI
             self.icon_image_label.setText(f"{filename} ({len(png_data)} bytes)")
@@ -1963,8 +1972,8 @@ class PropertiesPanel(QScrollArea):
 
     def _on_icon_image_clear(self):
         """Clear selected icon image, revert to symbol."""
-        if self._widget_idx in self._pending_icon_image_data:
-            del self._pending_icon_image_data[self._widget_idx]
+        if self._widget_id in self._pending_icon_image_data:
+            del self._pending_icon_image_data[self._widget_id]
         self.icon_image_label.setText("")
         self.icon_image_clear_btn.setVisible(False)
         self.icon_image_preview.setVisible(False)
@@ -1973,7 +1982,7 @@ class PropertiesPanel(QScrollArea):
             self._emit_update()
 
     def get_pending_images(self) -> dict:
-        """Return dict of widget_idx -> (filename, png_bytes) for deploy."""
+        """Return dict of widget_id -> (filename, png_bytes) for deploy."""
         return dict(self._pending_icon_image_data)
 
     def _on_auto_darken_changed(self):
@@ -2031,10 +2040,10 @@ class PropertiesPanel(QScrollArea):
             self.media_key_combo.setCurrentIndex(0)
 
     def _emit_update(self):
-        if self._widget_idx >= 0:
+        if self._widget_id:
             d = self._get_widget_dict()
             if d is not None:
-                self.widget_updated.emit(self._widget_idx, d)
+                self.widget_updated.emit(self._widget_id, d)
 
 
 # ============================================================
@@ -2049,11 +2058,12 @@ class EditorMainWindow(QMainWindow):
         self.config_manager = config_manager
         self.current_page = 0
         self._current_file_path = None  # Track last saved/loaded file path
+        self._tray_mode = False  # Set True by tray app to hide on close instead of quit
         self.setWindowTitle("CrowPanel Editor")
         self.setMinimumSize(1100, 700)
 
-        # Canvas items tracked by widget index
-        self._canvas_items = {}  # widget_idx -> CanvasWidgetItem
+        # Canvas items tracked by stable widget_id
+        self._canvas_items = {}  # widget_id -> CanvasWidgetItem
 
         # Central widget with splitter layout
         central_widget = QWidget()
@@ -2199,8 +2209,28 @@ class EditorMainWindow(QMainWindow):
         self._rebuild_canvas()
         self._update_page_display()
 
-        # Start maximized (expanded, not fullscreen)
-        self.showMaximized()
+        # Size window so canvas is 1:1 with the display (800x480)
+        # Canvas view needs ~20px for border/margin, page toolbar ~40px, menubar ~30px, statusbar ~25px
+        canvas_chrome_w = 22  # border + padding
+        canvas_chrome_h = 22
+        palette_w = self.palette.minimumWidth() + 8  # 120 + spacing
+        right_w = right_tabs.minimumWidth() + 8       # 240 + spacing
+        margins = 8 + 8  # main_layout margins
+        toolbar_h = 40   # page toolbar
+        menubar_h = 30
+        statusbar_h = 25
+
+        ideal_w = palette_w + canvas_chrome_w + DISPLAY_WIDTH + right_w + margins
+        ideal_h = canvas_chrome_h + DISPLAY_HEIGHT + toolbar_h + menubar_h + statusbar_h + margins
+
+        # Clamp to available screen size
+        from PySide6.QtWidgets import QApplication
+        screen = QApplication.primaryScreen()
+        if screen:
+            avail = screen.availableGeometry()
+            ideal_w = min(ideal_w, avail.width())
+            ideal_h = min(ideal_h, avail.height())
+        self.resize(ideal_w, ideal_h)
 
     def _auto_load_config(self):
         """Load config from default path if it exists."""
@@ -2215,6 +2245,16 @@ class EditorMainWindow(QMainWindow):
         DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         self.config_manager.save_json_file(path)
         self._save_pending_images()
+
+    def _resolve_widget_idx(self, widget_id: str) -> int:
+        """Find positional index of widget by its stable widget_id. Returns -1 if not found."""
+        page = self.config_manager.get_page(self.current_page)
+        if page is None:
+            return -1
+        for idx, w in enumerate(page.get("widgets", [])):
+            if w.get("widget_id") == widget_id:
+                return idx
+        return -1
 
     def _save_pending_images(self):
         """Persist pending icon images to ~/.config/crowpanel/icons/."""
@@ -2235,20 +2275,27 @@ class EditorMainWindow(QMainWindow):
             page = self.config_manager.get_page(page_idx)
             if not page:
                 continue
-            for widget_idx, widget in enumerate(page.get("widgets", [])):
+            for widget in page.get("widgets", []):
                 icon_path = widget.get("icon_path", "")
                 if not icon_path:
+                    continue
+                wid = widget.get("widget_id", "")
+                if not wid:
                     continue
                 filename = os.path.basename(icon_path)
                 local_file = DEFAULT_ICONS_DIR / filename
                 if local_file.is_file():
                     png_data = local_file.read_bytes()
-                    self.properties_panel._pending_icon_image_data[widget_idx] = (filename, png_data)
+                    self.properties_panel._pending_icon_image_data[wid] = (filename, png_data)
 
     def closeEvent(self, event):
-        """Auto-save config on window close."""
+        """Auto-save config on window close. In tray mode, hide instead of quit."""
         self._auto_save_config()
-        super().closeEvent(event)
+        if self._tray_mode:
+            event.ignore()
+            self.hide()
+        else:
+            super().closeEvent(event)
 
     def _create_menu_bar(self):
         menubar = self.menuBar()
@@ -2293,15 +2340,16 @@ class EditorMainWindow(QMainWindow):
         widgets = page.get("widgets", [])
         pending = self.properties_panel.get_pending_images()
         for idx, widget_dict in enumerate(widgets):
+            wid = widget_dict.get("widget_id", "")
             item = CanvasWidgetItem(widget_dict, idx)
             # Restore icon pixmap from pending image data
-            if idx in pending:
+            if wid in pending:
                 from PySide6.QtGui import QPixmap
                 pixmap = QPixmap()
-                pixmap.loadFromData(pending[idx][1], "PNG")
+                pixmap.loadFromData(pending[wid][1], "PNG")
                 item.set_icon_pixmap(pixmap)
             self.canvas_scene.addItem(item)
-            self._canvas_items[idx] = item
+            self._canvas_items[wid] = item
 
     def _update_page_display(self):
         page_count = self.config_manager.get_page_count()
@@ -2313,9 +2361,19 @@ class EditorMainWindow(QMainWindow):
         self.next_page_btn.setEnabled(self.current_page < page_count - 1)
         self.remove_page_btn.setEnabled(page_count > 1)
 
+        # Update page nav dot widgets
+        if self.canvas_scene.page_count != page_count:
+            self.canvas_scene.page_count = page_count
+            for item in self._canvas_items.values():
+                if item.widget_dict.get("type") == WIDGET_PAGE_NAV:
+                    item.update()
+
     # -- Canvas signal handlers --
 
-    def _on_canvas_widget_selected(self, widget_idx):
+    def _on_canvas_widget_selected(self, widget_id):
+        widget_idx = self._resolve_widget_idx(widget_id)
+        if widget_idx < 0:
+            return
         widget_dict = self.config_manager.get_widget(self.current_page, widget_idx)
         if widget_dict:
             self.properties_panel.load_widget(widget_dict, widget_idx)
@@ -2326,8 +2384,11 @@ class EditorMainWindow(QMainWindow):
         self.properties_panel.clear_selection()
         self.statusBar().showMessage("Ready")
 
-    def _on_canvas_geometry_changed(self, widget_idx, x, y, w, h):
+    def _on_canvas_geometry_changed(self, widget_id, x, y, w, h):
         """Canvas item was moved or resized."""
+        widget_idx = self._resolve_widget_idx(widget_id)
+        if widget_idx < 0:
+            return
         widget_dict = self.config_manager.get_widget(self.current_page, widget_idx)
         if widget_dict:
             widget_dict["x"] = x
@@ -2347,45 +2408,62 @@ class EditorMainWindow(QMainWindow):
             widget_dict["label"] = STAT_TYPE_NAMES.get(st, "Stat")
         widget_idx = self.config_manager.add_widget(self.current_page, widget_dict)
         if widget_idx >= 0:
+            wid = widget_dict.get("widget_id", "")
             item = CanvasWidgetItem(widget_dict, widget_idx)
             self.canvas_scene.addItem(item)
-            self._canvas_items[widget_idx] = item
+            self._canvas_items[wid] = item
             # Select the new item
             self.canvas_scene.clearSelection()
             item.setSelected(True)
             type_name = WIDGET_TYPE_NAMES.get(widget_type, "Widget")
             self.statusBar().showMessage(f"Added: {type_name} at ({x}, {y})")
 
-    def _on_canvas_widget_deleted(self, widget_indices):
+    def _on_canvas_widget_deleted(self, widget_ids):
         """Widget(s) deleted from canvas (Delete key)."""
-        # Remove in reverse order to maintain indices
-        for idx in sorted(widget_indices, reverse=True):
+        # Remove items from canvas and resolve indices for config_manager
+        indices_to_remove = []
+        for wid in widget_ids:
+            if wid in self._canvas_items:
+                del self._canvas_items[wid]
+            idx = self._resolve_widget_idx(wid)
+            if idx >= 0:
+                indices_to_remove.append(idx)
+        # Remove from config_manager in reverse order to maintain indices
+        for idx in sorted(indices_to_remove, reverse=True):
             self.config_manager.remove_widget(self.current_page, idx)
-            if idx in self._canvas_items:
-                del self._canvas_items[idx]
 
         # Rebuild canvas to fix indices
         self.properties_panel.clear_selection()
         self._rebuild_canvas()
-        self.statusBar().showMessage(f"Deleted {len(widget_indices)} widget(s)")
+        self.statusBar().showMessage(f"Deleted {len(widget_ids)} widget(s)")
 
     def _on_canvas_paste(self, widget_dicts):
         """Paste widgets from clipboard onto current page."""
+        import uuid as _uuid
         self.canvas_scene.clearSelection()
         for wd in widget_dicts:
+            # Each pasted widget gets a fresh widget_id
+            wd["widget_id"] = str(_uuid.uuid4())
             widget_idx = self.config_manager.add_widget(self.current_page, wd)
             if widget_idx >= 0:
+                wid = wd["widget_id"]
                 item = CanvasWidgetItem(wd, widget_idx)
                 self.canvas_scene.addItem(item)
-                self._canvas_items[widget_idx] = item
+                self._canvas_items[wid] = item
                 item.setSelected(True)
         self.statusBar().showMessage(f"Pasted {len(widget_dicts)} widget(s)")
 
-    def _on_move_widgets_to_page(self, widget_indices, target_page):
+    def _on_move_widgets_to_page(self, widget_ids, target_page):
         """Move widgets from current page to target page."""
         import copy
         moved = 0
-        for idx in sorted(widget_indices, reverse=True):
+        # Resolve to positional indices and remove in reverse order
+        id_idx_pairs = []
+        for wid in widget_ids:
+            idx = self._resolve_widget_idx(wid)
+            if idx >= 0:
+                id_idx_pairs.append((wid, idx))
+        for wid, idx in sorted(id_idx_pairs, key=lambda p: p[1], reverse=True):
             wd = self.config_manager.get_widget(self.current_page, idx)
             if wd:
                 self.config_manager.add_widget(target_page, copy.deepcopy(wd))
@@ -2410,19 +2488,22 @@ class EditorMainWindow(QMainWindow):
 
     # -- Properties panel handler --
 
-    def _on_widget_property_changed(self, widget_idx, widget_dict):
+    def _on_widget_property_changed(self, widget_id, widget_dict):
         """Properties panel emitted an update."""
+        widget_idx = self._resolve_widget_idx(widget_id)
+        if widget_idx < 0:
+            return
         self.config_manager.set_widget(self.current_page, widget_idx, widget_dict)
         # Update the canvas item appearance
-        if widget_idx in self._canvas_items:
-            item = self._canvas_items[widget_idx]
+        if widget_id in self._canvas_items:
+            item = self._canvas_items[widget_id]
             item.update_from_dict(widget_dict)
             # Sync icon pixmap from pending image data
             pending = self.properties_panel.get_pending_images()
-            if widget_idx in pending:
+            if widget_id in pending:
                 from PySide6.QtGui import QPixmap
                 pixmap = QPixmap()
-                pixmap.loadFromData(pending[widget_idx][1], "PNG")
+                pixmap.loadFromData(pending[widget_id][1], "PNG")
                 item.set_icon_pixmap(pixmap)
             else:
                 item.set_icon_pixmap(None)
@@ -2573,31 +2654,58 @@ class EditorMainWindow(QMainWindow):
             self.statusBar().showMessage("Test Action only works on hotkey buttons")
             return
 
-        self.statusBar().showMessage("Testing action...")
+        from companion.action_executor import (
+            _exec_launch_app,
+            _exec_shell_cmd,
+            _exec_open_url,
+            _exec_keyboard_shortcut,
+            _exec_media_key,
+        )
+
+        action_type = widget_dict.get("action_type", ACTION_HOTKEY)
+        action_names = {
+            ACTION_HOTKEY: "Keyboard Shortcut",
+            ACTION_MEDIA_KEY: "Media Key",
+            ACTION_LAUNCH_APP: "Launch App",
+            ACTION_SHELL_CMD: "Shell Command",
+            ACTION_OPEN_URL: "Open URL",
+        }
+        action_name = action_names.get(action_type, f"Unknown({action_type})")
+        self.statusBar().showMessage(f"Testing {action_name}...")
 
         def _run_test():
             try:
-                from companion.action_executor import (
-                    _exec_launch_app,
-                    _exec_shell_cmd,
-                    _exec_open_url,
-                    _exec_keyboard_shortcut,
-                    _exec_media_key,
-                )
-                action_type = widget_dict.get("action_type", ACTION_HOTKEY)
                 if action_type == ACTION_LAUNCH_APP:
+                    cmd = widget_dict.get("launch_command", "")
+                    if not cmd:
+                        QMetaObject.invokeMethod(self.statusBar(), "showMessage",
+                            Qt.QueuedConnection, Q_ARG(str, "Test failed: no launch command set"))
+                        return
                     _exec_launch_app(widget_dict)
                 elif action_type == ACTION_SHELL_CMD:
+                    cmd = widget_dict.get("shell_command", "")
+                    if not cmd:
+                        QMetaObject.invokeMethod(self.statusBar(), "showMessage",
+                            Qt.QueuedConnection, Q_ARG(str, "Test failed: no shell command set"))
+                        return
                     _exec_shell_cmd(widget_dict)
                 elif action_type == ACTION_OPEN_URL:
+                    url = widget_dict.get("url", "")
+                    if not url:
+                        QMetaObject.invokeMethod(self.statusBar(), "showMessage",
+                            Qt.QueuedConnection, Q_ARG(str, "Test failed: no URL set"))
+                        return
                     _exec_open_url(widget_dict)
                 elif action_type == ACTION_MEDIA_KEY:
                     _exec_media_key(widget_dict)
                 elif action_type == ACTION_HOTKEY:
                     _exec_keyboard_shortcut(widget_dict)
+                QMetaObject.invokeMethod(self.statusBar(), "showMessage",
+                    Qt.QueuedConnection, Q_ARG(str, f"Test fired: {action_name}"))
             except Exception as exc:
-                import logging
                 logging.error("Test action failed: %s", exc)
+                QMetaObject.invokeMethod(self.statusBar(), "showMessage",
+                    Qt.QueuedConnection, Q_ARG(str, f"Test failed: {exc}"))
 
         threading.Thread(target=_run_test, daemon=True).start()
 
