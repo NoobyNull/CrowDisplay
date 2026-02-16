@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=CrowPanel Editor
+Comment=Visual layout editor for CrowPanel display hotkeys
+Exec=python3 crowpanel_editor.py
+Icon=crowpanel
+Categories=Utility;Settings;

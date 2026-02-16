@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=CrowPanel Companion
+Comment=System stats streamer and hotkey bridge for CrowPanel displays
+Exec=python3 crowpanel_tray.py
+Icon=crowpanel
+Categories=Utility;System;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
