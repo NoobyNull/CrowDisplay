@@ -9,8 +9,9 @@ void create_ui(const AppConfig* cfg);
 void rebuild_ui(const AppConfig* cfg);
 
 // Update stats header with new metrics from companion app.
-// Shows the header on first call. Pass nullptr to hide (timeout).
-void update_stats(const StatsPayload *stats);
+// Accepts raw payload bytes -- auto-detects TLV vs legacy StatsPayload format.
+// Shows the header on first call.
+void update_stats(const uint8_t *data, uint8_t len);
 
 // Hide stats header (called on timeout)
 void hide_stats_header();

@@ -120,8 +120,8 @@ void loop() {
             show_hotkey_view();
         }
 
-        if (msg_type == MSG_STATS && msg_len >= sizeof(StatsPayload)) {
-            update_stats((const StatsPayload *)msg_payload);
+        if (msg_type == MSG_STATS && msg_len >= 1) {
+            update_stats(msg_payload, msg_len);
             last_stats_time = millis();
             stats_active = true;
         }

@@ -201,9 +201,131 @@ static lv_obj_t *create_stat_label(lv_obj_t *parent, const char *text, uint32_t 
 }
 
 // ============================================================
-//  Stats Header: create the two-row header container
+//  Stats Header: get display name prefix for each stat type
 // ============================================================
-static void create_stats_header(lv_obj_t *parent) {
+static const char *get_stat_name(uint8_t type) {
+    switch (type) {
+        case STAT_CPU_PERCENT:    return "CPU";
+        case STAT_RAM_PERCENT:    return "RAM";
+        case STAT_GPU_PERCENT:    return "GPU";
+        case STAT_CPU_TEMP:       return "CPU";
+        case STAT_GPU_TEMP:       return "GPU";
+        case STAT_DISK_PERCENT:   return "Disk";
+        case STAT_NET_UP:         return LV_SYMBOL_UPLOAD;
+        case STAT_NET_DOWN:       return LV_SYMBOL_DOWNLOAD;
+        case STAT_CPU_FREQ:       return "CPU";
+        case STAT_GPU_FREQ:       return "GPU";
+        case STAT_SWAP_PERCENT:   return "Swap";
+        case STAT_UPTIME_HOURS:   return "Up";
+        case STAT_BATTERY_PCT:    return "Bat";
+        case STAT_FAN_RPM:        return "Fan";
+        case STAT_LOAD_AVG:       return "Load";
+        case STAT_PROC_COUNT:     return "Proc";
+        case STAT_GPU_MEM_PCT:    return "VRAM";
+        case STAT_GPU_POWER_W:    return "GPU";
+        case STAT_DISK_READ_KBS:  return LV_SYMBOL_DOWNLOAD " R";
+        case STAT_DISK_WRITE_KBS: return LV_SYMBOL_UPLOAD " W";
+        default:                  return "?";
+    }
+}
+
+// Format a stat value into a label based on stat type
+static void format_stat_value(lv_obj_t *lbl, uint8_t type, uint16_t value) {
+    const char *name = get_stat_name(type);
+    switch (type) {
+        case STAT_CPU_PERCENT:
+        case STAT_RAM_PERCENT:
+        case STAT_GPU_PERCENT:
+        case STAT_DISK_PERCENT:
+        case STAT_SWAP_PERCENT:
+        case STAT_BATTERY_PCT:
+        case STAT_GPU_MEM_PCT:
+            if ((value & 0xFF) == 0xFF)
+                lv_label_set_text_fmt(lbl, "%s N/A", name);
+            else
+                lv_label_set_text_fmt(lbl, "%s %d%%", name, value & 0xFF);
+            break;
+        case STAT_CPU_TEMP:
+        case STAT_GPU_TEMP:
+            if ((value & 0xFF) == 0xFF)
+                lv_label_set_text_fmt(lbl, "%s N/A", name);
+            else
+                lv_label_set_text_fmt(lbl, "%s %d\xC2\xB0""C", name, value & 0xFF);
+            break;
+        case STAT_NET_UP:
+        case STAT_NET_DOWN:
+            if (value >= 1024)
+                lv_label_set_text_fmt(lbl, "%s %.1f MB/s", name, value / 1024.0f);
+            else
+                lv_label_set_text_fmt(lbl, "%s %d KB/s", name, value);
+            break;
+        case STAT_CPU_FREQ:
+        case STAT_GPU_FREQ:
+            lv_label_set_text_fmt(lbl, "%s %d MHz", name, value);
+            break;
+        case STAT_UPTIME_HOURS:
+            lv_label_set_text_fmt(lbl, "%s %dh", name, value);
+            break;
+        case STAT_FAN_RPM:
+            lv_label_set_text_fmt(lbl, "%s %d", name, value);
+            break;
+        case STAT_LOAD_AVG:
+            lv_label_set_text_fmt(lbl, "%s %.2f", name, value / 100.0f);
+            break;
+        case STAT_PROC_COUNT:
+            lv_label_set_text_fmt(lbl, "%s %d", name, value);
+            break;
+        case STAT_GPU_POWER_W:
+            lv_label_set_text_fmt(lbl, "%s %dW", name, value);
+            break;
+        case STAT_DISK_READ_KBS:
+        case STAT_DISK_WRITE_KBS:
+            if (value >= 1024)
+                lv_label_set_text_fmt(lbl, "%s %.1f MB/s", name, value / 1024.0f);
+            else
+                lv_label_set_text_fmt(lbl, "%s %d KB/s", name, value);
+            break;
+        default:
+            lv_label_set_text_fmt(lbl, "? %d", value);
+            break;
+    }
+}
+
+// Get default placeholder text for stat type
+static const char *get_stat_placeholder(uint8_t type) {
+    switch (type) {
+        case STAT_CPU_PERCENT:    return "CPU --%";
+        case STAT_RAM_PERCENT:    return "RAM --%";
+        case STAT_GPU_PERCENT:    return "GPU --%";
+        case STAT_CPU_TEMP:       return "CPU --\xC2\xB0""C";
+        case STAT_GPU_TEMP:       return "GPU --\xC2\xB0""C";
+        case STAT_DISK_PERCENT:   return "Disk --%";
+        case STAT_NET_UP:         return LV_SYMBOL_UPLOAD " -- KB/s";
+        case STAT_NET_DOWN:       return LV_SYMBOL_DOWNLOAD " -- KB/s";
+        case STAT_CPU_FREQ:       return "CPU -- MHz";
+        case STAT_GPU_FREQ:       return "GPU -- MHz";
+        case STAT_SWAP_PERCENT:   return "Swap --%";
+        case STAT_UPTIME_HOURS:   return "Up --h";
+        case STAT_BATTERY_PCT:    return "Bat --%";
+        case STAT_FAN_RPM:        return "Fan --";
+        case STAT_LOAD_AVG:       return "Load --";
+        case STAT_PROC_COUNT:     return "Proc --";
+        case STAT_GPU_MEM_PCT:    return "VRAM --%";
+        case STAT_GPU_POWER_W:    return "GPU --W";
+        case STAT_DISK_READ_KBS:  return LV_SYMBOL_DOWNLOAD " R -- KB/s";
+        case STAT_DISK_WRITE_KBS: return LV_SYMBOL_UPLOAD " W -- KB/s";
+        default:                  return "---";
+    }
+}
+
+// Mapping from config stat_header position -> stat_type (for TLV callback)
+static uint8_t stat_type_by_position[CONFIG_MAX_STATS] = {};
+static uint8_t stat_label_count = 0;
+
+// ============================================================
+//  Stats Header: create config-driven two-row header container
+// ============================================================
+static void create_stats_header(lv_obj_t *parent, const AppConfig *cfg) {
     stats_header = lv_obj_create(parent);
     lv_obj_set_size(stats_header, SCREEN_WIDTH, 90);
     lv_obj_align(stats_header, LV_ALIGN_TOP_MID, 0, 45);
@@ -216,7 +338,18 @@ static void create_stats_header(lv_obj_t *parent) {
     // Start hidden
     lv_obj_add_flag(stats_header, LV_OBJ_FLAG_HIDDEN);
 
-    // Row 1 container (top 45px): CPU%, RAM%, GPU%, CPU temp, GPU temp
+    // Determine stat count from config (max CONFIG_MAX_STATS)
+    stat_label_count = 0;
+    const auto &sh = cfg->stats_header;
+    uint8_t count = (sh.size() > CONFIG_MAX_STATS) ? CONFIG_MAX_STATS : (uint8_t)sh.size();
+    if (count == 0) count = 0;
+
+    // Split: positions 0..4 in row 1, positions 5..7 in row 2
+    // (or dynamically: first ceil(count/2) in row 1, rest in row 2)
+    int row1_count = (count + 1) / 2;  // e.g., 8 -> 4, 6 -> 3, 4 -> 2
+    if (row1_count > 5) row1_count = 5; // max 5 per row for readability
+
+    // Row 1 container
     lv_obj_t *row1 = lv_obj_create(stats_header);
     lv_obj_set_size(row1, SCREEN_WIDTH - 20, 40);
     lv_obj_align(row1, LV_ALIGN_TOP_MID, 0, 0);
@@ -227,14 +360,7 @@ static void create_stats_header(lv_obj_t *parent) {
     lv_obj_set_flex_flow(row1, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row1, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    // Colors: CPU blue, RAM green, GPU orange, CPU temp red, GPU temp yellow
-    stat_labels[0] = create_stat_label(row1, "CPU --%",  0x3498DB);  // cpu_percent
-    stat_labels[1] = create_stat_label(row1, "RAM --%",  0x2ECC71);  // ram_percent
-    stat_labels[2] = create_stat_label(row1, "GPU --%",  0xE67E22);  // gpu_percent
-    stat_labels[3] = create_stat_label(row1, "CPU --\xC2\xB0""C", 0xE74C3C);  // cpu_temp
-    stat_labels[4] = create_stat_label(row1, "GPU --\xC2\xB0""C", 0xF1C40F);  // gpu_temp
-
-    // Row 2 container (bottom 45px): Net up, Net down, Disk%
+    // Row 2 container
     lv_obj_t *row2 = lv_obj_create(stats_header);
     lv_obj_set_size(row2, SCREEN_WIDTH - 20, 40);
     lv_obj_align(row2, LV_ALIGN_BOTTOM_MID, 0, 0);
@@ -245,61 +371,82 @@ static void create_stats_header(lv_obj_t *parent) {
     lv_obj_set_flex_flow(row2, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row2, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    // Colors: network teal, disk grey
-    stat_labels[5] = create_stat_label(row2, LV_SYMBOL_UPLOAD " -- KB/s",   0x1ABC9C);  // net_up
-    stat_labels[6] = create_stat_label(row2, LV_SYMBOL_DOWNLOAD " -- KB/s", 0x1ABC9C);  // net_down
-    stat_labels[7] = create_stat_label(row2, "Disk --%",                     0x7F8C8D);  // disk_percent
+    // Create labels from config, sorted by position
+    memset(stat_labels, 0, sizeof(stat_labels));
+    memset(stat_type_by_position, 0, sizeof(stat_type_by_position));
+
+    for (uint8_t i = 0; i < count; i++) {
+        uint8_t pos = sh[i].position;
+        if (pos >= CONFIG_MAX_STATS) continue;
+
+        lv_obj_t *parent_row = (pos < (uint8_t)row1_count) ? row1 : row2;
+        stat_labels[pos] = create_stat_label(parent_row, get_stat_placeholder(sh[i].type), sh[i].color);
+        stat_type_by_position[pos] = sh[i].type;
+        stat_label_count = (pos + 1 > stat_label_count) ? pos + 1 : stat_label_count;
+    }
+
+    Serial.printf("Stats header: %d labels created (row1=%d, row2=%d)\n",
+                  count, row1_count, count - row1_count);
+}
+
+// ============================================================
+//  Stats: TLV callback -- update the correct label for each stat
+// ============================================================
+static void update_stat_widget(uint8_t type, uint16_t value) {
+    // Find the label for this stat type by scanning position map
+    for (uint8_t i = 0; i < stat_label_count; i++) {
+        if (stat_type_by_position[i] == type && stat_labels[i]) {
+            format_stat_value(stat_labels[i], type, value);
+            return;
+        }
+    }
+}
+
+// ============================================================
+//  Stats: Legacy StatsPayload rendering (backwards compatibility)
+// ============================================================
+static void update_stats_legacy(const StatsPayload *stats) {
+    // Map legacy struct fields to TLV type updates
+    update_stat_widget(STAT_CPU_PERCENT, stats->cpu_percent);
+    update_stat_widget(STAT_RAM_PERCENT, stats->ram_percent);
+    update_stat_widget(STAT_GPU_PERCENT, stats->gpu_percent);
+    update_stat_widget(STAT_CPU_TEMP, stats->cpu_temp);
+    update_stat_widget(STAT_GPU_TEMP, stats->gpu_temp);
+    update_stat_widget(STAT_DISK_PERCENT, stats->disk_percent);
+    update_stat_widget(STAT_NET_UP, stats->net_up_kbps);
+    update_stat_widget(STAT_NET_DOWN, stats->net_down_kbps);
 }
 
 // ============================================================
 //  Public: update_stats() -- Update stats header with new data
+//  Detects TLV vs legacy format by first-byte heuristic:
+//  If data[0] <= STAT_TYPE_MAX, it's TLV count; if > STAT_TYPE_MAX, legacy.
 // ============================================================
-void update_stats(const StatsPayload *stats) {
-    if (!stats_header || !stats) return;
+void update_stats(const uint8_t *data, uint8_t len) {
+    if (!stats_header || !data || len == 0) return;
 
     // Show header if hidden
     if (!stats_visible) {
         lv_obj_clear_flag(stats_header, LV_OBJ_FLAG_HIDDEN);
         stats_visible = true;
         // Resize tabview to make room for stats header
-        lv_obj_set_size(tabview, SCREEN_WIDTH, SCREEN_HEIGHT - 45 - 90);
-        lv_obj_align(tabview, LV_ALIGN_BOTTOM_MID, 0, 0);
+        if (tabview) {
+            lv_obj_set_size(tabview, SCREEN_WIDTH, SCREEN_HEIGHT - 45 - 90);
+            lv_obj_align(tabview, LV_ALIGN_BOTTOM_MID, 0, 0);
+        }
     }
 
-    // Helper lambda for unavailable values
-    auto fmt_pct = [](lv_obj_t *lbl, const char *prefix, uint8_t val) {
-        if (val == 0xFF)
-            lv_label_set_text_fmt(lbl, "%s N/A", prefix);
-        else
-            lv_label_set_text_fmt(lbl, "%s %d%%", prefix, val);
-    };
-
-    auto fmt_temp = [](lv_obj_t *lbl, const char *prefix, uint8_t val) {
-        if (val == 0xFF)
-            lv_label_set_text_fmt(lbl, "%s N/A", prefix);
-        else
-            lv_label_set_text_fmt(lbl, "%s %d\xC2\xB0""C", prefix, val);
-    };
-
-    // Row 1
-    fmt_pct(stat_labels[0], "CPU", stats->cpu_percent);
-    fmt_pct(stat_labels[1], "RAM", stats->ram_percent);
-    fmt_pct(stat_labels[2], "GPU", stats->gpu_percent);
-    fmt_temp(stat_labels[3], "CPU", stats->cpu_temp);
-    fmt_temp(stat_labels[4], "GPU", stats->gpu_temp);
-
-    // Row 2 - network
-    if (stats->net_up_kbps >= 1024)
-        lv_label_set_text_fmt(stat_labels[5], LV_SYMBOL_UPLOAD " %.1f MB/s", stats->net_up_kbps / 1024.0f);
-    else
-        lv_label_set_text_fmt(stat_labels[5], LV_SYMBOL_UPLOAD " %d KB/s", stats->net_up_kbps);
-
-    if (stats->net_down_kbps >= 1024)
-        lv_label_set_text_fmt(stat_labels[6], LV_SYMBOL_DOWNLOAD " %.1f MB/s", stats->net_down_kbps / 1024.0f);
-    else
-        lv_label_set_text_fmt(stat_labels[6], LV_SYMBOL_DOWNLOAD " %d KB/s", stats->net_down_kbps);
-
-    fmt_pct(stat_labels[7], "Disk", stats->disk_percent);
+    // Heuristic: legacy StatsPayload has cpu_percent as first byte (21-100 typical)
+    // TLV has count as first byte (1-8 typical, max STAT_TYPE_MAX=20)
+    // Since cpu_percent of 0-20 is unlikely but possible, also check: if len ==
+    // sizeof(StatsPayload) and data[0] > STAT_TYPE_MAX, it's definitely legacy.
+    if (len >= sizeof(StatsPayload) && data[0] > STAT_TYPE_MAX) {
+        // Legacy fixed format
+        update_stats_legacy((const StatsPayload *)data);
+    } else {
+        // TLV format
+        tlv_decode_stats(data, len, update_stat_widget);
+    }
 }
 
 // ============================================================
@@ -784,7 +931,7 @@ static void create_ui_widgets(lv_obj_t *screen, const AppConfig *cfg) {
     lv_obj_add_event_cb(bright_btn, brightness_long_press_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
     // Stats header (hidden by default, shown on first MSG_STATS)
-    create_stats_header(screen);
+    create_stats_header(screen, cfg);
 
     // Tabview with bottom tabs (45px tab bar)
     tabview = lv_tabview_create(screen, LV_DIR_BOTTOM, 45);
