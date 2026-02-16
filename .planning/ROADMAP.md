@@ -127,7 +127,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 5 -> 6 -> 7 -> 8 -> 9
+Phases execute in numeric order: 5 -> 6 -> 7 -> 8 -> 9 -> 10
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -169,7 +169,9 @@ Plans:
 
 **Goal:** Companion service intercepts button presses from the bridge via vendor HID and executes configured actions (launch apps, open URLs, run commands) instead of relying on blind keyboard shortcuts
 **Depends on:** Phase 9
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 10 to break down)
+- [ ] 10-01-PLAN.md -- Protocol + firmware: MSG_BUTTON_PRESS message, display sends page+widget, bridge relays via vendor HID
+- [ ] 10-02-PLAN.md -- Companion action execution: action_executor module, vendor HID read thread, config file watcher
+- [ ] 10-03-PLAN.md -- Editor UX: 5 action types, app picker, test button, scroll wheel fix, window maximize
