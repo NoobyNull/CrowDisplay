@@ -33,7 +33,7 @@ import threading
 import asyncio
 
 from companion.action_executor import execute_action
-from companion.config_manager import get_config_manager
+from companion.config_manager import get_config_manager, DEFAULT_CONFIG_DIR, DEFAULT_CONFIG_PATH
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -890,167 +890,274 @@ def collect_stats_tlv(gpu_collector, enabled_types, prev_net, prev_time, prev_di
 # Main
 # ---------------------------------------------------------------------------
 
+class CompanionService:
+    """Background service: bridge communication, stats streaming, action dispatch.
+
+    Runs all work in daemon threads. Call start() to begin, stop() to shut down.
+    Status callbacks (on_bridge_connected, on_bridge_disconnected, on_stats_sent,
+    on_button_press) are called from background threads — use Qt signals or
+    thread-safe mechanisms if updating UI.
+    """
+
+    def __init__(self, config_manager=None):
+        self._running = False
+        self._device = None
+        self._hid_lock = threading.Lock()
+        self._config_mgr = config_manager or get_config_manager()
+        self._config_path = str(DEFAULT_CONFIG_PATH)
+        self._config_watcher = None
+        self._gpu = None
+        self._stats_thread = None
+        self._vendor_thread = None
+        self._enabled_stat_types = []
+
+        # Status callbacks
+        self.on_bridge_connected = None
+        self.on_bridge_disconnected = None
+        self.on_stats_sent = None
+        self.on_button_press = None
+
+        # Readable state
+        self._bridge_connected = False
+        self._stats_count = 0
+
+    @property
+    def is_bridge_connected(self) -> bool:
+        return self._bridge_connected
+
+    @property
+    def status_text(self) -> str:
+        if self._bridge_connected:
+            return f"Bridge: Connected, Stats: {len(self._enabled_stat_types)} types @ 1Hz"
+        return "Bridge: Disconnected"
+
+    def start(self):
+        """Start all background threads (non-blocking)."""
+        if self._running:
+            return
+
+        self._running = True
+        DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Load config
+        self._config_mgr.load_json_file(self._config_path)
+        self._enabled_stat_types = load_stats_config(self._config_path)
+        logging.info("Enabled stat types: %s",
+                     [STAT_ID_TO_NAME.get(t, f"0x{t:02X}") for t in self._enabled_stat_types])
+
+        # Initialize GPU collector
+        self._gpu = GPUCollector()
+        psutil.cpu_percent()  # Prime — first call always returns 0
+
+        # Start config file watcher
+        self._config_watcher = _start_config_watcher(self._config_path, self._config_mgr)
+
+        # D-Bus shutdown listener
+        threading.Thread(target=_run_dbus_listener, daemon=True).start()
+
+        # Notification forwarding
+        notif_enabled, notif_filter = load_notification_config(self._config_path)
+        if notif_enabled:
+            logging.info("Notification forwarding enabled (filter: %s)",
+                         list(notif_filter) if notif_filter else "ALL")
+        else:
+            logging.info("Notification forwarding disabled")
+
+        # Main stats + bridge thread
+        self._stats_thread = threading.Thread(
+            target=self._stats_loop, args=(notif_enabled, notif_filter), daemon=True
+        )
+        self._stats_thread.start()
+
+    def stop(self):
+        """Clean shutdown of all threads."""
+        self._running = False
+        if self._device is not None:
+            try:
+                self._device.close()
+            except Exception:
+                pass
+            self._device = None
+        self._bridge_connected = False
+        logging.info("CompanionService stopped.")
+
+    def reload_config(self):
+        """Reload config from disk."""
+        if self._config_mgr.load_json_file(self._config_path):
+            self._enabled_stat_types = load_stats_config(self._config_path)
+            logging.info("Config reloaded, %d stat types", len(self._enabled_stat_types))
+
+    def _set_bridge_connected(self, connected):
+        prev = self._bridge_connected
+        self._bridge_connected = connected
+        if connected and not prev:
+            if self.on_bridge_connected:
+                self.on_bridge_connected()
+        elif not connected and prev:
+            if self.on_bridge_disconnected:
+                self.on_bridge_disconnected()
+
+    def _connect_bridge(self):
+        """Discover and connect to bridge. Blocks until connected or stopped."""
+        while self._running:
+            path = find_bridge()
+            if path is not None:
+                try:
+                    self._device = hid.Device(path=path)
+                    logging.info("Connected to %s (manufacturer=%s, serial=%s)",
+                                 self._device.product, self._device.manufacturer,
+                                 self._device.serial)
+                    self._set_bridge_connected(True)
+                    return True
+                except Exception as exc:
+                    logging.error("Failed to open bridge: %s", exc)
+                    self._device = None
+            logging.info("Bridge not found, retrying in %.0fs...", RETRY_INTERVAL)
+            time.sleep(RETRY_INTERVAL)
+        return False
+
+    def _vendor_read_loop(self):
+        """Background: reads vendor HID input reports from bridge."""
+        while self._running and self._device is not None:
+            try:
+                with self._hid_lock:
+                    data = self._device.read(63, timeout_ms=100)
+                if data and len(data) >= 3:
+                    msg_type = data[0]
+                    if msg_type == MSG_BUTTON_PRESS:
+                        page_idx = data[1]
+                        widget_idx = data[2]
+                        logging.info("Button press: page=%d widget=%d", page_idx, widget_idx)
+                        if self.on_button_press:
+                            self.on_button_press(page_idx, widget_idx)
+                        threading.Thread(
+                            target=execute_action,
+                            args=(self._config_mgr, page_idx, widget_idx),
+                            daemon=True
+                        ).start()
+            except (IOError, OSError):
+                logging.warning("Vendor HID read error, device may have disconnected")
+                break
+            except Exception as exc:
+                logging.debug("Vendor read thread error: %s", exc)
+
+    def _stats_loop(self, notif_enabled, notif_filter):
+        """Main loop: bridge discovery, stats streaming, reconnection."""
+        global running
+
+        if not self._connect_bridge():
+            return
+
+        # Start vendor read thread
+        self._vendor_thread = threading.Thread(target=self._vendor_read_loop, daemon=True)
+        self._vendor_thread.start()
+
+        # Start notification listener if enabled
+        if notif_enabled and self._device is not None:
+            threading.Thread(
+                target=_run_notification_listener,
+                args=(notif_filter,
+                      lambda app, s, b: send_notification_to_display(
+                          self._device, app, s, b, self._hid_lock)),
+                daemon=True
+            ).start()
+
+        # Initialize baselines
+        prev_net = psutil.net_io_counters()
+        prev_time = time.time()
+        prev_disk_io = None
+        try:
+            prev_disk_io = psutil.disk_io_counters()
+        except Exception:
+            pass
+
+        logging.info("Streaming TLV stats at %.1f Hz (%d stat types)",
+                     1.0 / UPDATE_INTERVAL, len(self._enabled_stat_types))
+
+        while self._running:
+            if shutdown_event.is_set():
+                logging.info("System shutdown detected, notifying bridge...")
+                send_power_state(self._device, POWER_SHUTDOWN, self._hid_lock)
+                self._running = False
+                running = False
+                break
+
+            time.sleep(UPDATE_INTERVAL)
+            if not self._running:
+                break
+
+            packed, prev_net, prev_time, prev_disk_io = collect_stats_tlv(
+                self._gpu, self._enabled_stat_types, prev_net, prev_time, prev_disk_io
+            )
+
+            try:
+                with self._hid_lock:
+                    self._device.write(b"\x06" + bytes([MSG_STATS]) + packed)
+                self._stats_count += 1
+                if self.on_stats_sent:
+                    self.on_stats_sent()
+            except (IOError, OSError) as exc:
+                logging.warning("HID write failed (device disconnected?): %s", exc)
+                try:
+                    self._device.close()
+                except Exception:
+                    pass
+                self._device = None
+                self._set_bridge_connected(False)
+
+                # Reconnect
+                if not self._connect_bridge():
+                    break
+                # Restart vendor read thread for new device
+                self._vendor_thread = threading.Thread(
+                    target=self._vendor_read_loop, daemon=True
+                )
+                self._vendor_thread.start()
+                prev_net = psutil.net_io_counters()
+                prev_time = time.time()
+                continue
+
+            if self._device is not None:
+                send_time_sync(self._device, self._hid_lock)
+
+        # Clean up
+        if self._device is not None:
+            try:
+                self._device.close()
+            except Exception:
+                pass
+            self._device = None
+        self._set_bridge_connected(False)
+
+
+# ---------------------------------------------------------------------------
+# Headless CLI entry point
+# ---------------------------------------------------------------------------
+
 def main():
     global running
 
-    # Logging setup
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # Signal handlers for clean shutdown
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
 
-    logging.info("Hotkey Bridge Companion starting...")
+    logging.info("Hotkey Bridge Companion starting (headless)...")
 
-    # Load stats config from config.json if present in working dir
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-    enabled_stat_types = load_stats_config(config_path)
-    logging.info("Enabled stat types: %s",
-                 [STAT_ID_TO_NAME.get(t, f"0x{t:02X}") for t in enabled_stat_types])
+    service = CompanionService()
+    service.start()
 
-    # Initialize GPU collector once at startup
-    gpu = GPUCollector()
-
-    # Prime psutil.cpu_percent() -- first call always returns 0
-    psutil.cpu_percent()
-
-    # Start D-Bus shutdown listener in background thread
-    dbus_thread = threading.Thread(target=_run_dbus_listener, daemon=True)
-    dbus_thread.start()
-
-    # Load notification forwarding config
-    notif_enabled, notif_filter = load_notification_config(config_path)
-    if notif_enabled:
-        logging.info("Notification forwarding enabled (filter: %s)",
-                     list(notif_filter) if notif_filter else "ALL")
-    else:
-        logging.info("Notification forwarding disabled")
-
-    # Discover and connect to bridge
-    device = None
-    while running:
-        path = find_bridge()
-        if path is not None:
-            try:
-                device = hid.Device(path=path)
-                logging.info(
-                    "Connected to %s (manufacturer=%s, serial=%s)",
-                    device.product,
-                    device.manufacturer,
-                    device.serial,
-                )
-                break
-            except Exception as exc:
-                logging.error("Failed to open bridge: %s", exc)
-                device = None
-        logging.info("Bridge not found, retrying in %.0fs...", RETRY_INTERVAL)
-        time.sleep(RETRY_INTERVAL)
-
-    if not running or device is None:
-        logging.info("Shutting down (no bridge connected)")
-        return
-
-    # Thread-safe HID device access
-    hid_lock = threading.Lock()
-
-    # Initialize config manager for action execution
-    config_mgr = get_config_manager()
-    config_mgr.load_json_file(config_path)
-
-    # Start config file watcher for auto-reload
-    config_watcher = _start_config_watcher(config_path, config_mgr)
-
-    # Start vendor HID read thread (receives button presses from bridge)
-    vendor_thread = threading.Thread(
-        target=_vendor_read_thread,
-        args=(device, hid_lock, config_mgr),
-        daemon=True,
-    )
-    vendor_thread.start()
-
-    # Start notification listener if enabled (needs device reference for callback)
-    if notif_enabled and device is not None:
-        notif_thread = threading.Thread(
-            target=_run_notification_listener,
-            args=(notif_filter, lambda app, s, b: send_notification_to_display(device, app, s, b, hid_lock)),
-            daemon=True,
-        )
-        notif_thread.start()
-
-    # Initialize network and disk I/O baselines
-    prev_net = psutil.net_io_counters()
-    prev_time = time.time()
-    prev_disk_io = None
     try:
-        prev_disk_io = psutil.disk_io_counters()
-    except Exception:
+        while running:
+            time.sleep(1)
+    except KeyboardInterrupt:
         pass
 
-    # Main stats loop
-    logging.info("Streaming TLV stats at %.1f Hz (%d stat types)",
-                 1.0 / UPDATE_INTERVAL, len(enabled_stat_types))
-    while running:
-        # Check for system shutdown signal from D-Bus
-        if shutdown_event.is_set():
-            logging.info("System shutdown detected, notifying bridge...")
-            send_power_state(device, POWER_SHUTDOWN, hid_lock)
-            logging.info("Shutdown signal sent to bridge")
-            running = False
-            break
-
-        time.sleep(UPDATE_INTERVAL)
-        if not running:
-            break
-
-        packed, prev_net, prev_time, prev_disk_io = collect_stats_tlv(
-            gpu, enabled_stat_types, prev_net, prev_time, prev_disk_io
-        )
-
-        try:
-            # Leading 0x00 is the HID report ID byte required by hidapi on
-            # Linux. 0x03 is the MSG_STATS type prefix for bridge dispatch.
-            with hid_lock:
-                device.write(b"\x06" + bytes([MSG_STATS]) + packed)
-        except (IOError, OSError) as exc:
-            logging.warning("HID write failed (device disconnected?): %s", exc)
-            try:
-                device.close()
-            except Exception:
-                pass
-            device = None
-
-            # Retry discovery loop
-            while running:
-                logging.info("Reconnecting to bridge...")
-                path = find_bridge()
-                if path is not None:
-                    try:
-                        device = hid.Device(path=path)
-                        logging.info("Reconnected to %s", device.product)
-                        prev_net = psutil.net_io_counters()
-                        prev_time = time.time()
-                        break
-                    except Exception:
-                        pass
-                time.sleep(RETRY_INTERVAL)
-
-            if device is None:
-                break
-
-        # Send time sync alongside stats (same error handling)
-        if device is not None:
-            send_time_sync(device, hid_lock)
-
-    # Clean shutdown
-    if device is not None:
-        try:
-            device.close()
-        except Exception:
-            pass
+    service.stop()
     logging.info("Companion stopped.")
 
 

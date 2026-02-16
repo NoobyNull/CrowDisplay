@@ -27,19 +27,38 @@ class HTTPClient:
 
     def health_check(self) -> bool:
         """
-        Check if device is reachable.
-        Returns True if device responds, False otherwise.
+        Check if device is reachable via /api/health endpoint.
+        Returns True if device responds with 200, False otherwise.
         """
         try:
             response = requests.get(
-                f"{self.base_url}/",
-                timeout=self.timeout,
+                f"{self.base_url}/api/health",
+                timeout=3,
             )
             return response.status_code == 200
         except (requests.ConnectionError, requests.Timeout):
             return False
         except Exception:
             return False
+
+    def wait_for_device(self, timeout: float = 10.0, interval: float = 1.0) -> bool:
+        """
+        Poll health_check until device responds or timeout expires.
+
+        Args:
+            timeout: Maximum seconds to wait
+            interval: Seconds between poll attempts
+
+        Returns:
+            True if device responded, False if timed out
+        """
+        import time
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.health_check():
+                return True
+            time.sleep(interval)
+        return False
 
     def upload_config(self, json_str: str, filename: str = "config.json") -> Dict[str, Any]:
         """

@@ -1,8 +1,15 @@
 """
-Deploy Dialog: Modal dialog for device connection and config upload
+Deploy Dialog: One-click deploy via USB bridge + WiFi auto-connect.
 
-Shows device IP input, connection status, upload progress, and error messages.
-Integrates with HTTPClient for actual device communication.
+Orchestrates the full deploy sequence:
+1. Open bridge USB HID
+2. Send CONFIG_MODE (display starts SoftAP)
+3. Connect PC WiFi to CrowPanel-Config
+4. Wait for device HTTP health check
+5. Upload images (if any)
+6. Upload config JSON
+7. Send CONFIG_DONE (display reloads, exits AP)
+8. Restore previous WiFi
 """
 
 from PySide6.QtWidgets import (
@@ -10,202 +17,300 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QProgressBar,
     QMessageBox,
 )
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QThread, Signal
 
 from companion.http_client import HTTPClient, HTTPClientError
-from companion.config_manager import get_config_manager
+from companion.bridge_device import BridgeDevice, BridgeDeviceError
+from companion.wifi_manager import WiFiManager, WiFiManagerError
+
+import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Deploy step definitions: (key, label)
+DEPLOY_STEPS = [
+    ("bridge", "Open bridge USB connection"),
+    ("config_mode", "Signal display to enter config mode"),
+    ("ap_wait", "Wait for AP startup"),
+    ("wifi_connect", "Connect WiFi to CrowPanel-Config"),
+    ("health", "Wait for device to respond"),
+    ("images", "Upload images"),
+    ("config", "Upload configuration"),
+    ("config_done", "Signal display to reload"),
+    ("wifi_restore", "Restore previous WiFi"),
+]
 
 
-class UploadWorker(QThread):
-    """Worker thread for async config upload (images first, then config)"""
+class DeployWorker(QThread):
+    """Worker thread that orchestrates the full deploy sequence."""
 
-    upload_started = Signal()
-    upload_progress = Signal(str)
-    upload_success = Signal(dict)
-    upload_failed = Signal(str)
+    step_started = Signal(str)   # step key
+    step_done = Signal(str)      # step key
+    deploy_success = Signal()
+    deploy_failed = Signal(str)  # error message
 
-    def __init__(self, device_ip: str, json_str: str, pending_images: dict = None):
+    def __init__(self, json_str: str, pending_images: dict = None):
         super().__init__()
-        self.device_ip = device_ip
         self.json_str = json_str
         self.pending_images = pending_images or {}
+        self._bridge = None
+        self._wifi = None
 
     def run(self):
-        """Execute upload in background thread: images first, then config"""
-        self.upload_started.emit()
+        """Execute full deploy sequence with error recovery."""
+        self._bridge = BridgeDevice()
+        self._wifi = WiFiManager()
 
         try:
-            client = HTTPClient(device_ip=self.device_ip)
+            # 1. Open bridge
+            self.step_started.emit("bridge")
+            self._bridge.open()
+            self.step_done.emit("bridge")
 
-            # Upload pending images first
+            # 2. Send CONFIG_MODE
+            self.step_started.emit("config_mode")
+            self._bridge.send_config_mode()
+            self.step_done.emit("config_mode")
+
+            # 3. Wait for AP startup
+            self.step_started.emit("ap_wait")
+            time.sleep(3)
+            self.step_done.emit("ap_wait")
+
+            # 4. Connect WiFi
+            self.step_started.emit("wifi_connect")
+            self._wifi.connect_to_crowpanel(timeout=15)
+            self.step_done.emit("wifi_connect")
+
+            # 5. Wait for device health
+            self.step_started.emit("health")
+            client = HTTPClient()
+            if not client.wait_for_device(timeout=10, interval=1):
+                raise HTTPClientError("Device not responding after WiFi connect")
+            self.step_done.emit("health")
+
+            # 6. Upload images
+            self.step_started.emit("images")
             if self.pending_images:
                 total = len(self.pending_images)
                 for i, (widget_idx, (filename, data)) in enumerate(self.pending_images.items()):
-                    self.upload_progress.emit(f"Uploading images... ({i + 1}/{total})")
                     result = client.upload_image(filename, data)
                     if not result.get("success"):
-                        error_msg = result.get("error", f"Failed to upload {filename}")
-                        self.upload_failed.emit(error_msg)
-                        return
+                        raise HTTPClientError(
+                            result.get("error", f"Failed to upload {filename}")
+                        )
+            self.step_done.emit("images")
 
-            # Upload config
-            self.upload_progress.emit("Deploying config...")
+            # 7. Upload config
+            self.step_started.emit("config")
             result = client.upload_config(self.json_str)
+            if not result.get("success"):
+                raise HTTPClientError(
+                    result.get("error", "Config upload rejected by device")
+                )
+            self.step_done.emit("config")
 
-            if result["success"]:
-                self.upload_success.emit(result)
-            else:
-                error_msg = result.get("error", "Unknown error")
-                self.upload_failed.emit(error_msg)
+            # 8. Send CONFIG_DONE
+            self.step_started.emit("config_done")
+            self._bridge.send_config_done()
+            self.step_done.emit("config_done")
 
-        except HTTPClientError as e:
-            self.upload_failed.emit(str(e))
+            # 9. Restore WiFi
+            self.step_started.emit("wifi_restore")
+            self._wifi.restore_previous_wifi()
+            self.step_done.emit("wifi_restore")
+
+            self.deploy_success.emit()
+
+        except (BridgeDeviceError, WiFiManagerError, HTTPClientError) as e:
+            self._cleanup()
+            self.deploy_failed.emit(str(e))
         except Exception as e:
-            self.upload_failed.emit(f"Unexpected error: {str(e)}")
+            self._cleanup()
+            self.deploy_failed.emit(f"Unexpected error: {e}")
+
+    def _cleanup(self):
+        """Best-effort cleanup: send CONFIG_DONE and restore WiFi."""
+        try:
+            if self._bridge:
+                self._bridge.send_config_done()
+        except Exception:
+            pass
+        try:
+            if self._wifi:
+                self._wifi.restore_previous_wifi()
+        except Exception:
+            pass
+        try:
+            if self._bridge:
+                self._bridge.close()
+        except Exception:
+            pass
+
+
+class StepLabel(QLabel):
+    """A step indicator label with status icon."""
+
+    PENDING = 0
+    ACTIVE = 1
+    DONE = 2
+    ERROR = 3
+
+    _STYLES = {
+        PENDING: "color: #666666;",
+        ACTIVE:  "color: #3498DB; font-weight: bold;",
+        DONE:    "color: #2ECC71;",
+        ERROR:   "color: #E74C3C;",
+    }
+    _ICONS = {
+        PENDING: "  ",
+        ACTIVE:  "  ",
+        DONE:    "  ",
+        ERROR:   "  ",
+    }
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(parent)
+        self._text = text
+        self._state = self.PENDING
+        self._update()
+
+    def set_state(self, state: int):
+        self._state = state
+        self._update()
+
+    def _update(self):
+        icon = self._ICONS.get(self._state, "  ")
+        self.setText(f"{icon}{self._text}")
+        self.setStyleSheet(self._STYLES.get(self._state, ""))
 
 
 class DeployDialog(QDialog):
-    """Modal dialog for device deployment"""
+    """One-click deploy dialog with step-by-step progress."""
 
     def __init__(self, config_manager, parent=None, pending_images=None):
         super().__init__(parent)
         self.config_manager = config_manager
         self.pending_images = pending_images or {}
-        self.upload_worker = None
+        self.deploy_worker = None
         self.setWindowTitle("Deploy to Device")
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(420)
         self.setModal(True)
 
-        # Device IP input
-        ip_layout = QHBoxLayout()
-        ip_layout.addWidget(QLabel("Device IP:"))
-        self.ip_input = QLineEdit()
-        self.ip_input.setText("192.168.4.1")
-        ip_layout.addWidget(self.ip_input)
+        layout = QVBoxLayout(self)
 
-        # Test connection button
-        self.test_btn = QPushButton("Test Connection")
-        self.test_btn.clicked.connect(self._on_test_connection)
-        ip_layout.addWidget(self.test_btn)
+        # Header
+        header = QLabel("One-Click Deploy")
+        header.setStyleSheet("font-size: 16px; font-weight: bold; color: #3498DB;")
+        layout.addWidget(header)
 
-        # Status label
-        self.status_label = QLabel("(not connected)")
-        self.status_label.setStyleSheet("color: #888888;")
+        desc = QLabel("Deploys config via USB bridge + WiFi auto-connect.")
+        desc.setStyleSheet("color: #999999; margin-bottom: 8px;")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        # Step labels
+        self.step_labels: dict[str, StepLabel] = {}
+        for key, label in DEPLOY_STEPS:
+            sl = StepLabel(label)
+            self.step_labels[key] = sl
+            layout.addWidget(sl)
 
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 0)  # Indeterminate
         self.progress_bar.setVisible(False)
+        layout.addWidget(self.progress_bar)
 
-        # Deploy button
-        self.deploy_btn = QPushButton("Deploy")
-        self.deploy_btn.setMinimumHeight(40)
-        self.deploy_btn.setEnabled(False)
-        self.deploy_btn.setStyleSheet("background-color: #2ECC71; color: white; font-weight: bold;")
-        self.deploy_btn.clicked.connect(self._on_deploy)
+        # Status message
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #888888; margin-top: 4px;")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
 
-        # Cancel button
-        self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.clicked.connect(self.reject)
+        layout.addStretch()
 
-        # Buttons layout
+        # Buttons
         button_layout = QHBoxLayout()
         button_layout.addStretch()
+
+        self.deploy_btn = QPushButton("Deploy")
+        self.deploy_btn.setMinimumHeight(40)
+        self.deploy_btn.setStyleSheet(
+            "background-color: #2ECC71; color: white; font-weight: bold; "
+            "padding: 8px 32px; border-radius: 4px;"
+        )
+        self.deploy_btn.clicked.connect(self._on_deploy)
         button_layout.addWidget(self.deploy_btn)
+
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(self.cancel_btn)
 
-        # Main layout
-        layout = QVBoxLayout(self)
-        layout.addLayout(ip_layout)
-        layout.addWidget(self.status_label)
-        layout.addWidget(self.progress_bar)
-        layout.addStretch()
         layout.addLayout(button_layout)
-        self.setLayout(layout)
-
-    def _on_test_connection(self):
-        """Test connection to device"""
-        device_ip = self.ip_input.text().strip()
-        if not device_ip:
-            self.status_label.setText("❌ Enter device IP")
-            self.status_label.setStyleSheet("color: #CC0000;")
-            self.deploy_btn.setEnabled(False)
-            return
-
-        self.test_btn.setEnabled(False)
-        self.status_label.setText("Testing connection...")
-        self.status_label.setStyleSheet("color: #0077FF;")
-
-        try:
-            client = HTTPClient(device_ip=device_ip)
-            if client.health_check():
-                self.status_label.setText("✓ Connected to device")
-                self.status_label.setStyleSheet("color: #00AA00;")
-                self.deploy_btn.setEnabled(True)
-            else:
-                self.status_label.setText("✗ Cannot reach device")
-                self.status_label.setStyleSheet("color: #CC0000;")
-                self.deploy_btn.setEnabled(False)
-        except Exception as e:
-            self.status_label.setText(f"✗ Error: {str(e)}")
-            self.status_label.setStyleSheet("color: #CC0000;")
-            self.deploy_btn.setEnabled(False)
-        finally:
-            self.test_btn.setEnabled(True)
 
     def _on_deploy(self):
-        """Deploy config to device"""
-        device_ip = self.ip_input.text().strip()
+        """Start the deploy sequence."""
         json_str = self.config_manager.to_json()
 
-        # Start upload in worker thread (images + config)
-        self.upload_worker = UploadWorker(device_ip, json_str, self.pending_images)
-        self.upload_worker.upload_started.connect(self._on_upload_started)
-        self.upload_worker.upload_progress.connect(self._on_upload_progress)
-        self.upload_worker.upload_success.connect(self._on_upload_success)
-        self.upload_worker.upload_failed.connect(self._on_upload_failed)
-        self.upload_worker.start()
-
-    def _on_upload_started(self):
-        """Upload started"""
         self.deploy_btn.setEnabled(False)
         self.progress_bar.setVisible(True)
-        self.status_label.setText("Uploading...")
-        self.status_label.setStyleSheet("color: #0077FF;")
+        self.status_label.setText("Starting deploy...")
+        self.status_label.setStyleSheet("color: #3498DB;")
 
-    def _on_upload_progress(self, message: str):
-        """Upload progress update"""
-        self.status_label.setText(message)
-        self.status_label.setStyleSheet("color: #0077FF;")
+        # Reset all steps to pending
+        for sl in self.step_labels.values():
+            sl.set_state(StepLabel.PENDING)
 
-    def _on_upload_success(self, result: dict):
-        """Upload succeeded"""
+        self.deploy_worker = DeployWorker(json_str, self.pending_images)
+        self.deploy_worker.step_started.connect(self._on_step_started)
+        self.deploy_worker.step_done.connect(self._on_step_done)
+        self.deploy_worker.deploy_success.connect(self._on_success)
+        self.deploy_worker.deploy_failed.connect(self._on_failed)
+        self.deploy_worker.start()
+
+    def _on_step_started(self, key: str):
+        """Mark step as active."""
+        if key in self.step_labels:
+            self.step_labels[key].set_state(StepLabel.ACTIVE)
+
+    def _on_step_done(self, key: str):
+        """Mark step as done."""
+        if key in self.step_labels:
+            self.step_labels[key].set_state(StepLabel.DONE)
+
+    def _on_success(self):
+        """Deploy completed successfully."""
         self.progress_bar.setVisible(False)
-        self.status_label.setText("✓ Config deployed! Device rebuilding UI...")
-        self.status_label.setStyleSheet("color: #00AA00;")
+        self.status_label.setText("Deploy complete!")
+        self.status_label.setStyleSheet("color: #2ECC71; font-weight: bold;")
 
-        # Show success message and close in 2 seconds
         QMessageBox.information(
             self,
             "Deployment Successful",
-            "Config has been uploaded to the device.\n\nThe device will rebuild its UI to match the new layout.",
+            "Config deployed to device.\nThe display will rebuild its UI.",
         )
         self.accept()
 
-    def _on_upload_failed(self, error_msg: str):
-        """Upload failed"""
+    def _on_failed(self, error_msg: str):
+        """Deploy failed."""
         self.progress_bar.setVisible(False)
         self.deploy_btn.setEnabled(True)
-        self.status_label.setText(f"✗ Upload failed")
-        self.status_label.setStyleSheet("color: #CC0000;")
+        self.status_label.setText(f"Failed: {error_msg}")
+        self.status_label.setStyleSheet("color: #E74C3C;")
+
+        # Mark any active steps as error
+        for sl in self.step_labels.values():
+            if sl._state == StepLabel.ACTIVE:
+                sl.set_state(StepLabel.ERROR)
 
         QMessageBox.critical(
             self,
             "Deployment Failed",
-            f"Failed to upload config:\n\n{error_msg}\n\nCheck device IP and try again.",
+            f"Deploy failed:\n\n{error_msg}",
         )

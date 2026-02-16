@@ -2,11 +2,23 @@
 Image Optimizer: Resize and convert images for device button icons.
 
 Uses Pillow to resize images to fit within widget bounds and convert to PNG
-format for LVGL's lodepng decoder on the device.
+format for LVGL's lodepng decoder on the device. Handles SVG via cairosvg.
 """
 
 from io import BytesIO
 from PIL import Image
+
+
+def _open_image(input_path: str) -> Image.Image:
+    """Open an image file, handling SVG conversion if needed."""
+    if input_path.lower().endswith(".svg"):
+        try:
+            import cairosvg
+            png_data = cairosvg.svg2png(url=input_path, output_width=256, output_height=256)
+            return Image.open(BytesIO(png_data))
+        except ImportError:
+            raise ValueError("SVG support requires cairosvg (pip install cairosvg)")
+    return Image.open(input_path)
 
 
 def optimize_icon(input_path: str, max_width: int, max_height: int) -> bytes:
@@ -14,14 +26,14 @@ def optimize_icon(input_path: str, max_width: int, max_height: int) -> bytes:
     Open an image file, resize to fit within max dimensions, and return as PNG bytes.
 
     Args:
-        input_path: Path to source image (PNG, JPG, BMP, GIF, etc.)
+        input_path: Path to source image (PNG, JPG, BMP, GIF, SVG, etc.)
         max_width: Maximum width in pixels
         max_height: Maximum height in pixels
 
     Returns:
         PNG-encoded bytes ready for upload to device SD card
     """
-    img = Image.open(input_path)
+    img = _open_image(input_path)
 
     # Convert to RGBA for alpha support
     if img.mode != "RGBA":
