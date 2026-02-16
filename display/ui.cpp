@@ -973,12 +973,17 @@ static void create_ui_widgets(lv_obj_t *screen, const AppConfig *cfg) {
                 lv_obj_t *btn = create_hotkey_button(tab, &btn_cfg);
 
                 if (btn_cfg.grid_row >= 0 && btn_cfg.grid_col >= 0) {
-                    // Explicit positioning
+                    // Explicit positioning with span support
                     lv_obj_set_grid_cell(btn,
-                        LV_GRID_ALIGN_STRETCH, btn_cfg.grid_col, 1,
-                        LV_GRID_ALIGN_STRETCH, btn_cfg.grid_row, 1);
+                        LV_GRID_ALIGN_STRETCH, btn_cfg.grid_col, btn_cfg.col_span,
+                        LV_GRID_ALIGN_STRETCH, btn_cfg.grid_row, btn_cfg.row_span);
+
+                    // Increase padding for larger buttons to prevent crowding
+                    if (btn_cfg.col_span >= 2 || btn_cfg.row_span >= 2) {
+                        lv_obj_set_style_pad_all(btn, 12, LV_PART_MAIN);
+                    }
                 } else {
-                    // Auto-flow: place in next available cell
+                    // Auto-flow: place in next available cell (always 1x1)
                     lv_obj_set_grid_cell(btn,
                         LV_GRID_ALIGN_STRETCH, auto_col, 1,
                         LV_GRID_ALIGN_STRETCH, auto_row, 1);
