@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 ## Current Position
 
 Phase: 10 (Companion Action Execution)
-Plan: 1 of 3 in current phase (COMPLETE)
+Plan: 2 of 3 in current phase (COMPLETE)
 Status: In Progress
-Last activity: 2026-02-16 -- Completed 10-01 Protocol + Pipeline
+Last activity: 2026-02-16 -- Completed 10-02 Action Execution + Vendor Read Thread
 
-Progress: [#######             ] 33% (10-01 complete, 10-02 and 10-03 remaining)
+Progress: [##############      ] 67% (10-01, 10-02 complete, 10-03 remaining)
 
 ## Performance Metrics
 
@@ -35,7 +35,7 @@ Progress: [#######             ] 33% (10-01 complete, 10-02 and 10-03 remaining)
 | 07 | 2 | 11min | 5.5min |
 | 08 | 3 | 7min | 2.3min |
 | 09 | 5 | ~60min | ~12min |
-| 10 | 1 | 3min | 3min |
+| 10 | 2 | 6min | 3min |
 
 *Updated after each plan completion*
 
@@ -84,6 +84,9 @@ Recent decisions affecting current work:
 - [Phase 10]: Static ButtonEventData pool (CONFIG_MAX_WIDGETS entries) for LVGL event user_data
 - [Phase 10]: VALID_ACTION_TYPES tuple for centralized action type validation
 - [Phase 10]: Keep legacy MSG_HOTKEY/MSG_MEDIA_KEY handlers for backward compat
+- [Phase 10]: ydotool preferred over xdotool with automatic fallback -- supports Wayland natively
+- [Phase 10]: watchdog optional dependency with graceful degradation for config auto-reload
+- [Phase 10]: Action execution on separate daemon threads -- never blocks vendor read or stats loop
 
 ### Pending Todos
 
@@ -102,5 +105,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 10-01-PLAN.md (Protocol + Pipeline for Companion Action Execution)
+Stopped at: Completed 10-02-PLAN.md (Action Execution + Vendor Read Thread)
 Resume file: None
