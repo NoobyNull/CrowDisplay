@@ -88,6 +88,8 @@ class ConfigManager:
                                     "grid_row": -1,
                                     "grid_col": -1,
                                     "pressed_color": 0,
+                                    "col_span": 1,
+                                    "row_span": 1,
                                 }
                                 for i in range(12)  # 4x3 grid
                             ],
@@ -107,6 +109,8 @@ class ConfigManager:
                                     "grid_row": -1,
                                     "grid_col": -1,
                                     "pressed_color": 0,
+                                    "col_span": 1,
+                                    "row_span": 1,
                                 }
                                 for i in range(12)
                             ],
@@ -126,6 +130,8 @@ class ConfigManager:
                                     "grid_row": -1,
                                     "grid_col": -1,
                                     "pressed_color": 0,
+                                    "col_span": 1,
+                                    "row_span": 1,
                                 }
                                 for i in range(12)
                             ],
@@ -225,6 +231,8 @@ class ConfigManager:
                     "grid_row": -1,
                     "grid_col": -1,
                     "pressed_color": 0,
+                    "col_span": 1,
+                    "row_span": 1,
                 }
                 for _ in range(12)
             ],
@@ -375,7 +383,25 @@ class ConfigManager:
                 if isinstance(pressed_color, int) and (pressed_color < 0 or pressed_color > 0xFFFFFF):
                     return False, f"Page {pi} button {bi}: pressed_color out of range [0, 0xFFFFFF]"
 
-        # Validate stats_header (v0.9.1 — optional, defaults applied if absent)
+                # Validate grid span (v0.9.1)
+                col_span = button.get("col_span", 1)
+                row_span = button.get("row_span", 1)
+                if not isinstance(col_span, int) or col_span < 1 or col_span > 4:
+                    return False, f"Page {pi} button {bi}: col_span {col_span} out of range [1, 4]"
+                if not isinstance(row_span, int) or row_span < 1 or row_span > 3:
+                    return False, f"Page {pi} button {bi}: row_span {row_span} out of range [1, 3]"
+                # Validate span doesn't exceed grid bounds
+                if grid_col >= 0 and grid_col + col_span > GRID_COLS:
+                    return False, f"Page {pi} button {bi}: col {grid_col} + span {col_span} exceeds grid width ({GRID_COLS})"
+                if grid_row >= 0 and grid_row + row_span > GRID_ROWS:
+                    return False, f"Page {pi} button {bi}: row {grid_row} + span {row_span} exceeds grid height ({GRID_ROWS})"
+
+            # Check for overlapping buttons on this page
+            valid, overlap_msg = self._validate_button_layout(pi, buttons)
+            if not valid:
+                return False, overlap_msg
+
+        # Validate stats_header (v0.9.1 -- optional, defaults applied if absent)
         stats_header = self.config.get("stats_header", [])
         if not isinstance(stats_header, list):
             return False, "stats_header must be an array"
@@ -402,6 +428,49 @@ class ConfigManager:
             if position in seen_positions:
                 return False, f"stats_header[{si}]: duplicate position {position}"
             seen_positions.add(position)
+
+        return True, ""
+
+    @staticmethod
+    def _validate_button_layout(page_idx: int, buttons: List[Dict[str, Any]]) -> tuple[bool, str]:
+        """Check for overlapping buttons in grid layout.
+
+        Returns (is_valid, error_message).
+        """
+        grid = [[None for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
+
+        auto_row, auto_col = 0, 0
+        for btn_idx, btn in enumerate(buttons):
+            row = btn.get("grid_row", -1)
+            col = btn.get("grid_col", -1)
+
+            if row < 0 or col < 0:
+                # Auto-flow button: always 1x1, find position
+                target_row, target_col = auto_row, auto_col
+                col_span = 1
+                row_span = 1
+                auto_col += 1
+                if auto_col >= GRID_COLS:
+                    auto_col = 0
+                    auto_row += 1
+            else:
+                target_row, target_col = row, col
+                col_span = btn.get("col_span", 1)
+                row_span = btn.get("row_span", 1)
+
+            # Skip if outside grid
+            if target_row >= GRID_ROWS or target_col >= GRID_COLS:
+                continue
+
+            # Check for overlaps with existing buttons
+            for r in range(target_row, min(target_row + row_span, GRID_ROWS)):
+                for c in range(target_col, min(target_col + col_span, GRID_COLS)):
+                    if grid[r][c] is not None:
+                        return False, (
+                            f"Page {page_idx} button {btn_idx} overlaps with button "
+                            f"{grid[r][c]} at cell ({r},{c})"
+                        )
+                    grid[r][c] = btn_idx
 
         return True, ""
 
