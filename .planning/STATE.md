@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Tap a button on the display, the correct keyboard shortcut fires on the PC -- reliably, with minimal latency, whether connected by wire or wirelessly.
-**Current focus:** Phase 9 - Tweaks and Break-Fix (v0.9.1)
+**Current focus:** Phase 10 - Companion Action Execution
 
 ## Current Position
 
-Phase: 9 of 9 (Tweaks and Break-Fix v0.9.1)
-Plan: 5 of 5 in current phase (COMPLETE)
-Status: Phase Complete
-Last activity: 2026-02-16 -- Completed 09-02 Variable Button Sizing (Grid Spans)
+Phase: 10 (Companion Action Execution)
+Plan: 1 of 3 in current phase (COMPLETE)
+Status: In Progress
+Last activity: 2026-02-16 -- Completed 10-01 Protocol + Pipeline
 
-Progress: [####################] 100% (v1.0 complete, v1.1 beta, v0.9.1 5/5 plans have summaries)
+Progress: [#######             ] 33% (10-01 complete, 10-02 and 10-03 remaining)
 
 ## Performance Metrics
 
@@ -35,6 +35,7 @@ Progress: [####################] 100% (v1.0 complete, v1.1 beta, v0.9.1 5/5 plan
 | 07 | 2 | 11min | 5.5min |
 | 08 | 3 | 7min | 2.3min |
 | 09 | 5 | ~60min | ~12min |
+| 10 | 1 | 3min | 3min |
 
 *Updated after each plan completion*
 
@@ -79,6 +80,10 @@ Recent decisions affecting current work:
 - [Phase 9]: Empty notification_filter = forward ALL notifications
 - [Phase 9]: Toast overlay replaces previous (no stacking) to prevent LVGL memory leaks
 - [Phase 9]: D-Bus session bus eavesdrop via AddMatch for Notify method calls
+- [Phase 10]: Identity-based button press (page+widget index) instead of keystroke-based
+- [Phase 10]: Static ButtonEventData pool (CONFIG_MAX_WIDGETS entries) for LVGL event user_data
+- [Phase 10]: VALID_ACTION_TYPES tuple for centralized action type validation
+- [Phase 10]: Keep legacy MSG_HOTKEY/MSG_MEDIA_KEY handlers for backward compat
 
 ### Pending Todos
 
@@ -97,5 +102,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 09-02-PLAN.md (Variable Button Sizing with Grid Spans)
+Stopped at: Completed 10-01-PLAN.md (Protocol + Pipeline for Companion Action Execution)
 Resume file: None
