@@ -38,6 +38,305 @@ from companion.ui.button_editor import ButtonEditor
 from companion.ui.deploy_dialog import DeployDialog
 from companion.lvgl_symbols import SYMBOL_BY_UTF8
 
+# Stat type dropdown options: (display_name, type_id)
+STAT_TYPE_OPTIONS = [
+    ("CPU %", 0x01),
+    ("RAM %", 0x02),
+    ("GPU %", 0x03),
+    ("CPU Temp", 0x04),
+    ("GPU Temp", 0x05),
+    ("Disk %", 0x06),
+    ("Net Up", 0x07),
+    ("Net Down", 0x08),
+    ("CPU Freq", 0x09),
+    ("GPU Freq", 0x0A),
+    ("Swap %", 0x0B),
+    ("Uptime", 0x0C),
+    ("Battery", 0x0D),
+    ("Fan RPM", 0x0E),
+    ("Load Avg", 0x0F),
+    ("Proc Count", 0x10),
+    ("VRAM %", 0x11),
+    ("GPU Power", 0x12),
+    ("Disk Read", 0x13),
+    ("Disk Write", 0x14),
+]
+
+# Default stat colors by type ID
+STAT_DEFAULT_COLORS = {
+    0x01: 0x3498DB, 0x02: 0x2ECC71, 0x03: 0xE67E22, 0x04: 0xE74C3C,
+    0x05: 0xF1C40F, 0x06: 0x7F8C8D, 0x07: 0x1ABC9C, 0x08: 0x1ABC9C,
+    0x09: 0x3498DB, 0x0A: 0xE67E22, 0x0B: 0x9B59B6, 0x0C: 0x7F8C8D,
+    0x0D: 0x2ECC71, 0x0E: 0xE74C3C, 0x0F: 0xE67E22, 0x10: 0x7F8C8D,
+    0x11: 0xE67E22, 0x12: 0xE74C3C, 0x13: 0x1ABC9C, 0x14: 0x1ABC9C,
+}
+
+# Default stats_header (matches device defaults)
+DEFAULT_STATS_HEADER = [
+    {"type": 0x01, "color": 0x3498DB, "position": 0},
+    {"type": 0x02, "color": 0x2ECC71, "position": 1},
+    {"type": 0x03, "color": 0xE67E22, "position": 2},
+    {"type": 0x04, "color": 0xE74C3C, "position": 3},
+    {"type": 0x05, "color": 0xF1C40F, "position": 4},
+    {"type": 0x07, "color": 0x1ABC9C, "position": 5},
+    {"type": 0x08, "color": 0x1ABC9C, "position": 6},
+    {"type": 0x06, "color": 0x7F8C8D, "position": 7},
+]
+
+
+class StatsHeaderPanel(QGroupBox):
+    """Stats Header configuration panel with type dropdown, color picker, and reorder"""
+
+    stats_changed = Signal()
+
+    def __init__(self, config_manager, parent=None):
+        super().__init__("Stats Header", parent)
+        self.config_manager = config_manager
+        self._updating = False
+
+        layout = QVBoxLayout()
+
+        # Table for stat rows
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Type", "Color", ""])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
+        self.table.horizontalHeader().resizeSection(1, 70)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
+        self.table.horizontalHeader().resizeSection(2, 40)
+        self.table.verticalHeader().setVisible(True)
+        self.table.verticalHeader().setDefaultSectionSize(28)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setDragDropMode(QAbstractItemView.InternalMove)
+        self.table.setMaximumHeight(200)
+        layout.addWidget(self.table)
+
+        # Buttons row
+        btn_layout = QHBoxLayout()
+        self.add_btn = QPushButton("+ Add Stat")
+        self.add_btn.clicked.connect(self._on_add_stat)
+        self.remove_btn = QPushButton("- Remove")
+        self.remove_btn.clicked.connect(self._on_remove_stat)
+        self.up_btn = QPushButton("Up")
+        self.up_btn.clicked.connect(self._on_move_up)
+        self.down_btn = QPushButton("Down")
+        self.down_btn.clicked.connect(self._on_move_down)
+        self.reset_btn = QPushButton("Reset Defaults")
+        self.reset_btn.clicked.connect(self._on_reset_defaults)
+        btn_layout.addWidget(self.add_btn)
+        btn_layout.addWidget(self.remove_btn)
+        btn_layout.addWidget(self.up_btn)
+        btn_layout.addWidget(self.down_btn)
+        btn_layout.addWidget(self.reset_btn)
+        layout.addLayout(btn_layout)
+
+        # Live preview bar
+        self.preview_label = QLabel("")
+        self.preview_label.setMinimumHeight(30)
+        self.preview_label.setStyleSheet("background: #0d1b2a; padding: 4px; border-radius: 4px;")
+        layout.addWidget(self.preview_label)
+
+        self.setLayout(layout)
+
+    def load_from_config(self):
+        """Load stats_header from config into table"""
+        self._updating = True
+        stats = self.config_manager.config.get("stats_header", DEFAULT_STATS_HEADER)
+        self.table.setRowCount(0)
+        for stat in stats:
+            self._add_row(stat.get("type", 0x01), stat.get("color", 0xFFFFFF))
+        self._updating = False
+        self._update_preview()
+
+    def _add_row(self, type_id, color):
+        """Add a stat row to the table"""
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+
+        # Type dropdown
+        combo = QComboBox()
+        for name, tid in STAT_TYPE_OPTIONS:
+            combo.addItem(name, tid)
+        # Set current
+        for i, (_, tid) in enumerate(STAT_TYPE_OPTIONS):
+            if tid == type_id:
+                combo.setCurrentIndex(i)
+                break
+        combo.currentIndexChanged.connect(self._on_stat_changed)
+        self.table.setCellWidget(row, 0, combo)
+
+        # Color button
+        color_btn = QPushButton()
+        qc = QColor((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF)
+        color_btn.setStyleSheet(f"background-color: {qc.name()}; border: 1px solid #555;")
+        color_btn.setFixedSize(50, 24)
+        color_btn.setProperty("color_value", color)
+        color_btn.clicked.connect(lambda checked, r=row: self._on_color_clicked(r))
+        self.table.setCellWidget(row, 1, color_btn)
+
+        # Position indicator (auto from row index)
+        pos_item = QTableWidgetItem(str(row))
+        pos_item.setFlags(pos_item.flags() & ~Qt.ItemIsEditable)
+        self.table.setItem(row, 2, pos_item)
+
+    def _on_color_clicked(self, row):
+        """Color button clicked -- open color picker"""
+        color_btn = self.table.cellWidget(row, 1)
+        if not color_btn:
+            return
+        current = color_btn.property("color_value") or 0xFFFFFF
+        qc = QColor((current >> 16) & 0xFF, (current >> 8) & 0xFF, current & 0xFF)
+        new_color = QColorDialog.getColor(qc, self, "Stat Color")
+        if new_color.isValid():
+            color_val = (new_color.red() << 16) | (new_color.green() << 8) | new_color.blue()
+            color_btn.setStyleSheet(f"background-color: {new_color.name()}; border: 1px solid #555;")
+            color_btn.setProperty("color_value", color_val)
+            self._on_stat_changed()
+
+    def _on_stat_changed(self):
+        """A stat type or color was changed"""
+        if self._updating:
+            return
+        self._save_to_config()
+        self._update_preview()
+        self.stats_changed.emit()
+
+    def _on_add_stat(self):
+        """Add a new stat row"""
+        if self.table.rowCount() >= 8:
+            return
+        # Pick next type not already used
+        used_types = set()
+        for row in range(self.table.rowCount()):
+            combo = self.table.cellWidget(row, 0)
+            if combo:
+                used_types.add(combo.currentData())
+        new_type = 0x01
+        for _, tid in STAT_TYPE_OPTIONS:
+            if tid not in used_types:
+                new_type = tid
+                break
+        color = STAT_DEFAULT_COLORS.get(new_type, 0xFFFFFF)
+        self._add_row(new_type, color)
+        self._renumber_positions()
+        self._save_to_config()
+        self._update_preview()
+        self.stats_changed.emit()
+
+    def _on_remove_stat(self):
+        """Remove selected stat row"""
+        if self.table.rowCount() <= 1:
+            return
+        row = self.table.currentRow()
+        if row >= 0:
+            self.table.removeRow(row)
+            self._renumber_positions()
+            self._save_to_config()
+            self._update_preview()
+            self.stats_changed.emit()
+
+    def _on_move_up(self):
+        """Move selected row up"""
+        row = self.table.currentRow()
+        if row > 0:
+            self._swap_rows(row, row - 1)
+            self.table.selectRow(row - 1)
+            self._renumber_positions()
+            self._save_to_config()
+            self._update_preview()
+            self.stats_changed.emit()
+
+    def _on_move_down(self):
+        """Move selected row down"""
+        row = self.table.currentRow()
+        if row >= 0 and row < self.table.rowCount() - 1:
+            self._swap_rows(row, row + 1)
+            self.table.selectRow(row + 1)
+            self._renumber_positions()
+            self._save_to_config()
+            self._update_preview()
+            self.stats_changed.emit()
+
+    def _swap_rows(self, row_a, row_b):
+        """Swap data between two rows"""
+        # Get data from both rows
+        combo_a = self.table.cellWidget(row_a, 0)
+        combo_b = self.table.cellWidget(row_b, 0)
+        color_a = self.table.cellWidget(row_a, 1)
+        color_b = self.table.cellWidget(row_b, 1)
+
+        type_a, color_val_a = combo_a.currentData(), color_a.property("color_value")
+        type_b, color_val_b = combo_b.currentData(), color_b.property("color_value")
+
+        # Set swapped values
+        for i, (_, tid) in enumerate(STAT_TYPE_OPTIONS):
+            if tid == type_b:
+                combo_a.setCurrentIndex(i)
+                break
+        for i, (_, tid) in enumerate(STAT_TYPE_OPTIONS):
+            if tid == type_a:
+                combo_b.setCurrentIndex(i)
+                break
+
+        qc_b = QColor((color_val_b >> 16) & 0xFF, (color_val_b >> 8) & 0xFF, color_val_b & 0xFF)
+        color_a.setStyleSheet(f"background-color: {qc_b.name()}; border: 1px solid #555;")
+        color_a.setProperty("color_value", color_val_b)
+
+        qc_a = QColor((color_val_a >> 16) & 0xFF, (color_val_a >> 8) & 0xFF, color_val_a & 0xFF)
+        color_b.setStyleSheet(f"background-color: {qc_a.name()}; border: 1px solid #555;")
+        color_b.setProperty("color_value", color_val_a)
+
+    def _on_reset_defaults(self):
+        """Reset to default stats header"""
+        self._updating = True
+        self.table.setRowCount(0)
+        for stat in DEFAULT_STATS_HEADER:
+            self._add_row(stat["type"], stat["color"])
+        self._updating = False
+        self._save_to_config()
+        self._update_preview()
+        self.stats_changed.emit()
+
+    def _renumber_positions(self):
+        """Update position column after reorder"""
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 2)
+            if item:
+                item.setText(str(row))
+
+    def _save_to_config(self):
+        """Save table data back to config"""
+        stats_header = []
+        for row in range(self.table.rowCount()):
+            combo = self.table.cellWidget(row, 0)
+            color_btn = self.table.cellWidget(row, 1)
+            if combo and color_btn:
+                stats_header.append({
+                    "type": combo.currentData(),
+                    "color": color_btn.property("color_value") or 0xFFFFFF,
+                    "position": row,
+                })
+        self.config_manager.config["stats_header"] = stats_header
+
+    def _update_preview(self):
+        """Update the live preview bar"""
+        parts = []
+        for row in range(self.table.rowCount()):
+            combo = self.table.cellWidget(row, 0)
+            color_btn = self.table.cellWidget(row, 1)
+            if combo and color_btn:
+                name = combo.currentText()
+                color_val = color_btn.property("color_value") or 0xFFFFFF
+                hex_color = f"#{color_val:06X}"
+                parts.append(f'<span style="color:{hex_color}">{name}</span>')
+        if parts:
+            self.preview_label.setText(
+                '<span style="font-size:11px;">' + " | ".join(parts) + "</span>"
+            )
+        else:
+            self.preview_label.setText("")
+
 
 class ButtonGridWidget(QWidget):
     """Custom widget for 4x3 button grid display"""
@@ -273,6 +572,12 @@ class EditorMainWindow(QMainWindow):
         # Load display mode settings from config
         self._load_display_mode_settings()
 
+        # Stats Header panel
+        self.stats_panel = StatsHeaderPanel(self.config_manager)
+        self.stats_panel.stats_changed.connect(self._on_stats_header_changed)
+        right_layout.addWidget(self.stats_panel)
+        self.stats_panel.load_from_config()
+
         # Deploy button
         self.deploy_btn = QPushButton("Deploy to Device")
         self.deploy_btn.setMinimumHeight(40)
@@ -424,6 +729,8 @@ class EditorMainWindow(QMainWindow):
             self.current_page = 0
             self._update_page_display()
             self.button_grid.set_page(0)
+            self._load_display_mode_settings()
+            self.stats_panel.load_from_config()
             self.statusBar().showMessage("Created new config")
 
     def _on_file_open(self):
@@ -436,6 +743,8 @@ class EditorMainWindow(QMainWindow):
                 self.current_page = 0
                 self._update_page_display()
                 self.button_grid.set_page(0)
+                self._load_display_mode_settings()
+                self.stats_panel.load_from_config()
                 self.statusBar().showMessage(f"Loaded: {file_path}")
             else:
                 QMessageBox.critical(self, "Error", f"Failed to load: {file_path}")
@@ -468,6 +777,10 @@ class EditorMainWindow(QMainWindow):
         self.config_manager.config["default_mode"] = self.mode_dropdown.currentIndex()
         self.config_manager.config["slideshow_interval_sec"] = self.slideshow_spinbox.value()
         self.config_manager.config["clock_analog"] = self.analog_checkbox.isChecked()
+
+    def _on_stats_header_changed(self):
+        """Stats header panel changed"""
+        self.statusBar().showMessage("Stats header updated")
 
     def _on_deploy_clicked(self):
         """Deploy button clicked"""

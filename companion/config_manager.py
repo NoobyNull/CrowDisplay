@@ -27,6 +27,11 @@ MOD_GUI = 0x08
 CONFIG_VERSION = 1
 CONFIG_MAX_PAGES = 16
 CONFIG_MAX_BUTTONS = 12  # 4x3 grid capacity
+CONFIG_MAX_STATS = 8
+
+# Stat type range (must match shared/protocol.h StatType enum)
+STAT_TYPE_MIN = 1
+STAT_TYPE_MAX = 20  # 0x14
 
 # Grid dimensions
 GRID_COLS = 4
@@ -357,6 +362,34 @@ class ConfigManager:
                 pressed_color = button.get("pressed_color", 0)
                 if isinstance(pressed_color, int) and (pressed_color < 0 or pressed_color > 0xFFFFFF):
                     return False, f"Page {pi} button {bi}: pressed_color out of range [0, 0xFFFFFF]"
+
+        # Validate stats_header (v0.9.1 — optional, defaults applied if absent)
+        stats_header = self.config.get("stats_header", [])
+        if not isinstance(stats_header, list):
+            return False, "stats_header must be an array"
+        if len(stats_header) > CONFIG_MAX_STATS:
+            return False, f"stats_header has {len(stats_header)} entries (max {CONFIG_MAX_STATS})"
+
+        seen_positions = set()
+        for si, stat in enumerate(stats_header):
+            if not isinstance(stat, dict):
+                return False, f"stats_header[{si}]: must be an object"
+
+            stat_type = stat.get("type")
+            if not isinstance(stat_type, int) or stat_type < STAT_TYPE_MIN or stat_type > STAT_TYPE_MAX:
+                return False, f"stats_header[{si}]: type {stat_type} out of range [{STAT_TYPE_MIN}, {STAT_TYPE_MAX}]"
+
+            color = stat.get("color", 0xFFFFFF)
+            if not isinstance(color, int) or color < 0 or color > 0xFFFFFF:
+                return False, f"stats_header[{si}]: color out of range [0, 0xFFFFFF]"
+
+            position = stat.get("position", si)
+            if not isinstance(position, int) or position < 0 or position >= CONFIG_MAX_STATS:
+                return False, f"stats_header[{si}]: position {position} out of range [0, {CONFIG_MAX_STATS - 1}]"
+
+            if position in seen_positions:
+                return False, f"stats_header[{si}]: duplicate position {position}"
+            seen_positions.add(position)
 
         return True, ""
 
