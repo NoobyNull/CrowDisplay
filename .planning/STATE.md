@@ -82,12 +82,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-1. **Make buttons positionable with variable count per page** (ui) -- variable button count, grid positioning, button reorder within pages
-2. **Add button depressed color to config schema** (ui) -- separate pressed/depressed color per button, with auto-darken default
-3. **Add button sizing options and variable dimensions** (ui) -- 1x1, 2x1, 1x2, 2x2 grid spans per button (ADV-01)
-4. **Forward host OS notifications to display as toast overlays** (general) -- D-Bus notification listener with app filter, MSG_NOTIFICATION protocol, toast popup on display
-5. **Configurable stats header with selectable and placeable monitors** (ui) -- user picks which stats to show, arranges order/position, expanded monitor types (20+ via psutil/pynvml)
-6. **Add display modes: standby, macro pad, picture frame, clock** (ui) -- 4 user-selectable modes with analog/digital clock, SD card slideshow, standby screen-off
+1. **Execute image support plan from Claude plans** (ui) -- add custom image icons to hotkey buttons via BMP on SD card, Pillow optimizer, HTTP upload endpoint
 
 ### Blockers/Concerns
 
