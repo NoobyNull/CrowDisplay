@@ -12,9 +12,9 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 Phase: 9 of 9 (Tweaks and Break-Fix v0.9.1)
 Plan: 5 of 5 in current phase
 Status: Executing
-Last activity: 2026-02-15 -- Completed 09-04 Display Modes (picture frame, clock, standby)
+Last activity: 2026-02-15 -- Completed 09-03 Configurable Stats Header with TLV Protocol
 
-Progress: [###################.] 96% (v1.0 complete, v1.1 beta, v0.9.1 4/5)
+Progress: [###################.] 96% (v1.0 complete, v1.1 beta, v0.9.1 3/5 plans have summaries)
 
 ## Performance Metrics
 
@@ -34,7 +34,7 @@ Progress: [###################.] 96% (v1.0 complete, v1.1 beta, v0.9.1 4/5)
 | 06 | 2 | 6min | 3min |
 | 07 | 2 | 11min | 5.5min |
 | 08 | 3 | 7min | 2.3min |
-| 09 | 1 | 6min | 6min |
+| 09 | 3 | ~56min | ~19min |
 
 *Updated after each plan completion*
 
@@ -69,6 +69,9 @@ Recent decisions affecting current work:
 - [Phase 9]: grid_row/grid_col = -1 means auto-flow, >= 0 means explicit cell placement
 - [Phase 9]: pressed_color = 0x000000 means auto-darken, non-zero = explicit RGB
 - [Phase 9]: CONFIG_MAX_BUTTONS reduced from 16 to 12 (4x3 grid capacity)
+- [Phase 9]: TLV stats protocol with first-byte heuristic for backward compat (count <= 0x14 = TLV, > 0x14 = legacy)
+- [Phase 9]: Max 8 configurable stats in header, position-based ordering
+- [Phase 9]: pynvml for extended GPU metrics (memory, power, frequency)
 
 ### Pending Todos
 
@@ -87,5 +90,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 09-04-PLAN.md (Display Modes)
+Stopped at: Completed 09-03-PLAN.md (Configurable Stats Header with TLV Protocol)
 Resume file: None
