@@ -46,11 +46,14 @@ static void on_recv(const uint8_t *mac, const uint8_t *data, int len) {
     if (msg_type == MSG_HOTKEY_ACK && len >= 2) {
         ack_status_buf = data[1];
         ack_ready = true;
-    } else if (len > 1) {
+    } else {
         // Queue as generic message for espnow_poll_msg()
-        uint8_t plen = (uint8_t)(len - 1);
+        // Supports zero-payload messages (e.g. CONFIG_MODE, CONFIG_DONE)
+        uint8_t plen = (len > 1) ? (uint8_t)(len - 1) : 0;
         if (plen > PROTO_MAX_PAYLOAD) plen = PROTO_MAX_PAYLOAD;
-        memcpy(msg_payload_buf, &data[1], plen);
+        if (plen > 0) {
+            memcpy(msg_payload_buf, &data[1], plen);
+        }
         msg_payload_len_buf = plen;
         msg_type_buf = msg_type;
         msg_ready = true;
@@ -107,6 +110,14 @@ void send_media_key_to_bridge(uint16_t consumer_code) {
     msg.consumer_code = consumer_code;
     espnow_send(MSG_MEDIA_KEY, (uint8_t *)&msg, sizeof(msg));
     Serial.printf("ESPNOW TX: media key 0x%04X\n", consumer_code);
+}
+
+void send_button_press_to_bridge(uint8_t page_index, uint8_t widget_index) {
+    ButtonPressMsg msg;
+    msg.page_index = page_index;
+    msg.widget_index = widget_index;
+    espnow_send(MSG_BUTTON_PRESS, (uint8_t *)&msg, sizeof(msg));
+    Serial.printf("ESPNOW TX: button press page=%d widget=%d\n", page_index, widget_index);
 }
 
 bool espnow_poll_ack(uint8_t &status) {

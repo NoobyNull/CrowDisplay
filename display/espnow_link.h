@@ -11,6 +11,9 @@ void send_hotkey_to_bridge(uint8_t modifiers, uint8_t keycode);
 // Convenience: send media/consumer control key to bridge
 void send_media_key_to_bridge(uint16_t consumer_code);
 
+// Convenience: send button press identity (page + widget index) to bridge
+void send_button_press_to_bridge(uint8_t page_index, uint8_t widget_index);
+
 // Poll for incoming ACK messages (non-blocking)
 // Returns true if ACK received, status in out param
 bool espnow_poll_ack(uint8_t &status);

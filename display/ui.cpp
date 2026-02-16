@@ -198,45 +198,61 @@ static const char *get_stat_placeholder(uint8_t type) {
 //  Widget Renderers — one per widget type
 // ============================================================
 
+// --- Button Event Data (identity-based: page + widget index) ---
+struct ButtonEventData {
+    uint8_t page_idx;
+    uint8_t widget_idx;
+};
+static ButtonEventData btn_event_data[CONFIG_MAX_WIDGETS];
+static int btn_event_count = 0;
+
 // --- Hotkey Button ---
 static void btn_event_cb(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_CLICKED) {
-        const WidgetConfig *w = (const WidgetConfig *)lv_event_get_user_data(e);
-        if (!w) return;
-        if (w->action_type == ACTION_MEDIA_KEY) {
-            send_media_key_to_bridge(w->consumer_code);
-        } else {
-            send_hotkey_to_bridge(w->modifiers, w->keycode);
-        }
-        Serial.printf("Hotkey: %s (%s) mod=0x%02X key=0x%02X\n",
-                      w->label.c_str(), w->description.c_str(), w->modifiers, w->keycode);
+        const ButtonEventData *bed = (const ButtonEventData *)lv_event_get_user_data(e);
+        if (!bed) return;
+        send_button_press_to_bridge(bed->page_idx, bed->widget_idx);
+        Serial.printf("Button press: page=%d widget=%d\n", bed->page_idx, bed->widget_idx);
     }
 }
 
-static void render_hotkey_button(lv_obj_t *parent, const WidgetConfig *cfg) {
+static void render_hotkey_button(lv_obj_t *parent, const WidgetConfig *cfg, uint8_t page_idx, uint8_t widget_idx) {
     lv_obj_t *btn = lv_btn_create(parent);
     lv_obj_set_pos(btn, cfg->x, cfg->y);
     lv_obj_set_size(btn, cfg->width, cfg->height);
-    lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, (void *)cfg);
+    // Store button identity in static pool for event callback
+    ButtonEventData *bed = nullptr;
+    if (btn_event_count < CONFIG_MAX_WIDGETS) {
+        btn_event_data[btn_event_count] = {page_idx, widget_idx};
+        bed = &btn_event_data[btn_event_count++];
+    }
+    lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, (void *)bed);
 
-    // Normal style
-    lv_obj_set_style_bg_color(btn, lv_color_hex(cfg->color), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
+    // Normal style: bg_color controls button fill (0 = transparent)
+    if (cfg->bg_color) {
+        lv_obj_set_style_bg_color(btn, lv_color_hex(cfg->bg_color), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(btn, 8, LV_PART_MAIN);
+        lv_obj_set_style_shadow_ofs_y(btn, 4, LV_PART_MAIN);
+        lv_obj_set_style_shadow_opa(btn, LV_OPA_30, LV_PART_MAIN);
+    } else {
+        lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(btn, 0, LV_PART_MAIN);
+    }
     lv_obj_set_style_radius(btn, 12, LV_PART_MAIN);
-    lv_obj_set_style_shadow_width(btn, 8, LV_PART_MAIN);
-    lv_obj_set_style_shadow_ofs_y(btn, 4, LV_PART_MAIN);
-    lv_obj_set_style_shadow_opa(btn, LV_OPA_30, LV_PART_MAIN);
     lv_obj_set_style_border_width(btn, 0, LV_PART_MAIN);
 
     // Pressed style
     lv_color_t pressed_clr;
     if (cfg->pressed_color == 0x000000) {
-        pressed_clr = lv_color_darken(lv_color_hex(cfg->color), LV_OPA_30);
+        lv_color_t base = cfg->bg_color ? lv_color_hex(cfg->bg_color) : lv_color_hex(0x333333);
+        pressed_clr = lv_color_darken(base, LV_OPA_30);
     } else {
         pressed_clr = lv_color_hex(cfg->pressed_color);
     }
     lv_obj_set_style_bg_color(btn, pressed_clr, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_STATE_PRESSED);
     lv_obj_set_style_transform_width(btn, -3, LV_STATE_PRESSED);
     lv_obj_set_style_transform_height(btn, -3, LV_STATE_PRESSED);
 
@@ -272,21 +288,21 @@ static void render_hotkey_button(lv_obj_t *parent, const WidgetConfig *cfg) {
         lv_obj_t *icon = lv_label_create(btn);
         lv_label_set_text(icon, cfg->icon.c_str());
         lv_obj_set_style_text_font(icon, &lv_font_montserrat_22, LV_PART_MAIN);
-        lv_obj_set_style_text_color(icon, lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_text_color(icon, lv_color_hex(cfg->color), LV_PART_MAIN);
     }
 
     // Label
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, cfg->label.c_str());
     lv_obj_set_style_text_font(label, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_hex(cfg->color), LV_PART_MAIN);
 
     // Description
     if (!cfg->description.empty()) {
         lv_obj_t *sub = lv_label_create(btn);
         lv_label_set_text(sub, cfg->description.c_str());
         lv_obj_set_style_text_font(sub, &lv_font_montserrat_12, LV_PART_MAIN);
-        lv_obj_set_style_text_color(sub, lv_color_make(200, 200, 200), LV_PART_MAIN);
+        lv_obj_set_style_text_color(sub, lv_color_hex(cfg->color), LV_PART_MAIN);
     }
 }
 
@@ -518,9 +534,9 @@ static void update_page_nav_indicators() {
 // ============================================================
 //  Widget Dispatcher
 // ============================================================
-static void render_widget(lv_obj_t *parent, const WidgetConfig *cfg) {
+static void render_widget(lv_obj_t *parent, const WidgetConfig *cfg, uint8_t page_idx, uint8_t widget_idx) {
     switch (cfg->widget_type) {
-        case WIDGET_HOTKEY_BUTTON: render_hotkey_button(parent, cfg); break;
+        case WIDGET_HOTKEY_BUTTON: render_hotkey_button(parent, cfg, page_idx, widget_idx); break;
         case WIDGET_STAT_MONITOR:  render_stat_monitor(parent, cfg);  break;
         case WIDGET_STATUS_BAR:    render_status_bar(parent, cfg);    break;
         case WIDGET_CLOCK:         render_clock(parent, cfg);         break;
@@ -576,6 +592,7 @@ static void create_pages(lv_obj_t *screen, const AppConfig *cfg) {
     status_bar_refs.clear();
     page_nav_refs.clear();
     page_containers.clear();
+    btn_event_count = 0;
 
     const ProfileConfig *active = cfg->get_active_profile();
     if (!active) {
@@ -600,7 +617,7 @@ static void create_pages(lv_obj_t *screen, const AppConfig *cfg) {
 
         // Render all widgets
         for (size_t wi = 0; wi < page.widgets.size(); wi++) {
-            render_widget(container, &page.widgets[wi]);
+            render_widget(container, &page.widgets[wi], (uint8_t)pi, (uint8_t)wi);
         }
 
         // Hide all pages except the first

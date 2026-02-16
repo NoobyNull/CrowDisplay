@@ -25,6 +25,9 @@ enum MsgType : uint8_t {
     MSG_TIME_SYNC   = 0x06,  // Bridge -> Display: epoch time from companion
     MSG_PING         = 0x07,  // Display -> Bridge: heartbeat (bridge replies with ACK)
     MSG_NOTIFICATION = 0x08,  // Bridge -> Display: desktop notification
+    MSG_CONFIG_MODE  = 0x09,  // Bridge -> Display: enter SoftAP config mode
+    MSG_CONFIG_DONE  = 0x0A,  // Bridge -> Display: reload config, exit AP mode
+    MSG_BUTTON_PRESS = 0x0B,  // Display -> Bridge: button identity (page + widget index)
 };
 
 // --- Stat Type Enum (for TLV stats protocol) ------------------------
@@ -117,6 +120,11 @@ struct __attribute__((packed)) PowerStateMsg {
 
 struct __attribute__((packed)) TimeSyncMsg {
     uint32_t epoch_seconds;   // Unix timestamp from companion (little-endian)
+};
+
+struct __attribute__((packed)) ButtonPressMsg {
+    uint8_t page_index;       // Which page the button is on
+    uint8_t widget_index;     // Widget index within the page
 };
 
 struct __attribute__((packed)) NotificationMsg {
