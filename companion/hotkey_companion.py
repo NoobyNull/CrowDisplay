@@ -83,6 +83,7 @@ MSG_BUTTON_PRESS = 0x0B
 # Power state values
 POWER_SHUTDOWN = 0
 POWER_WAKE     = 1
+POWER_LOCKED   = 2
 
 # Retry interval when bridge is not found
 RETRY_INTERVAL = 5.0
@@ -93,6 +94,8 @@ RETRY_INTERVAL = 5.0
 
 running = True
 shutdown_event = threading.Event()
+lock_event = threading.Event()
+unlock_event = threading.Event()
 
 # ---------------------------------------------------------------------------
 # Signal handling
@@ -189,6 +192,103 @@ async def start_dbus_shutdown_listener():
         await bus.wait_for_disconnect()
     except Exception as exc:
         logging.warning("D-Bus shutdown listener error: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# D-Bus session lock listener
+# ---------------------------------------------------------------------------
+
+def _run_session_lock_listener():
+    """Entry point for session lock listener thread."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(_start_session_lock_listener())
+    except Exception as exc:
+        logging.debug("Session lock listener loop exited: %s", exc)
+    finally:
+        loop.close()
+
+
+async def _start_session_lock_listener():
+    """Listen for Lock/Unlock signals on the logind session object.
+
+    Uses org.freedesktop.login1.Session interface on the current session.
+    Gracefully degrades if dbus-next is unavailable.
+    """
+    try:
+        from dbus_next.aio import MessageBus
+        from dbus_next import BusType
+    except ImportError:
+        logging.warning("dbus-next not installed -- session lock detection disabled")
+        return
+
+    try:
+        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    except Exception as exc:
+        logging.warning("Cannot connect to system D-Bus for lock listener: %s", exc)
+        return
+
+    try:
+        # Get the current session path from logind
+        introspection = await bus.introspect(
+            "org.freedesktop.login1", "/org/freedesktop/login1"
+        )
+        proxy = bus.get_proxy_object(
+            "org.freedesktop.login1",
+            "/org/freedesktop/login1",
+            introspection,
+        )
+        manager = proxy.get_interface("org.freedesktop.login1.Manager")
+
+        # Get our session — try by PID first, fall back to current user's
+        # graphical session (needed when launched from a non-session context)
+        try:
+            session_path = await manager.call_get_session_by_pid(os.getpid())
+        except Exception:
+            import getpass
+            username = getpass.getuser()
+            sessions = await manager.call_list_sessions()
+            # sessions is list of (id, uid, user, seat, path)
+            session_path = None
+            for sess in sessions:
+                sid, uid, user, seat, path = sess
+                if user == username:
+                    session_path = path
+                    break
+            if session_path is None:
+                logging.warning("No logind session found for user %s", username)
+                return
+        logging.info("Session lock listener: session path = %s", session_path)
+
+        session_introspection = await bus.introspect(
+            "org.freedesktop.login1", session_path
+        )
+        session_proxy = bus.get_proxy_object(
+            "org.freedesktop.login1",
+            session_path,
+            session_introspection,
+        )
+        session = session_proxy.get_interface("org.freedesktop.login1.Session")
+
+        session.on_lock(lambda: _on_session_lock_change(True))
+        session.on_unlock(lambda: _on_session_lock_change(False))
+        logging.info("D-Bus session lock listener active")
+
+        await bus.wait_for_disconnect()
+    except Exception as exc:
+        logging.warning("Session lock listener error: %s", exc)
+
+
+def _on_session_lock_change(locked):
+    if locked:
+        logging.info("Session locked")
+        lock_event.set()
+        unlock_event.clear()
+    else:
+        logging.info("Session unlocked")
+        unlock_event.set()
+        lock_event.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +419,18 @@ def load_notification_config(config_path=None):
     return False, set()
 
 
+def load_follow_lock_config(config_path=None):
+    """Load follow_lock setting from config.json. Default True."""
+    if config_path and os.path.isfile(config_path):
+        try:
+            with open(config_path, "r") as f:
+                data = json.load(f)
+            return bool(data.get("follow_lock", True))
+        except (json.JSONDecodeError, IOError):
+            pass
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Vendor HID read thread
 # ---------------------------------------------------------------------------
@@ -329,7 +441,7 @@ def _vendor_read_thread(device, hid_lock, config_mgr):
     while running:
         try:
             with hid_lock:
-                data = device.read(63, timeout_ms=100)
+                data = device.read(63, timeout=100)
             if data and len(data) >= 3:
                 msg_type = data[0]
                 if msg_type == MSG_BUTTON_PRESS:
@@ -405,7 +517,8 @@ def send_power_state(device, state, hid_lock=None):
                 device.write(b"\x06" + bytes([MSG_POWER_STATE, state]))
         else:
             device.write(b"\x06" + bytes([MSG_POWER_STATE, state]))
-        logging.info("Sent power state: %s", "SHUTDOWN" if state == POWER_SHUTDOWN else "WAKE")
+        state_names = {POWER_SHUTDOWN: "SHUTDOWN", POWER_WAKE: "WAKE", POWER_LOCKED: "LOCKED"}
+        logging.info("Sent power state: %s", state_names.get(state, f"0x{state:02X}"))
     except (IOError, OSError) as exc:
         logging.warning("Failed to send power state: %s", exc)
 
@@ -643,12 +756,22 @@ def encode_stats_tlv(stats_list):
 def load_stats_config(config_path=None):
     """Load stats_header config from config.json file.
 
-    Returns list of stat type IDs to collect, or default set.
+    Returns (stat_type_ids, net_interface, disk_device, disk_mount).
+    - net_interface: NIC name (e.g. "enp6s0") or None for aggregate
+    - disk_device:   device name for I/O (e.g. "nvme0n1") or None for aggregate
+    - disk_mount:    mount path for usage % (e.g. "/home") or "/" default
     """
+    net_interface = None
+    disk_device = None
+    disk_mount = "/"
+
     if config_path and os.path.isfile(config_path):
         try:
             with open(config_path, "r") as f:
                 data = json.load(f)
+            net_interface = data.get("net_interface") or None
+            disk_device = data.get("disk_device") or None
+            disk_mount = data.get("disk_mount") or "/"
             stats_header = data.get("stats_header")
             if stats_header and isinstance(stats_header, list):
                 type_ids = [s.get("type", 0) for s in stats_header if isinstance(s, dict)]
@@ -657,12 +780,12 @@ def load_stats_config(config_path=None):
                     logging.info("Loaded %d stat types from config: %s",
                                  len(type_ids),
                                  [STAT_ID_TO_NAME.get(t, f"0x{t:02X}") for t in type_ids])
-                    return type_ids
+                    return (type_ids, net_interface, disk_device, disk_mount)
         except (json.JSONDecodeError, IOError, KeyError) as exc:
             logging.warning("Failed to load stats config: %s", exc)
 
     # Default: original 8 stats
-    return [s["type"] for s in DEFAULT_STATS_CONFIG]
+    return ([s["type"] for s in DEFAULT_STATS_CONFIG], net_interface, disk_device, disk_mount)
 
 
 # ---------------------------------------------------------------------------
@@ -739,10 +862,22 @@ def get_proc_count():
         return 0
 
 
-def get_disk_io(prev_disk_io, dt):
-    """Return (read_kbs, write_kbs, current_counters)."""
+def get_disk_io(prev_disk_io, dt, disk_device=None):
+    """Return (read_kbs, write_kbs, current_counters).
+
+    If disk_device is set (e.g. "nvme0n1"), report I/O for that device only.
+    Otherwise report aggregate across all disks.
+    """
     try:
-        curr = psutil.disk_io_counters()
+        if disk_device:
+            per_disk = psutil.disk_io_counters(perdisk=True)
+            curr = per_disk.get(disk_device)
+            if curr is None:
+                logging.warning("Disk device '%s' not found, available: %s",
+                                disk_device, list(per_disk.keys()))
+                return (0, 0, prev_disk_io)
+        else:
+            curr = psutil.disk_io_counters()
         if prev_disk_io is None:
             return (0, 0, curr)
         read_kbs = int((curr.read_bytes - prev_disk_io.read_bytes) / dt / 1024)
@@ -756,11 +891,16 @@ def get_disk_io(prev_disk_io, dt):
 # Stats collection (TLV + legacy)
 # ---------------------------------------------------------------------------
 
-def collect_stats_tlv(gpu_collector, enabled_types, prev_net, prev_time, prev_disk_io):
+def collect_stats_tlv(gpu_collector, enabled_types, prev_net, prev_time, prev_disk_io,
+                      net_interface=None, disk_device=None, disk_mount="/"):
     """Collect system metrics based on enabled types and return TLV-encoded bytes.
 
     Returns (tlv_bytes, current_net_counters, current_time, current_disk_io).
     Only collects stats that are in enabled_types (saves CPU on unused psutil calls).
+
+    net_interface: NIC name for per-interface network stats, or None for aggregate.
+    disk_device:   device name for per-disk I/O stats, or None for aggregate.
+    disk_mount:    mount path for disk usage %, defaults to "/".
     """
     now = time.time()
     dt = now - prev_time
@@ -821,18 +961,26 @@ def collect_stats_tlv(gpu_collector, enabled_types, prev_net, prev_time, prev_di
     if STAT_TYPES['cpu_temp'] in enabled_set:
         stats_list.append((STAT_TYPES['cpu_temp'], get_cpu_temp()))
 
-    # Disk percent
+    # Disk percent (configurable mount point)
     if STAT_TYPES['disk_percent'] in enabled_set:
         try:
-            val = min(int(psutil.disk_usage("/").percent), 100)
+            val = min(int(psutil.disk_usage(disk_mount).percent), 100)
         except Exception:
             val = 0
         stats_list.append((STAT_TYPES['disk_percent'], val))
 
-    # Network
+    # Network (per-interface or aggregate)
     if STAT_TYPES['net_up'] in enabled_set or STAT_TYPES['net_down'] in enabled_set:
         try:
-            curr_net = psutil.net_io_counters()
+            if net_interface:
+                per_nic = psutil.net_io_counters(pernic=True)
+                curr_net = per_nic.get(net_interface)
+                if curr_net is None:
+                    logging.warning("NIC '%s' not found, available: %s",
+                                    net_interface, list(per_nic.keys()))
+                    curr_net = prev_net
+            else:
+                curr_net = psutil.net_io_counters()
             net_up = int((curr_net.bytes_sent - prev_net.bytes_sent) / dt / 1024)
             net_down = int((curr_net.bytes_recv - prev_net.bytes_recv) / dt / 1024)
             net_up = max(0, min(net_up, 0xFFFF))
@@ -874,9 +1022,9 @@ def collect_stats_tlv(gpu_collector, enabled_types, prev_net, prev_time, prev_di
     if STAT_TYPES['proc_count'] in enabled_set:
         stats_list.append((STAT_TYPES['proc_count'], get_proc_count()))
 
-    # Disk I/O
+    # Disk I/O (per-device or aggregate)
     if STAT_TYPES['disk_read_kbs'] in enabled_set or STAT_TYPES['disk_write_kbs'] in enabled_set:
-        read_kbs, write_kbs, curr_disk_io = get_disk_io(prev_disk_io, dt)
+        read_kbs, write_kbs, curr_disk_io = get_disk_io(prev_disk_io, dt, disk_device)
         if STAT_TYPES['disk_read_kbs'] in enabled_set:
             stats_list.append((STAT_TYPES['disk_read_kbs'], read_kbs))
         if STAT_TYPES['disk_write_kbs'] in enabled_set:
@@ -910,6 +1058,9 @@ class CompanionService:
         self._stats_thread = None
         self._vendor_thread = None
         self._enabled_stat_types = []
+        self._net_interface = None
+        self._disk_device = None
+        self._disk_mount = "/"
 
         # Status callbacks
         self.on_bridge_connected = None
@@ -941,7 +1092,7 @@ class CompanionService:
 
         # Load config
         self._config_mgr.load_json_file(self._config_path)
-        self._enabled_stat_types = load_stats_config(self._config_path)
+        self._load_device_config()
         logging.info("Enabled stat types: %s",
                      [STAT_ID_TO_NAME.get(t, f"0x{t:02X}") for t in self._enabled_stat_types])
 
@@ -954,6 +1105,14 @@ class CompanionService:
 
         # D-Bus shutdown listener
         threading.Thread(target=_run_dbus_listener, daemon=True).start()
+
+        # Session lock listener (for follow_lock feature)
+        self._follow_lock = load_follow_lock_config(self._config_path)
+        if self._follow_lock:
+            threading.Thread(target=_run_session_lock_listener, daemon=True).start()
+            logging.info("Session lock following enabled")
+        else:
+            logging.info("Session lock following disabled")
 
         # Notification forwarding
         notif_enabled, notif_filter = load_notification_config(self._config_path)
@@ -981,10 +1140,21 @@ class CompanionService:
         self._bridge_connected = False
         logging.info("CompanionService stopped.")
 
+    def _load_device_config(self):
+        """Load stat types and device selection from config."""
+        (self._enabled_stat_types, self._net_interface,
+         self._disk_device, self._disk_mount) = load_stats_config(self._config_path)
+        if self._net_interface:
+            logging.info("Network interface: %s", self._net_interface)
+        if self._disk_device:
+            logging.info("Disk device: %s", self._disk_device)
+        if self._disk_mount != "/":
+            logging.info("Disk mount: %s", self._disk_mount)
+
     def reload_config(self):
         """Reload config from disk."""
         if self._config_mgr.load_json_file(self._config_path):
-            self._enabled_stat_types = load_stats_config(self._config_path)
+            self._load_device_config()
             logging.info("Config reloaded, %d stat types", len(self._enabled_stat_types))
 
     def _set_bridge_connected(self, connected):
@@ -1005,7 +1175,8 @@ class CompanionService:
                 try:
                     self._device = hid.Device(path=path)
                     logging.info("Connected to %s (manufacturer=%s, serial=%s)",
-                                 self._device.product, self._device.manufacturer,
+                                 self._device.product,
+                                 self._device.manufacturer,
                                  self._device.serial)
                     self._set_bridge_connected(True)
                     return True
@@ -1021,7 +1192,7 @@ class CompanionService:
         while self._running and self._device is not None:
             try:
                 with self._hid_lock:
-                    data = self._device.read(63, timeout_ms=100)
+                    data = self._device.read(63, timeout=100)
                 if data and len(data) >= 3:
                     msg_type = data[0]
                     if msg_type == MSG_BUTTON_PRESS:
@@ -1062,17 +1233,35 @@ class CompanionService:
                 daemon=True
             ).start()
 
-        # Initialize baselines
-        prev_net = psutil.net_io_counters()
+        # Initialize baselines (per-interface/device if configured)
+        try:
+            if self._net_interface:
+                prev_net = psutil.net_io_counters(pernic=True).get(self._net_interface)
+                if prev_net is None:
+                    logging.warning("NIC '%s' not found, falling back to aggregate", self._net_interface)
+                    prev_net = psutil.net_io_counters()
+            else:
+                prev_net = psutil.net_io_counters()
+        except Exception:
+            prev_net = psutil.net_io_counters()
         prev_time = time.time()
         prev_disk_io = None
         try:
-            prev_disk_io = psutil.disk_io_counters()
+            if self._disk_device:
+                per_disk = psutil.disk_io_counters(perdisk=True)
+                prev_disk_io = per_disk.get(self._disk_device)
+                if prev_disk_io is None:
+                    logging.warning("Disk '%s' not found, falling back to aggregate", self._disk_device)
+                    prev_disk_io = psutil.disk_io_counters()
+            else:
+                prev_disk_io = psutil.disk_io_counters()
         except Exception:
             pass
 
         logging.info("Streaming TLV stats at %.1f Hz (%d stat types)",
                      1.0 / UPDATE_INTERVAL, len(self._enabled_stat_types))
+
+        pc_locked = False
 
         while self._running:
             if shutdown_event.is_set():
@@ -1082,12 +1271,28 @@ class CompanionService:
                 running = False
                 break
 
+            # Session lock/unlock detection
+            if self._follow_lock:
+                if lock_event.is_set() and not pc_locked:
+                    pc_locked = True
+                    logging.info("Sending POWER_LOCKED to display")
+                    send_power_state(self._device, POWER_LOCKED, self._hid_lock)
+                elif unlock_event.is_set() and pc_locked:
+                    pc_locked = False
+                    logging.info("Sending POWER_WAKE to display (unlocked)")
+                    send_power_state(self._device, POWER_WAKE, self._hid_lock)
+
             time.sleep(UPDATE_INTERVAL)
             if not self._running:
                 break
 
+            # Skip sending stats while PC is locked (display is in clock mode)
+            if pc_locked:
+                continue
+
             packed, prev_net, prev_time, prev_disk_io = collect_stats_tlv(
-                self._gpu, self._enabled_stat_types, prev_net, prev_time, prev_disk_io
+                self._gpu, self._enabled_stat_types, prev_net, prev_time, prev_disk_io,
+                self._net_interface, self._disk_device, self._disk_mount
             )
 
             try:

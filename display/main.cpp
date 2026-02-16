@@ -134,11 +134,15 @@ void loop() {
         }
         else if (msg_type == MSG_POWER_STATE && msg_len >= sizeof(PowerStateMsg)) {
             PowerStateMsg *ps = (PowerStateMsg *)msg_payload;
-            if (ps->state == POWER_SHUTDOWN) {
+            if (ps->state == POWER_SHUTDOWN || ps->state == POWER_LOCKED) {
                 power_shutdown_received();
                 show_clock_mode();
+            } else if (ps->state == POWER_WAKE) {
+                if (power_get_state() == POWER_CLOCK) {
+                    power_wake_detected();
+                    show_hotkey_view();
+                }
             }
-            // POWER_WAKE is handled implicitly (any bridge message = wake, handled above)
         }
         else if (msg_type == MSG_TIME_SYNC && msg_len >= sizeof(TimeSyncMsg)) {
             TimeSyncMsg *ts = (TimeSyncMsg *)msg_payload;
@@ -215,7 +219,7 @@ void loop() {
         device_status_timer = millis();
         espnow_send(MSG_PING, nullptr, 0);  // Heartbeat to get fresh RSSI
         bool link_ok = (millis() - last_bridge_msg_time) < BRIDGE_LINK_TIMEOUT_MS;
-        update_device_status(espnow_get_rssi(), link_ok, get_backlight());
+        update_device_status(espnow_get_rssi(), link_ok, get_backlight(), stats_active);
     }
 
     // Clock mode: update time display every 30 seconds

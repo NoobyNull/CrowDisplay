@@ -113,6 +113,7 @@ struct __attribute__((packed)) MediaKeyMsg {
 
 #define POWER_SHUTDOWN 0
 #define POWER_WAKE     1
+#define POWER_LOCKED   2
 
 struct __attribute__((packed)) PowerStateMsg {
     uint8_t state;            // POWER_SHUTDOWN (0) or POWER_WAKE (1)

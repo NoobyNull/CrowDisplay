@@ -84,6 +84,7 @@ static std::vector<StatWidgetRef> stat_widget_refs;
 // Status bar widget references for live updates
 struct StatusBarRef {
     lv_obj_t *rssi_label;
+    lv_obj_t *pc_label;
     lv_obj_t *time_label;
 };
 static std::vector<StatusBarRef> status_bar_refs;
@@ -379,12 +380,19 @@ static void render_status_bar(lv_obj_t *parent, const WidgetConfig *cfg) {
         lv_obj_align(ref.rssi_label, LV_ALIGN_RIGHT_MID, -15, 0);
     }
 
+    // PC connection indicator (USB icon)
+    ref.pc_label = lv_label_create(bar);
+    lv_label_set_text(ref.pc_label, LV_SYMBOL_USB);
+    lv_obj_set_style_text_font(ref.pc_label, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ref.pc_label, lv_color_hex(CLR_RED), LV_PART_MAIN);
+    lv_obj_align(ref.pc_label, LV_ALIGN_RIGHT_MID, -40, 0);
+
     // Config button
     lv_obj_t *cfg_btn = lv_label_create(bar);
     lv_label_set_text(cfg_btn, LV_SYMBOL_SETTINGS);
     lv_obj_set_style_text_font(cfg_btn, &lv_font_montserrat_16, LV_PART_MAIN);
     lv_obj_set_style_text_color(cfg_btn, lv_color_hex(CLR_TEAL), LV_PART_MAIN);
-    lv_obj_align(cfg_btn, LV_ALIGN_RIGHT_MID, -55, 0);
+    lv_obj_align(cfg_btn, LV_ALIGN_RIGHT_MID, -75, 0);
     lv_obj_add_flag(cfg_btn, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(cfg_btn, config_btn_event_cb, LV_EVENT_CLICKED, nullptr);
 
@@ -393,7 +401,7 @@ static void render_status_bar(lv_obj_t *parent, const WidgetConfig *cfg) {
     lv_label_set_text(bright, LV_SYMBOL_IMAGE);
     lv_obj_set_style_text_font(bright, &lv_font_montserrat_16, LV_PART_MAIN);
     lv_obj_set_style_text_color(bright, lv_color_hex(CLR_YELLOW), LV_PART_MAIN);
-    lv_obj_align(bright, LV_ALIGN_RIGHT_MID, -95, 0);
+    lv_obj_align(bright, LV_ALIGN_RIGHT_MID, -115, 0);
     lv_obj_add_flag(bright, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(bright, brightness_event_cb, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_event_cb(bright, brightness_long_press_cb, LV_EVENT_LONG_PRESSED, nullptr);
@@ -669,7 +677,7 @@ void update_stats(const uint8_t *data, uint8_t len) {
 // ============================================================
 //  Public: update_device_status()
 // ============================================================
-void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_level) {
+void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_level, bool stats_active) {
     for (auto &ref : status_bar_refs) {
         if (ref.rssi_label) {
             if (rssi_dbm == 0 || !espnow_linked) {
@@ -681,6 +689,10 @@ void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_l
             } else {
                 lv_obj_set_style_text_color(ref.rssi_label, lv_color_hex(CLR_RED), LV_PART_MAIN);
             }
+        }
+        if (ref.pc_label) {
+            lv_obj_set_style_text_color(ref.pc_label,
+                lv_color_hex(stats_active ? CLR_GREEN : CLR_RED), LV_PART_MAIN);
         }
     }
     (void)brightness_level;
@@ -1058,10 +1070,15 @@ void create_ui(const AppConfig* cfg) {
     main_screen = lv_scr_act();
     lv_obj_set_style_bg_color(main_screen, lv_color_hex(0x0D1117), LV_PART_MAIN);
 
-    // Clock screen
+    // Clock screen (tap anywhere to wake back to hotkey view)
     clock_screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(clock_screen, lv_color_hex(0x0f0f23), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(clock_screen, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_add_flag(clock_screen, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(clock_screen, [](lv_event_t *) {
+        power_wake_detected();
+        show_hotkey_view();
+    }, LV_EVENT_CLICKED, nullptr);
     clock_time_label = lv_label_create(clock_screen);
     lv_label_set_text(clock_time_label, "00:00");
     lv_obj_set_style_text_font(clock_time_label, &lv_font_montserrat_40, LV_PART_MAIN);
