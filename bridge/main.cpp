@@ -30,9 +30,9 @@ void loop() {
 
             switch (msg_type) {
                 case MSG_STATS:
-                    if (payload_len >= sizeof(StatsPayload)) {
-                        espnow_send(MSG_STATS, payload, sizeof(StatsPayload));
-                        Serial.println("STATS: relayed to display");
+                    if (payload_len >= 1) {
+                        espnow_send(MSG_STATS, payload, payload_len);
+                        Serial.printf("STATS: relayed %zu bytes to display\n", payload_len);
                     }
                     break;
                 case MSG_POWER_STATE:
@@ -45,6 +45,12 @@ void loop() {
                     if (payload_len >= sizeof(TimeSyncMsg)) {
                         espnow_send(MSG_TIME_SYNC, payload, sizeof(TimeSyncMsg));
                         Serial.println("TIME: relayed to display");
+                    }
+                    break;
+                case MSG_NOTIFICATION:
+                    if (payload_len >= sizeof(NotificationMsg)) {
+                        espnow_send(MSG_NOTIFICATION, payload, sizeof(NotificationMsg));
+                        Serial.printf("NOTIF: relayed (%d bytes)\n", (int)sizeof(NotificationMsg));
                     }
                     break;
                 default:
@@ -86,6 +92,11 @@ void loop() {
                 } else {
                     Serial.printf("ERR: media key payload too short (%d)\n", payload_len);
                 }
+                break;
+            }
+            case MSG_PING: {
+                HotkeyAckMsg ack = { 0 };
+                espnow_send(MSG_HOTKEY_ACK, (uint8_t *)&ack, sizeof(ack));
                 break;
             }
             default:
