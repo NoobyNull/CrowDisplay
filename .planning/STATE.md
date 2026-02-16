@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 Phase: 9 of 9 (Tweaks and Break-Fix v0.9.1)
 Plan: 5 of 5 in current phase (COMPLETE)
 Status: Phase Complete
-Last activity: 2026-02-16 -- Completed 09-05 Desktop Notification Forwarding
+Last activity: 2026-02-16 -- Completed 09-02 Variable Button Sizing (Grid Spans)
 
 Progress: [####################] 100% (v1.0 complete, v1.1 beta, v0.9.1 5/5 plans have summaries)
 
@@ -72,6 +72,8 @@ Recent decisions affecting current work:
 - [Phase 9]: TLV stats protocol with first-byte heuristic for backward compat (count <= 0x14 = TLV, > 0x14 = legacy)
 - [Phase 9]: Max 8 configurable stats in header, position-based ordering
 - [Phase 9]: pynvml for extended GPU metrics (memory, power, frequency)
+- [Phase 9]: col_span/row_span only for explicit positioning, auto-flow forced to 1x1
+- [Phase 9]: Grid overlap detection via occupancy matrix in config validation
 - [Phase 9]: NotificationMsg 248 bytes (32+100+116) fits ESP-NOW 250-byte limit
 - [Phase 9]: Notifications disabled by default, opt-in via notifications_enabled config flag
 - [Phase 9]: Empty notification_filter = forward ALL notifications
@@ -95,5 +97,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 09-05-PLAN.md (Desktop Notification Forwarding) -- Phase 9 complete
+Stopped at: Completed 09-02-PLAN.md (Variable Button Sizing with Grid Spans)
 Resume file: None
