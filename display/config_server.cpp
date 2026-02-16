@@ -175,6 +175,12 @@ function uploadFirmware() {
 </body>
 </html>)rawliteral";
 
+// Handle GET /api/health (lightweight probe)
+static void handle_health() {
+    last_activity_time = millis();
+    web_server->send(200, "application/json", "{\"status\":\"ok\"}");
+}
+
 // Handle GET / (serves HTML form)
 static void handle_config_page() {
     last_activity_time = millis();
@@ -464,6 +470,7 @@ bool config_server_start() {
     // Web server on port 80
     web_server = new WebServer(80);
     web_server->on("/", HTTP_GET, handle_config_page);
+    web_server->on("/api/health", HTTP_GET, handle_health);
     web_server->on("/api/config/upload", HTTP_POST, handle_config_done, handle_config_upload);
     web_server->on("/api/image/upload", HTTP_POST, handle_image_done, handle_image_upload);
     web_server->on("/update", HTTP_POST, handle_ota_done, handle_ota_upload);

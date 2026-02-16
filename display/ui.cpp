@@ -1052,6 +1052,9 @@ void create_ui(const AppConfig* cfg) {
     if (!cfg) { Serial.println("create_ui: nullptr config"); return; }
     g_active_config = cfg;
 
+    // Register SD card filesystem driver for LVGL image loading
+    lvgl_register_sd_driver();
+
     main_screen = lv_scr_act();
     lv_obj_set_style_bg_color(main_screen, lv_color_hex(0x0D1117), LV_PART_MAIN);
 

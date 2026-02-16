@@ -27,6 +27,9 @@ static volatile RxMsg rx_queue[RX_QUEUE_SIZE];
 static volatile int rx_head = 0;
 static volatile int rx_tail = 0;
 
+// Broadcast address for sending commands to any display
+static const uint8_t broadcast_addr[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
 // Store last sender MAC for ACK replies
 static uint8_t last_sender_mac[6] = {};
 
@@ -66,6 +69,13 @@ void espnow_link_init() {
         return;
     }
 
+    // Register broadcast peer for sending commands
+    esp_now_peer_info_t bcast_peer = {};
+    memcpy(bcast_peer.peer_addr, broadcast_addr, 6);
+    bcast_peer.channel = 1;
+    bcast_peer.encrypt = false;
+    esp_now_add_peer(&bcast_peer);
+
     esp_now_register_recv_cb(on_recv);
 
     Serial.printf("ESP-NOW ready (MAC: %s)\n", WiFi.macAddress().c_str());
@@ -98,5 +108,16 @@ bool espnow_send(MsgType type, const uint8_t *payload, uint8_t len) {
     }
 
     esp_err_t result = esp_now_send(last_sender_mac, buf, 1 + len);
+    return result == ESP_OK;
+}
+
+bool espnow_send_broadcast(MsgType type, const uint8_t *payload, uint8_t len) {
+    uint8_t buf[1 + PROTO_MAX_PAYLOAD];
+    buf[0] = (uint8_t)type;
+    if (len > 0 && payload) {
+        memcpy(&buf[1], payload, len);
+    }
+
+    esp_err_t result = esp_now_send(broadcast_addr, buf, 1 + len);
     return result == ESP_OK;
 }

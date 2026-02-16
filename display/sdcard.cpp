@@ -106,7 +106,10 @@ bool sdcard_file_rename(const char *old_path, const char *new_path) {
         return false;
     }
 
-    // SD.rename() is provided by the Arduino SD library
+    // SD.rename() fails if destination exists — remove it first
+    if (SD.exists(new_path)) {
+        SD.remove(new_path);
+    }
     if (!SD.rename(old_path, new_path)) {
         Serial.printf("SD: rename failed: %s -> %s\n", old_path, new_path);
         return false;

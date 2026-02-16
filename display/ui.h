@@ -2,19 +2,15 @@
 #include "protocol.h"
 #include "config.h"
 
-// Build the complete hotkey UI from AppConfig (config required, no hardcoded fallback)
+// Build the complete UI from AppConfig (config required, no hardcoded fallback)
 void create_ui(const AppConfig* cfg);
 
 // Rebuild UI after configuration change (re-create pages without reboot)
 void rebuild_ui(const AppConfig* cfg);
 
-// Update stats header with new metrics from companion app.
+// Update stats for stat monitor widgets with new metrics from companion app.
 // Accepts raw payload bytes -- auto-detects TLV vs legacy StatsPayload format.
-// Shows the header on first call.
 void update_stats(const uint8_t *data, uint8_t len);
-
-// Hide stats header (called on timeout)
-void hide_stats_header();
 
 // Power state UI transitions
 void show_clock_mode();      // Switch to clock screen (called by power state machine)
@@ -40,3 +36,9 @@ void show_notification_toast(const char *app_name, const char *summary, const ch
 
 // Access the global config (for config_server to update before rebuild)
 AppConfig& get_global_config();
+
+// Page navigation (called from rotary encoder or touch)
+void ui_next_page();
+void ui_prev_page();
+int ui_get_current_page();
+int ui_get_page_count();
