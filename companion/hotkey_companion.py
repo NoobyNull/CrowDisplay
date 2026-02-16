@@ -1173,11 +1173,16 @@ class CompanionService:
             path = find_bridge()
             if path is not None:
                 try:
-                    self._device = hid.Device(path=path)
+                    if hasattr(hid, 'Device'):
+                        self._device = hid.Device(path=path)
+                    else:
+                        self._device = hid.device()
+                        self._device.open_path(path)
+                    product = getattr(self._device, 'product', '') or ''
+                    manufacturer = getattr(self._device, 'manufacturer', '') or ''
+                    serial = getattr(self._device, 'serial', '') or ''
                     logging.info("Connected to %s (manufacturer=%s, serial=%s)",
-                                 self._device.product,
-                                 self._device.manufacturer,
-                                 self._device.serial)
+                                 product, manufacturer, serial)
                     self._set_bridge_connected(True)
                     return True
                 except Exception as exc:
