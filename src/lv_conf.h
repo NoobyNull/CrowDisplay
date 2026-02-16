@@ -149,8 +149,8 @@
 #define LV_USE_FS_WIN32 0
 #define LV_USE_FS_FATFS 0
 #define LV_USE_PNG 0
-#define LV_USE_BMP 0
-#define LV_USE_SJPG 0
+#define LV_USE_BMP 1
+#define LV_USE_SJPG 1
 #define LV_USE_GIF 0
 #define LV_USE_QRCODE 0
 #define LV_USE_FREETYPE 0

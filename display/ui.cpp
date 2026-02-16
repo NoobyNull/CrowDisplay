@@ -362,9 +362,50 @@ void update_clock_time() {
     if (!clock_time_label || !clock_rssi_label) return;
 
     time_t now = time(nullptr);
-    struct tm *tm = localtime(&now);
-    lv_label_set_text_fmt(clock_time_label, "%02d:%02d", tm->tm_hour, tm->tm_min);
+    struct tm *tm_info = localtime(&now);
+    if (!tm_info) return;
 
+    bool use_analog = g_active_config ? g_active_config->clock_analog : false;
+
+    if (use_analog && analog_clock_face) {
+        // Hide digital, show analog
+        lv_obj_add_flag(clock_time_label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(analog_clock_face, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(analog_hour_hand, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(analog_min_hand, LV_OBJ_FLAG_HIDDEN);
+
+        // Calculate hand angles (0 deg = 12 o'clock, clockwise)
+        float hour_angle = (tm_info->tm_hour % 12) * 30.0f + tm_info->tm_min * 0.5f;
+        float min_angle = tm_info->tm_min * 6.0f;
+
+        int cx = SCREEN_WIDTH / 2;
+        int cy = SCREEN_HEIGHT / 2;
+        float hour_rad = (hour_angle - 90.0f) * M_PI / 180.0f;
+        float min_rad = (min_angle - 90.0f) * M_PI / 180.0f;
+
+        hour_points[0] = {(lv_coord_t)cx, (lv_coord_t)cy};
+        hour_points[1] = {
+            (lv_coord_t)(cx + 80 * cosf(hour_rad)),
+            (lv_coord_t)(cy + 80 * sinf(hour_rad))
+        };
+        lv_line_set_points(analog_hour_hand, hour_points, 2);
+
+        min_points[0] = {(lv_coord_t)cx, (lv_coord_t)cy};
+        min_points[1] = {
+            (lv_coord_t)(cx + 120 * cosf(min_rad)),
+            (lv_coord_t)(cy + 120 * sinf(min_rad))
+        };
+        lv_line_set_points(analog_min_hand, min_points, 2);
+    } else {
+        // Show digital, hide analog
+        lv_obj_clear_flag(clock_time_label, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text_fmt(clock_time_label, "%02d:%02d", tm_info->tm_hour, tm_info->tm_min);
+        if (analog_clock_face) lv_obj_add_flag(analog_clock_face, LV_OBJ_FLAG_HIDDEN);
+        if (analog_hour_hand) lv_obj_add_flag(analog_hour_hand, LV_OBJ_FLAG_HIDDEN);
+        if (analog_min_hand) lv_obj_add_flag(analog_min_hand, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Update RSSI indicator (same for both modes)
     int rssi = espnow_get_rssi();
     if (rssi != 0 && rssi > -50)
         lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_GREEN), LV_PART_MAIN);
@@ -425,6 +466,270 @@ void hide_config_screen() {
 }
 
 // ============================================================
+//  LVGL SD Card Filesystem Driver
+// ============================================================
+static void lvgl_register_sd_driver() {
+    if (sd_fs_registered) return;
+
+    static lv_fs_drv_t drv;
+    lv_fs_drv_init(&drv);
+    drv.letter = 'S';
+    drv.open_cb = [](lv_fs_drv_t *, const char *path, lv_fs_mode_t) -> void* {
+        File *file = new File();
+        *file = SD.open(path, FILE_READ);
+        if (!*file) {
+            delete file;
+            return nullptr;
+        }
+        return file;
+    };
+    drv.close_cb = [](lv_fs_drv_t *, void *file_p) -> lv_fs_res_t {
+        File *file = (File*)file_p;
+        file->close();
+        delete file;
+        return LV_FS_RES_OK;
+    };
+    drv.read_cb = [](lv_fs_drv_t *, void *file_p, void *buf, uint32_t btr, uint32_t *br) -> lv_fs_res_t {
+        File *file = (File*)file_p;
+        *br = file->read((uint8_t*)buf, btr);
+        return LV_FS_RES_OK;
+    };
+    drv.seek_cb = [](lv_fs_drv_t *, void *file_p, uint32_t pos, lv_fs_whence_t whence) -> lv_fs_res_t {
+        File *file = (File*)file_p;
+        if (whence == LV_FS_SEEK_SET)
+            file->seek(pos);
+        else if (whence == LV_FS_SEEK_CUR)
+            file->seek(file->position() + pos);
+        else if (whence == LV_FS_SEEK_END)
+            file->seek(file->size() - pos);
+        return LV_FS_RES_OK;
+    };
+    drv.tell_cb = [](lv_fs_drv_t *, void *file_p, uint32_t *pos_p) -> lv_fs_res_t {
+        File *file = (File*)file_p;
+        *pos_p = file->position();
+        return LV_FS_RES_OK;
+    };
+    lv_fs_drv_register(&drv);
+    sd_fs_registered = true;
+    Serial.println("[ui] LVGL SD filesystem driver registered (S:)");
+}
+
+// ============================================================
+//  Picture Frame Mode
+// ============================================================
+static void load_next_slideshow_image() {
+    if (slideshow_files.empty() || !slideshow_img) return;
+
+    String path = "S:" + slideshow_files[slideshow_index];
+    Serial.printf("[ui] Loading image: %s\n", path.c_str());
+    lv_img_set_src(slideshow_img, path.c_str());
+
+    slideshow_index = (slideshow_index + 1) % slideshow_files.size();
+}
+
+static void slideshow_timer_cb(lv_timer_t *timer) {
+    (void)timer;
+    load_next_slideshow_image();
+}
+
+static void init_picture_frame_mode() {
+    lvgl_register_sd_driver();
+
+    if (!picture_frame_screen) {
+        picture_frame_screen = lv_obj_create(NULL);
+        lv_obj_set_style_bg_color(picture_frame_screen, lv_color_black(), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(picture_frame_screen, LV_OPA_COVER, LV_PART_MAIN);
+    } else {
+        lv_obj_clean(picture_frame_screen);
+    }
+    slideshow_img = nullptr;
+    slideshow_fallback_label = nullptr;
+
+    // Scan SD card /pictures directory for images
+    slideshow_files.clear();
+    File dir = SD.open("/pictures");
+    if (dir && dir.isDirectory()) {
+        File entry;
+        while ((entry = dir.openNextFile())) {
+            if (!entry.isDirectory()) {
+                String name = String(entry.name());
+                String lower = name;
+                lower.toLowerCase();
+                if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") ||
+                    lower.endsWith(".sjpg") || lower.endsWith(".bmp")) {
+                    if (!name.startsWith("/")) {
+                        slideshow_files.push_back("/pictures/" + name);
+                    } else {
+                        slideshow_files.push_back(name);
+                    }
+                }
+            }
+            entry.close();
+        }
+        dir.close();
+    }
+
+    if (slideshow_files.empty()) {
+        Serial.println("[ui] WARN: No images found in /pictures");
+        slideshow_fallback_label = lv_label_create(picture_frame_screen);
+        lv_label_set_text(slideshow_fallback_label,
+            "No images in /pictures\n\nUpload JPG/BMP files to SD card");
+        lv_obj_center(slideshow_fallback_label);
+        lv_obj_set_style_text_color(slideshow_fallback_label, lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_text_font(slideshow_fallback_label, &lv_font_montserrat_20, LV_PART_MAIN);
+        lv_obj_set_style_text_align(slideshow_fallback_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        return;
+    }
+
+    Serial.printf("[ui] Found %zu images in /pictures\n", slideshow_files.size());
+
+    slideshow_img = lv_img_create(picture_frame_screen);
+    lv_obj_set_size(slideshow_img, SCREEN_WIDTH, SCREEN_HEIGHT);
+    lv_obj_align(slideshow_img, LV_ALIGN_CENTER, 0, 0);
+
+    slideshow_index = 0;
+    load_next_slideshow_image();
+
+    uint32_t interval_ms = g_active_config ? g_active_config->slideshow_interval_sec * 1000 : 30000;
+    if (interval_ms < 5000) interval_ms = 5000;
+    slideshow_timer = lv_timer_create(slideshow_timer_cb, interval_ms, nullptr);
+}
+
+static void cleanup_picture_frame_mode() {
+    if (slideshow_timer) {
+        lv_timer_del(slideshow_timer);
+        slideshow_timer = nullptr;
+    }
+}
+
+// ============================================================
+//  Standby Mode
+// ============================================================
+static void init_standby_mode() {
+    if (!standby_screen) {
+        standby_screen = lv_obj_create(NULL);
+        lv_obj_set_style_bg_color(standby_screen, lv_color_hex(0x0f0f23), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(standby_screen, LV_OPA_COVER, LV_PART_MAIN);
+
+        standby_time_label = lv_label_create(standby_screen);
+        lv_label_set_text(standby_time_label, "00:00");
+        lv_obj_set_style_text_font(standby_time_label, &lv_font_montserrat_40, LV_PART_MAIN);
+        lv_obj_set_style_text_color(standby_time_label, lv_color_white(), LV_PART_MAIN);
+        lv_obj_align(standby_time_label, LV_ALIGN_CENTER, 0, -50);
+
+        standby_stats_label = lv_label_create(standby_screen);
+        lv_label_set_text(standby_stats_label, "CPU --% | RAM --% | GPU --%");
+        lv_obj_set_style_text_font(standby_stats_label, &lv_font_montserrat_16, LV_PART_MAIN);
+        lv_obj_set_style_text_color(standby_stats_label, lv_color_hex(0x888888), LV_PART_MAIN);
+        lv_obj_align(standby_stats_label, LV_ALIGN_CENTER, 0, 20);
+    }
+
+    time_t now = time(nullptr);
+    struct tm *tm_info = localtime(&now);
+    if (standby_time_label && tm_info) {
+        lv_label_set_text_fmt(standby_time_label, "%02d:%02d", tm_info->tm_hour, tm_info->tm_min);
+    }
+}
+
+void update_standby_time() {
+    if (!standby_time_label) return;
+    time_t now = time(nullptr);
+    struct tm *tm_info = localtime(&now);
+    if (tm_info) {
+        lv_label_set_text_fmt(standby_time_label, "%02d:%02d", tm_info->tm_hour, tm_info->tm_min);
+    }
+}
+
+void update_standby_stats(const StatsPayload *stats) {
+    if (!standby_stats_label || !stats) return;
+    auto pct_str = [](uint8_t val) -> String {
+        if (val == 0xFF) return "N/A";
+        return String(val) + "%";
+    };
+    String line = "CPU " + pct_str(stats->cpu_percent) +
+                  " | RAM " + pct_str(stats->ram_percent) +
+                  " | GPU " + pct_str(stats->gpu_percent);
+    lv_label_set_text(standby_stats_label, line.c_str());
+}
+
+// ============================================================
+//  Analog Clock Widgets (created on clock_screen)
+// ============================================================
+static void create_analog_clock_widgets(lv_obj_t *parent) {
+    analog_clock_face = lv_arc_create(parent);
+    lv_obj_set_size(analog_clock_face, 300, 300);
+    lv_obj_center(analog_clock_face);
+    lv_arc_set_bg_angles(analog_clock_face, 0, 360);
+    lv_arc_set_value(analog_clock_face, 0);
+    lv_obj_remove_style(analog_clock_face, NULL, LV_PART_KNOB);
+    lv_obj_remove_style(analog_clock_face, NULL, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(analog_clock_face, 4, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(analog_clock_face, lv_color_hex(0x888888), LV_PART_MAIN);
+
+    hour_points[0] = {(lv_coord_t)(SCREEN_WIDTH / 2), (lv_coord_t)(SCREEN_HEIGHT / 2)};
+    hour_points[1] = {(lv_coord_t)(SCREEN_WIDTH / 2), (lv_coord_t)(SCREEN_HEIGHT / 2 - 80)};
+    analog_hour_hand = lv_line_create(parent);
+    lv_line_set_points(analog_hour_hand, hour_points, 2);
+    lv_obj_set_style_line_width(analog_hour_hand, 6, LV_PART_MAIN);
+    lv_obj_set_style_line_color(analog_hour_hand, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_line_rounded(analog_hour_hand, true, LV_PART_MAIN);
+
+    min_points[0] = {(lv_coord_t)(SCREEN_WIDTH / 2), (lv_coord_t)(SCREEN_HEIGHT / 2)};
+    min_points[1] = {(lv_coord_t)(SCREEN_WIDTH / 2), (lv_coord_t)(SCREEN_HEIGHT / 2 - 120)};
+    analog_min_hand = lv_line_create(parent);
+    lv_line_set_points(analog_min_hand, min_points, 2);
+    lv_obj_set_style_line_width(analog_min_hand, 4, LV_PART_MAIN);
+    lv_obj_set_style_line_color(analog_min_hand, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_line_rounded(analog_min_hand, true, LV_PART_MAIN);
+
+    lv_obj_add_flag(analog_clock_face, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(analog_hour_hand, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(analog_min_hand, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ============================================================
+//  Mode Transition Handler (called by display_set_mode in power.cpp)
+// ============================================================
+void ui_transition_mode(DisplayMode from, DisplayMode to) {
+    switch (from) {
+        case MODE_HOTKEYS: break;
+        case MODE_CLOCK: break;
+        case MODE_PICTURE_FRAME: cleanup_picture_frame_mode(); break;
+        case MODE_STANDBY: break;
+    }
+
+    switch (to) {
+        case MODE_HOTKEYS:
+            show_hotkey_view();
+            break;
+        case MODE_CLOCK:
+            show_clock_mode();
+            break;
+        case MODE_PICTURE_FRAME:
+            init_picture_frame_mode();
+            if (picture_frame_screen) lv_scr_load(picture_frame_screen);
+            break;
+        case MODE_STANDBY:
+            init_standby_mode();
+            if (standby_screen) lv_scr_load(standby_screen);
+            break;
+    }
+    Serial.printf("[ui] Mode transition: %d -> %d complete\n", from, to);
+}
+
+// ============================================================
+//  Brightness Long-Press: Cycle Display Modes
+// ============================================================
+static void brightness_long_press_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_LONG_PRESSED) {
+        DisplayMode current = display_get_mode();
+        DisplayMode next = (DisplayMode)((current + 1) % 4);
+        display_set_mode(next);
+    }
+}
+
+// ============================================================
 //  Static helper: create all main screen widgets (header, stats, tabview)
 //  Called by both create_ui() and rebuild_ui()
 // ============================================================
@@ -476,6 +781,7 @@ static void create_ui_widgets(lv_obj_t *screen, const AppConfig *cfg) {
     lv_obj_align(bright_btn, LV_ALIGN_RIGHT_MID, -95, 0);
     lv_obj_add_flag(bright_btn, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(bright_btn, brightness_event_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(bright_btn, brightness_long_press_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
     // Stats header (hidden by default, shown on first MSG_STATS)
     create_stats_header(screen);
@@ -574,6 +880,9 @@ void create_ui(const AppConfig* cfg) {
     lv_obj_set_style_text_font(clock_rssi_label, &lv_font_montserrat_28, LV_PART_MAIN);
     lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
     lv_obj_align(clock_rssi_label, LV_ALIGN_CENTER, 0, 30);
+
+    // Analog clock widgets on clock_screen (hidden by default)
+    create_analog_clock_widgets(clock_screen);
 
     // --- Config mode screen (created once, persists across rebuilds) ---
     config_screen = lv_obj_create(NULL);
