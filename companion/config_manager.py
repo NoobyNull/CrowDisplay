@@ -6,6 +6,7 @@ Holds the AppConfig dict (profile hierarchy) and provides:
 - Config navigation and updates
 - Validation before deploy
 - Qt signal emission on config changes
+- V1→V2 migration (grid buttons → absolute widgets)
 """
 
 import json
@@ -16,6 +17,38 @@ from typing import Dict, List, Any, Optional
 ACTION_HOTKEY = 0
 ACTION_MEDIA_KEY = 1
 
+# Widget type constants (must match display/config.h WidgetType enum)
+WIDGET_HOTKEY_BUTTON = 0
+WIDGET_STAT_MONITOR = 1
+WIDGET_STATUS_BAR = 2
+WIDGET_CLOCK = 3
+WIDGET_TEXT_LABEL = 4
+WIDGET_SEPARATOR = 5
+WIDGET_PAGE_NAV = 6
+
+WIDGET_TYPE_MAX = 6
+
+WIDGET_TYPE_NAMES = {
+    WIDGET_HOTKEY_BUTTON: "Hotkey Button",
+    WIDGET_STAT_MONITOR: "Stat Monitor",
+    WIDGET_STATUS_BAR: "Status Bar",
+    WIDGET_CLOCK: "Clock",
+    WIDGET_TEXT_LABEL: "Text Label",
+    WIDGET_SEPARATOR: "Separator",
+    WIDGET_PAGE_NAV: "Page Nav",
+}
+
+# Default widget sizes
+WIDGET_DEFAULT_SIZES = {
+    WIDGET_HOTKEY_BUTTON: (180, 100),
+    WIDGET_STAT_MONITOR: (120, 50),
+    WIDGET_STATUS_BAR: (800, 40),
+    WIDGET_CLOCK: (200, 200),
+    WIDGET_TEXT_LABEL: (160, 40),
+    WIDGET_SEPARATOR: (200, 4),
+    WIDGET_PAGE_NAV: (200, 30),
+}
+
 # Modifier constants (must match shared/protocol.h)
 MOD_NONE = 0x00
 MOD_CTRL = 0x01
@@ -24,16 +57,23 @@ MOD_ALT = 0x04
 MOD_GUI = 0x08
 
 # Config constraints
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2
 CONFIG_MAX_PAGES = 16
-CONFIG_MAX_BUTTONS = 12  # 4x3 grid capacity
+CONFIG_MAX_WIDGETS = 32
 CONFIG_MAX_STATS = 8
+
+# Display dimensions
+DISPLAY_WIDTH = 800
+DISPLAY_HEIGHT = 480
+SNAP_GRID = 10
+WIDGET_MIN_W = 40
+WIDGET_MIN_H = 30
 
 # Stat type range (must match shared/protocol.h StatType enum)
 STAT_TYPE_MIN = 1
 STAT_TYPE_MAX = 20  # 0x14
 
-# Grid dimensions
+# Legacy grid dimensions (for v1 migration)
 GRID_COLS = 4
 GRID_ROWS = 3
 
@@ -52,6 +92,148 @@ DEFAULT_COLORS = {
 }
 
 
+def make_default_widget(widget_type: int, x: int = 0, y: int = 0) -> Dict[str, Any]:
+    """Create a default widget dict of the given type at position (x, y)."""
+    w, h = WIDGET_DEFAULT_SIZES.get(widget_type, (180, 100))
+    widget = {
+        "widget_type": widget_type,
+        "x": x,
+        "y": y,
+        "width": w,
+        "height": h,
+        "label": "",
+        "color": 0xFFFFFF,
+        "bg_color": 0,
+    }
+
+    if widget_type == WIDGET_HOTKEY_BUTTON:
+        widget.update({
+            "label": "Button",
+            "description": "",
+            "icon": "\uf015",
+            "color": DEFAULT_COLORS["BLUE"],
+            "action_type": ACTION_HOTKEY,
+            "modifiers": MOD_NONE,
+            "keycode": 0,
+            "consumer_code": 0,
+            "pressed_color": 0,
+        })
+    elif widget_type == WIDGET_STAT_MONITOR:
+        widget.update({
+            "label": "CPU",
+            "stat_type": 0x01,
+            "color": DEFAULT_COLORS["BLUE"],
+        })
+    elif widget_type == WIDGET_STATUS_BAR:
+        widget.update({
+            "label": "Hotkeys",
+            "color": 0xE0E0E0,
+            "bg_color": 0x16213e,
+            "show_wifi": True,
+            "show_battery": True,
+            "show_time": True,
+        })
+    elif widget_type == WIDGET_CLOCK:
+        widget.update({
+            "clock_analog": False,
+            "color": 0xFFFFFF,
+        })
+    elif widget_type == WIDGET_TEXT_LABEL:
+        widget.update({
+            "label": "Label",
+            "font_size": 16,
+            "text_align": 1,
+            "color": 0xFFFFFF,
+        })
+    elif widget_type == WIDGET_SEPARATOR:
+        widget.update({
+            "separator_vertical": False,
+            "thickness": 2,
+            "color": 0x555555,
+        })
+    elif widget_type == WIDGET_PAGE_NAV:
+        widget.update({
+            "color": DEFAULT_COLORS["BLUE"],
+        })
+
+    return widget
+
+
+def _migrate_v1_page(v1_page: Dict[str, Any]) -> Dict[str, Any]:
+    """Migrate a v1 grid-based page to v2 absolute-positioned widgets."""
+    v2_page = {"name": v1_page.get("name", "Page"), "widgets": []}
+
+    # Add default status bar
+    v2_page["widgets"].append(make_default_widget(WIDGET_STATUS_BAR, 0, 0))
+
+    # Grid cell dimensions for v1 layout
+    GRID_X0 = 6
+    GRID_Y0 = 50
+    CELL_W = 192
+    CELL_H = 122
+    GAP = 6
+
+    auto_row, auto_col = 0, 0
+    for btn in v1_page.get("buttons", []):
+        grid_row = btn.get("grid_row", -1)
+        grid_col = btn.get("grid_col", -1)
+        col_span = btn.get("col_span", 1)
+        row_span = btn.get("row_span", 1)
+
+        if grid_row >= 0 and grid_col >= 0:
+            target_row, target_col = grid_row, grid_col
+        else:
+            target_row, target_col = auto_row, auto_col
+            col_span = 1
+            row_span = 1
+            auto_col += 1
+            if auto_col >= GRID_COLS:
+                auto_col = 0
+                auto_row += 1
+
+        x = GRID_X0 + target_col * (CELL_W + GAP)
+        y = GRID_Y0 + target_row * (CELL_H + GAP)
+        w = col_span * CELL_W + (col_span - 1) * GAP
+        h = row_span * CELL_H + (row_span - 1) * GAP
+
+        widget = {
+            "widget_type": WIDGET_HOTKEY_BUTTON,
+            "x": x, "y": y, "width": w, "height": h,
+            "label": btn.get("label", ""),
+            "description": btn.get("description", ""),
+            "color": btn.get("color", 0xFFFFFF),
+            "bg_color": 0,
+            "icon": btn.get("icon", ""),
+            "action_type": btn.get("action_type", ACTION_HOTKEY),
+            "modifiers": btn.get("modifiers", 0),
+            "keycode": btn.get("keycode", 0),
+            "consumer_code": btn.get("consumer_code", 0),
+            "pressed_color": btn.get("pressed_color", 0),
+        }
+        v2_page["widgets"].append(widget)
+
+    # Add page nav
+    v2_page["widgets"].append(make_default_widget(WIDGET_PAGE_NAV, 300, 445))
+
+    return v2_page
+
+
+def _migrate_v1_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Migrate entire v1 config to v2."""
+    config["version"] = CONFIG_VERSION
+    for profile in config.get("profiles", []):
+        new_pages = []
+        for page in profile.get("pages", []):
+            if "buttons" in page:
+                new_pages.append(_migrate_v1_page(page))
+            elif "widgets" in page:
+                new_pages.append(page)  # Already v2
+            else:
+                new_pages.append({"name": page.get("name", "Page"), "widgets": []})
+        profile["pages"] = new_pages
+    return config
+
+
 class ConfigManager:
     """Manages in-memory AppConfig with JSON I/O and validation"""
 
@@ -61,7 +243,33 @@ class ConfigManager:
         self.new_config()
 
     def new_config(self) -> None:
-        """Create empty 3-page default config"""
+        """Create empty 3-page default config with v2 widgets"""
+        GRID_X0 = 6
+        GRID_Y0 = 50
+        CELL_W = 192
+        CELL_H = 122
+        GAP = 6
+
+        def make_page(name: str, color: int, start_idx: int) -> Dict[str, Any]:
+            page = {"name": name, "widgets": []}
+            # Status bar
+            page["widgets"].append(make_default_widget(WIDGET_STATUS_BAR, 0, 0))
+            # 12 buttons in 4x3 grid
+            for i in range(12):
+                col = i % 4
+                row = i // 4
+                x = GRID_X0 + col * (CELL_W + GAP)
+                y = GRID_Y0 + row * (CELL_H + GAP)
+                w = make_default_widget(WIDGET_HOTKEY_BUTTON, x, y)
+                w["width"] = CELL_W
+                w["height"] = CELL_H
+                w["label"] = f"Button {start_idx + i}"
+                w["color"] = color
+                page["widgets"].append(w)
+            # Page nav
+            page["widgets"].append(make_default_widget(WIDGET_PAGE_NAV, 300, 445))
+            return page
+
         self.config = {
             "version": CONFIG_VERSION,
             "active_profile_name": "Default",
@@ -73,69 +281,9 @@ class ConfigManager:
                 {
                     "name": "Default",
                     "pages": [
-                        {
-                            "name": "Page 1",
-                            "buttons": [
-                                {
-                                    "label": f"Button {i+1}",
-                                    "description": "",
-                                    "color": DEFAULT_COLORS["BLUE"],
-                                    "icon": "\uf015",
-                                    "action_type": ACTION_HOTKEY,
-                                    "modifiers": MOD_NONE,
-                                    "keycode": 0,
-                                    "consumer_code": 0,
-                                    "grid_row": -1,
-                                    "grid_col": -1,
-                                    "pressed_color": 0,
-                                    "col_span": 1,
-                                    "row_span": 1,
-                                }
-                                for i in range(12)  # 4x3 grid
-                            ],
-                        },
-                        {
-                            "name": "Page 2",
-                            "buttons": [
-                                {
-                                    "label": f"B{i+13}",
-                                    "description": "",
-                                    "color": DEFAULT_COLORS["TEAL"],
-                                    "icon": "\uf015",
-                                    "action_type": ACTION_HOTKEY,
-                                    "modifiers": MOD_NONE,
-                                    "keycode": 0,
-                                    "consumer_code": 0,
-                                    "grid_row": -1,
-                                    "grid_col": -1,
-                                    "pressed_color": 0,
-                                    "col_span": 1,
-                                    "row_span": 1,
-                                }
-                                for i in range(12)
-                            ],
-                        },
-                        {
-                            "name": "Page 3",
-                            "buttons": [
-                                {
-                                    "label": f"B{i+25}",
-                                    "description": "",
-                                    "color": DEFAULT_COLORS["RED"],
-                                    "icon": "\uf015",
-                                    "action_type": ACTION_HOTKEY,
-                                    "modifiers": MOD_NONE,
-                                    "keycode": 0,
-                                    "consumer_code": 0,
-                                    "grid_row": -1,
-                                    "grid_col": -1,
-                                    "pressed_color": 0,
-                                    "col_span": 1,
-                                    "row_span": 1,
-                                }
-                                for i in range(12)
-                            ],
-                        },
+                        make_page("Page 1", DEFAULT_COLORS["BLUE"], 1),
+                        make_page("Page 2", DEFAULT_COLORS["TEAL"], 13),
+                        make_page("Page 3", DEFAULT_COLORS["RED"], 25),
                     ],
                 }
             ],
@@ -143,12 +291,18 @@ class ConfigManager:
         self._emit_changed()
 
     def load_json_file(self, path: str) -> bool:
-        """Load config from JSON file. Returns True on success."""
+        """Load config from JSON file. Handles v1→v2 migration. Returns True on success."""
         try:
             with open(path, "r") as f:
                 data = json.load(f)
             if not isinstance(data, dict):
                 return False
+
+            # Migrate v1 configs
+            version = data.get("version", 0)
+            if version < 2:
+                data = _migrate_v1_config(data)
+
             self.config = data
             self._emit_changed()
             return True
@@ -182,29 +336,60 @@ class ConfigManager:
             return pages[index]
         return None
 
-    def get_button(self, page_idx: int, button_idx: int) -> Optional[Dict[str, Any]]:
-        """Get button dict by page and button index"""
+    def get_widget(self, page_idx: int, widget_idx: int) -> Optional[Dict[str, Any]]:
+        """Get widget dict by page and widget index"""
         page = self.get_page(page_idx)
         if page is None:
             return None
-        buttons = page.get("buttons", [])
-        if 0 <= button_idx < len(buttons):
-            return buttons[button_idx]
+        widgets = page.get("widgets", [])
+        if 0 <= widget_idx < len(widgets):
+            return widgets[widget_idx]
         return None
 
-    def set_button(
-        self, page_idx: int, button_idx: int, button_dict: Dict[str, Any]
+    def set_widget(
+        self, page_idx: int, widget_idx: int, widget_dict: Dict[str, Any]
     ) -> bool:
-        """Update button at page_idx, button_idx. Returns True on success."""
+        """Update widget at page_idx, widget_idx. Returns True on success."""
         page = self.get_page(page_idx)
         if page is None:
             return False
-        buttons = page.get("buttons", [])
-        if not (0 <= button_idx < len(buttons)):
+        widgets = page.get("widgets", [])
+        if not (0 <= widget_idx < len(widgets)):
             return False
-        buttons[button_idx] = button_dict
+        widgets[widget_idx] = widget_dict
         self._emit_changed()
         return True
+
+    def add_widget(self, page_idx: int, widget_dict: Dict[str, Any]) -> int:
+        """Add a new widget to a page. Returns the widget index, or -1 on failure."""
+        page = self.get_page(page_idx)
+        if page is None:
+            return -1
+        widgets = page.get("widgets", [])
+        if len(widgets) >= CONFIG_MAX_WIDGETS:
+            return -1
+        widgets.append(widget_dict)
+        self._emit_changed()
+        return len(widgets) - 1
+
+    def remove_widget(self, page_idx: int, widget_idx: int) -> bool:
+        """Remove widget by index. Returns True on success."""
+        page = self.get_page(page_idx)
+        if page is None:
+            return False
+        widgets = page.get("widgets", [])
+        if not (0 <= widget_idx < len(widgets)):
+            return False
+        widgets.pop(widget_idx)
+        self._emit_changed()
+        return True
+
+    def get_widget_count(self, page_idx: int) -> int:
+        """Get number of widgets on a page"""
+        page = self.get_page(page_idx)
+        if page is None:
+            return 0
+        return len(page.get("widgets", []))
 
     def add_page(self, name: str) -> bool:
         """Add new page to active profile"""
@@ -218,23 +403,9 @@ class ConfigManager:
 
         new_page = {
             "name": name,
-            "buttons": [
-                {
-                    "label": "",
-                    "description": "",
-                    "color": DEFAULT_COLORS["BLUE"],
-                    "icon": "\uf015",
-                    "action_type": ACTION_HOTKEY,
-                    "modifiers": MOD_NONE,
-                    "keycode": 0,
-                    "consumer_code": 0,
-                    "grid_row": -1,
-                    "grid_col": -1,
-                    "pressed_color": 0,
-                    "col_span": 1,
-                    "row_span": 1,
-                }
-                for _ in range(12)
+            "widgets": [
+                make_default_widget(WIDGET_STATUS_BAR, 0, 0),
+                make_default_widget(WIDGET_PAGE_NAV, 300, 445),
             ],
         }
         pages.append(new_page)
@@ -249,7 +420,7 @@ class ConfigManager:
 
         pages = profile.get("pages", [])
         if len(pages) <= 1:
-            return False  # Keep at least 1 page
+            return False
         if not (0 <= index < len(pages)):
             return False
 
@@ -267,10 +438,7 @@ class ConfigManager:
         return True
 
     def reorder_page(self, old_index: int, new_index: int) -> bool:
-        """Move a page from old_index to new_index within active profile.
-
-        Returns False if either index is out of range.
-        """
+        """Move a page from old_index to new_index within active profile."""
         profile = self.get_active_profile()
         if profile is None:
             return False
@@ -293,13 +461,10 @@ class ConfigManager:
         return json.dumps(self.config, indent=2)
 
     def validate(self) -> tuple[bool, str]:
-        """
-        Validate config structure.
-        Returns (is_valid, error_message)
-        """
+        """Validate config structure. Returns (is_valid, error_message)."""
         # Check version
         if self.config.get("version") != CONFIG_VERSION:
-            return False, "Config version mismatch"
+            return False, f"Config version mismatch (got {self.config.get('version')}, expected {CONFIG_VERSION})"
 
         # Check display mode settings
         default_mode = self.config.get("default_mode", 0)
@@ -314,7 +479,7 @@ class ConfigManager:
         if not isinstance(clock_analog, bool):
             return False, "clock_analog must be a boolean"
 
-        # Check notification settings (optional, defaults to disabled)
+        # Check notification settings (optional)
         notifications_enabled = self.config.get("notifications_enabled", False)
         if not isinstance(notifications_enabled, bool):
             return False, "notifications_enabled must be a boolean"
@@ -331,7 +496,6 @@ class ConfigManager:
         if not profiles:
             return False, "No profiles defined"
 
-        # Check active profile exists
         active_name = self.config.get("active_profile_name")
         active_profile = None
         for profile in profiles:
@@ -350,58 +514,56 @@ class ConfigManager:
         if len(pages) > CONFIG_MAX_PAGES:
             return False, f"Too many pages (max {CONFIG_MAX_PAGES})"
 
-        # Check buttons
+        # Check widgets
         for pi, page in enumerate(pages):
-            buttons = page.get("buttons", [])
-            if not buttons:
-                return False, f"Page {pi} has no buttons"
+            widgets = page.get("widgets", [])
+            if len(widgets) > CONFIG_MAX_WIDGETS:
+                return False, f"Page {pi} has too many widgets (max {CONFIG_MAX_WIDGETS})"
 
-            if len(buttons) > CONFIG_MAX_BUTTONS:
-                return False, f"Page {pi} has too many buttons"
+            for wi, widget in enumerate(widgets):
+                # Validate widget type
+                wtype = widget.get("widget_type", 0)
+                if not isinstance(wtype, int) or wtype < 0 or wtype > WIDGET_TYPE_MAX:
+                    return False, f"Page {pi} widget {wi}: invalid widget_type {wtype}"
 
-            for bi, button in enumerate(buttons):
-                if not isinstance(button.get("label"), str):
-                    return False, f"Page {pi} button {bi}: invalid label"
-                if not isinstance(button.get("color"), int):
-                    return False, f"Page {pi} button {bi}: invalid color"
-                if button.get("action_type") not in (ACTION_HOTKEY, ACTION_MEDIA_KEY):
-                    return False, f"Page {pi} button {bi}: invalid action_type"
+                # Validate position/size
+                x = widget.get("x", 0)
+                y = widget.get("y", 0)
+                w = widget.get("width", 0)
+                h = widget.get("height", 0)
+                if not isinstance(x, int) or not isinstance(y, int):
+                    return False, f"Page {pi} widget {wi}: x/y must be integers"
+                if not isinstance(w, int) or not isinstance(h, int):
+                    return False, f"Page {pi} widget {wi}: width/height must be integers"
+                if x < 0 or y < 0:
+                    return False, f"Page {pi} widget {wi}: position ({x},{y}) out of bounds"
+                if w < WIDGET_MIN_W or h < WIDGET_MIN_H:
+                    return False, f"Page {pi} widget {wi}: size {w}x{h} below minimum {WIDGET_MIN_W}x{WIDGET_MIN_H}"
+                if x + w > DISPLAY_WIDTH or y + h > DISPLAY_HEIGHT:
+                    return False, f"Page {pi} widget {wi}: extends beyond display ({x}+{w}x{y}+{h})"
 
-                # Validate grid positioning (v0.9.1)
-                grid_row = button.get("grid_row", -1)
-                grid_col = button.get("grid_col", -1)
-                if not isinstance(grid_row, int) or grid_row < -1 or grid_row >= GRID_ROWS:
-                    return False, f"Page {pi} button {bi}: grid_row {grid_row} out of range [-1, {GRID_ROWS - 1}]"
-                if not isinstance(grid_col, int) or grid_col < -1 or grid_col >= GRID_COLS:
-                    return False, f"Page {pi} button {bi}: grid_col {grid_col} out of range [-1, {GRID_COLS - 1}]"
-                # Partial positioning check: both must be set together
-                if (grid_row >= 0) != (grid_col >= 0):
-                    return False, f"Page {pi} button {bi}: partial grid position (row={grid_row}, col={grid_col}); set both or neither"
+                # Validate type-specific fields
+                if wtype == WIDGET_HOTKEY_BUTTON:
+                    if not isinstance(widget.get("label", ""), str):
+                        return False, f"Page {pi} widget {wi}: invalid label"
+                    if not isinstance(widget.get("color", 0), int):
+                        return False, f"Page {pi} widget {wi}: invalid color"
+                    at = widget.get("action_type", ACTION_HOTKEY)
+                    if at not in (ACTION_HOTKEY, ACTION_MEDIA_KEY):
+                        return False, f"Page {pi} widget {wi}: invalid action_type"
+                    icon_path = widget.get("icon_path", "")
+                    if icon_path:
+                        if not isinstance(icon_path, str):
+                            return False, f"Page {pi} widget {wi}: icon_path must be a string"
+                        if not icon_path.startswith("/icons/") or not icon_path.endswith(".png"):
+                            return False, f"Page {pi} widget {wi}: icon_path must start with /icons/ and end with .png"
 
-                # Validate pressed_color
-                pressed_color = button.get("pressed_color", 0)
-                if isinstance(pressed_color, int) and (pressed_color < 0 or pressed_color > 0xFFFFFF):
-                    return False, f"Page {pi} button {bi}: pressed_color out of range [0, 0xFFFFFF]"
+                elif wtype == WIDGET_STAT_MONITOR:
+                    st = widget.get("stat_type", 0)
+                    if not isinstance(st, int) or st < STAT_TYPE_MIN or st > STAT_TYPE_MAX:
+                        return False, f"Page {pi} widget {wi}: stat_type {st} out of range"
 
-                # Validate grid span (v0.9.1)
-                col_span = button.get("col_span", 1)
-                row_span = button.get("row_span", 1)
-                if not isinstance(col_span, int) or col_span < 1 or col_span > 4:
-                    return False, f"Page {pi} button {bi}: col_span {col_span} out of range [1, 4]"
-                if not isinstance(row_span, int) or row_span < 1 or row_span > 3:
-                    return False, f"Page {pi} button {bi}: row_span {row_span} out of range [1, 3]"
-                # Validate span doesn't exceed grid bounds
-                if grid_col >= 0 and grid_col + col_span > GRID_COLS:
-                    return False, f"Page {pi} button {bi}: col {grid_col} + span {col_span} exceeds grid width ({GRID_COLS})"
-                if grid_row >= 0 and grid_row + row_span > GRID_ROWS:
-                    return False, f"Page {pi} button {bi}: row {grid_row} + span {row_span} exceeds grid height ({GRID_ROWS})"
-
-            # Check for overlapping buttons on this page
-            valid, overlap_msg = self._validate_button_layout(pi, buttons)
-            if not valid:
-                return False, overlap_msg
-
-        # Validate stats_header (v0.9.1 -- optional, defaults applied if absent)
+        # Validate stats_header
         stats_header = self.config.get("stats_header", [])
         if not isinstance(stats_header, list):
             return False, "stats_header must be an array"
@@ -415,15 +577,15 @@ class ConfigManager:
 
             stat_type = stat.get("type")
             if not isinstance(stat_type, int) or stat_type < STAT_TYPE_MIN or stat_type > STAT_TYPE_MAX:
-                return False, f"stats_header[{si}]: type {stat_type} out of range [{STAT_TYPE_MIN}, {STAT_TYPE_MAX}]"
+                return False, f"stats_header[{si}]: type {stat_type} out of range"
 
             color = stat.get("color", 0xFFFFFF)
             if not isinstance(color, int) or color < 0 or color > 0xFFFFFF:
-                return False, f"stats_header[{si}]: color out of range [0, 0xFFFFFF]"
+                return False, f"stats_header[{si}]: color out of range"
 
             position = stat.get("position", si)
             if not isinstance(position, int) or position < 0 or position >= CONFIG_MAX_STATS:
-                return False, f"stats_header[{si}]: position {position} out of range [0, {CONFIG_MAX_STATS - 1}]"
+                return False, f"stats_header[{si}]: position {position} out of range"
 
             if position in seen_positions:
                 return False, f"stats_header[{si}]: duplicate position {position}"
@@ -431,48 +593,16 @@ class ConfigManager:
 
         return True, ""
 
-    @staticmethod
-    def _validate_button_layout(page_idx: int, buttons: List[Dict[str, Any]]) -> tuple[bool, str]:
-        """Check for overlapping buttons in grid layout.
+    # Backward compatibility aliases
+    def get_button(self, page_idx: int, button_idx: int) -> Optional[Dict[str, Any]]:
+        """Alias for get_widget (backward compat)"""
+        return self.get_widget(page_idx, button_idx)
 
-        Returns (is_valid, error_message).
-        """
-        grid = [[None for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
-
-        auto_row, auto_col = 0, 0
-        for btn_idx, btn in enumerate(buttons):
-            row = btn.get("grid_row", -1)
-            col = btn.get("grid_col", -1)
-
-            if row < 0 or col < 0:
-                # Auto-flow button: always 1x1, find position
-                target_row, target_col = auto_row, auto_col
-                col_span = 1
-                row_span = 1
-                auto_col += 1
-                if auto_col >= GRID_COLS:
-                    auto_col = 0
-                    auto_row += 1
-            else:
-                target_row, target_col = row, col
-                col_span = btn.get("col_span", 1)
-                row_span = btn.get("row_span", 1)
-
-            # Skip if outside grid
-            if target_row >= GRID_ROWS or target_col >= GRID_COLS:
-                continue
-
-            # Check for overlaps with existing buttons
-            for r in range(target_row, min(target_row + row_span, GRID_ROWS)):
-                for c in range(target_col, min(target_col + col_span, GRID_COLS)):
-                    if grid[r][c] is not None:
-                        return False, (
-                            f"Page {page_idx} button {btn_idx} overlaps with button "
-                            f"{grid[r][c]} at cell ({r},{c})"
-                        )
-                    grid[r][c] = btn_idx
-
-        return True, ""
+    def set_button(
+        self, page_idx: int, button_idx: int, button_dict: Dict[str, Any]
+    ) -> bool:
+        """Alias for set_widget (backward compat)"""
+        return self.set_widget(page_idx, button_idx, button_dict)
 
     def _emit_changed(self) -> None:
         """Emit callback if registered"""

@@ -351,6 +351,87 @@ static void handle_ota_done() {
     }
 }
 
+// ============================================================
+// Image Upload Endpoint: POST /api/image/upload
+// ============================================================
+static uint8_t *g_image_buffer = nullptr;
+static size_t g_image_size = 0;
+static String g_image_filename = "";
+static bool g_image_upload_success = false;
+static String g_image_upload_error = "";
+static const size_t MAX_IMAGE_SIZE = 102400;  // 100KB max
+
+static void handle_image_upload() {
+    HTTPUpload &upload = web_server->upload();
+
+    if (upload.status == UPLOAD_FILE_START) {
+        Serial.printf("Image: receiving %s\n", upload.filename.c_str());
+        last_activity_time = millis();
+
+        g_image_upload_success = false;
+        g_image_upload_error = "";
+        g_image_filename = upload.filename;
+
+        g_image_buffer = (uint8_t *)ps_malloc(MAX_IMAGE_SIZE);
+        if (!g_image_buffer) {
+            g_image_upload_error = "Memory allocation failed";
+            return;
+        }
+        g_image_size = 0;
+    }
+    else if (upload.status == UPLOAD_FILE_WRITE) {
+        last_activity_time = millis();
+        if (g_image_buffer) {
+            if (g_image_size + upload.currentSize > MAX_IMAGE_SIZE) {
+                g_image_upload_error = "Image too large (max 100KB)";
+                free(g_image_buffer);
+                g_image_buffer = nullptr;
+                g_image_size = 0;
+                return;
+            }
+            memcpy(g_image_buffer + g_image_size, upload.buf, upload.currentSize);
+            g_image_size += upload.currentSize;
+        }
+    }
+    else if (upload.status == UPLOAD_FILE_END) {
+        last_activity_time = millis();
+        if (!g_image_buffer) {
+            if (g_image_upload_error.isEmpty()) g_image_upload_error = "Upload buffer lost";
+            return;
+        }
+
+        // Ensure /icons directory exists
+        sdcard_mkdir("/icons");
+
+        // Build destination path
+        String dest_path = "/icons/" + g_image_filename;
+
+        if (!sdcard_write_file(dest_path.c_str(), g_image_buffer, g_image_size)) {
+            g_image_upload_error = "SD card write failed";
+            free(g_image_buffer);
+            g_image_buffer = nullptr;
+            return;
+        }
+
+        Serial.printf("Image: saved %s (%zu bytes)\n", dest_path.c_str(), g_image_size);
+        g_image_upload_success = true;
+
+        free(g_image_buffer);
+        g_image_buffer = nullptr;
+    }
+}
+
+static void handle_image_done() {
+    if (g_image_upload_success) {
+        String path = "/icons/" + g_image_filename;
+        String response = "{\"success\":true,\"path\":\"" + path + "\"}";
+        web_server->send(200, "application/json", response);
+    } else {
+        String response = "{\"success\":false,\"error\":\"" + g_image_upload_error + "\"}";
+        web_server->send(400, "application/json", response);
+    }
+}
+
 bool config_server_start() {
     if (active) return true;
 
@@ -384,6 +465,7 @@ bool config_server_start() {
     web_server = new WebServer(80);
     web_server->on("/", HTTP_GET, handle_config_page);
     web_server->on("/api/config/upload", HTTP_POST, handle_config_done, handle_config_upload);
+    web_server->on("/api/image/upload", HTTP_POST, handle_image_done, handle_image_upload);
     web_server->on("/update", HTTP_POST, handle_ota_done, handle_ota_upload);
     web_server->begin();
     Serial.println("Config Server: web server on port 80");

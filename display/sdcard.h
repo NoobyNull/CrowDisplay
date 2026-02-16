@@ -28,3 +28,6 @@ bool sdcard_file_remove(const char *path);
 // Rename a file on SD card (atomic). Returns true on success.
 // Used for atomic writes: write to tmp file, then rename to final name.
 bool sdcard_file_rename(const char *old_path, const char *new_path);
+
+// Create a directory on SD card (recursive). Returns true on success or if already exists.
+bool sdcard_mkdir(const char *path);

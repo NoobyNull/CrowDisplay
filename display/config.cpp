@@ -6,32 +6,48 @@
 #include "protocol.h"
 
 // ============================================================
-// Default/Builtin Profiles (hardcoded fallback)
+// Default/Builtin Profiles (hardcoded fallback) — v2 format
 // ============================================================
 
-// Create default configuration from hardcoded hotkeys
+// Helper: create a hotkey button widget at absolute position
+static WidgetConfig make_hotkey(int16_t x, int16_t y, int16_t w, int16_t h,
+                                 const char* label, const char* desc, uint32_t color,
+                                 const char* icon, uint8_t mods, uint8_t key,
+                                 ActionType atype = ACTION_HOTKEY, uint16_t cc = 0) {
+    WidgetConfig w_cfg;
+    w_cfg.widget_type = WIDGET_HOTKEY_BUTTON;
+    w_cfg.x = x; w_cfg.y = y; w_cfg.width = w; w_cfg.height = h;
+    w_cfg.label = label;
+    w_cfg.description = desc;
+    w_cfg.color = color;
+    w_cfg.icon = icon;
+    w_cfg.action_type = atype;
+    w_cfg.modifiers = mods;
+    w_cfg.keycode = key;
+    w_cfg.consumer_code = cc;
+    return w_cfg;
+}
+
 AppConfig config_create_defaults() {
     AppConfig cfg;
     cfg.version = CONFIG_VERSION;
     cfg.active_profile_name = "Hyprland";
     cfg.brightness_level = 100;
 
-    // Profile: Hyprland (3 pages, 12 buttons each)
-    ProfileConfig hyprland;
-    hyprland.name = "Hyprland";
-
-    // ===== Page 1: Window Management =====
-    PageConfig page1;
-    page1.name = "Window Manager";
-
-    // Button colors (from ui.cpp)
+    // Colors
     const uint32_t CLR_BLUE = 0x3498DB;
     const uint32_t CLR_TEAL = 0x1ABC9C;
     const uint32_t CLR_RED = 0xE74C3C;
     const uint32_t CLR_CYAN = 0x00BCD4;
     const uint32_t CLR_INDIGO = 0x3F51B5;
+    const uint32_t CLR_GREEN = 0x2ECC71;
+    const uint32_t CLR_ORANGE = 0xE67E22;
+    const uint32_t CLR_LIME = 0x8BC34A;
+    const uint32_t CLR_PINK = 0xE91E63;
+    const uint32_t CLR_AMBER = 0xFFC107;
+    const uint32_t CLR_GREY = 0x7F8C8D;
+    const uint32_t CLR_PURPLE = 0x9B59B6;
 
-    // Key codes (from ui.cpp)
     const uint8_t KEY_RETURN = 0xB0;
     const uint8_t KEY_LEFT_ARROW = 0xD8;
     const uint8_t KEY_RIGHT_ARROW = 0xD7;
@@ -39,322 +55,176 @@ AppConfig config_create_defaults() {
     const uint8_t KEY_DOWN_ARROW = 0xD9;
     const uint8_t KEY_PRINT_SCREEN = 0xCE;
 
-    // WS 1..4, Focus L/R/U/D, Kill, Fullscr, Float, WS 5
-    ButtonConfig btn;
+    // Default layout: 4x3 grid with 6px padding, matching old grid
+    // Grid cell dimensions: (800 - 5*6) / 4 = 192.5 → 192, (390 - 4*6) / 3 = 122 → 122
+    // Starting at y=45 (header area) + 6 padding
+    const int16_t GRID_X0 = 6;
+    const int16_t GRID_Y0 = 50;
+    const int16_t CELL_W = 192;
+    const int16_t CELL_H = 122;
+    const int16_t GAP = 6;
 
-    // WS 1
-    btn.label = "WS 1";
-    btn.description = "Super+1";
-    btn.color = CLR_BLUE;
-    btn.icon = LV_SYMBOL_HOME;
-    btn.action_type = ACTION_HOTKEY;
-    btn.modifiers = MOD_GUI;
-    btn.keycode = '1';
-    page1.buttons.push_back(btn);
+    auto grid_pos = [&](int col, int row, int16_t& ox, int16_t& oy) {
+        ox = GRID_X0 + col * (CELL_W + GAP);
+        oy = GRID_Y0 + row * (CELL_H + GAP);
+    };
 
-    // WS 2
-    btn.label = "WS 2";
-    btn.description = "Super+2";
-    btn.keycode = '2';
-    page1.buttons.push_back(btn);
+    ProfileConfig hyprland;
+    hyprland.name = "Hyprland";
 
-    // WS 3
-    btn.label = "WS 3";
-    btn.description = "Super+3";
-    btn.keycode = '3';
-    page1.buttons.push_back(btn);
+    // ===== Page 1: Window Management =====
+    {
+        PageConfig page;
+        page.name = "Window Manager";
 
-    // WS 4
-    btn.label = "WS 4";
-    btn.description = "Super+4";
-    btn.keycode = '4';
-    page1.buttons.push_back(btn);
+        // Add a status bar at top
+        WidgetConfig sb;
+        sb.widget_type = WIDGET_STATUS_BAR;
+        sb.x = 0; sb.y = 0; sb.width = 800; sb.height = 45;
+        sb.label = "Hotkeys";
+        sb.color = 0xE0E0E0;
+        sb.bg_color = 0x16213e;
+        page.widgets.push_back(sb);
 
-    // Focus Left
-    btn.label = "Focus L";
-    btn.description = "Super+Left";
-    btn.color = CLR_TEAL;
-    btn.icon = LV_SYMBOL_LEFT;
-    btn.keycode = KEY_LEFT_ARROW;
-    page1.buttons.push_back(btn);
+        struct { const char* lbl; const char* desc; uint32_t clr; const char* ico; uint8_t mod; uint8_t key; } btns[] = {
+            {"WS 1", "Super+1", CLR_BLUE, LV_SYMBOL_HOME, MOD_GUI, '1'},
+            {"WS 2", "Super+2", CLR_BLUE, LV_SYMBOL_HOME, MOD_GUI, '2'},
+            {"WS 3", "Super+3", CLR_BLUE, LV_SYMBOL_HOME, MOD_GUI, '3'},
+            {"WS 4", "Super+4", CLR_BLUE, LV_SYMBOL_HOME, MOD_GUI, '4'},
+            {"Focus L", "Super+Left", CLR_TEAL, LV_SYMBOL_LEFT, MOD_GUI, KEY_LEFT_ARROW},
+            {"Focus R", "Super+Right", CLR_TEAL, LV_SYMBOL_RIGHT, MOD_GUI, KEY_RIGHT_ARROW},
+            {"Focus Up", "Super+Up", CLR_TEAL, LV_SYMBOL_UP, MOD_GUI, KEY_UP_ARROW},
+            {"Focus Dn", "Super+Down", CLR_TEAL, LV_SYMBOL_DOWN, MOD_GUI, KEY_DOWN_ARROW},
+            {"Kill", "Super+Q", CLR_RED, LV_SYMBOL_CLOSE, MOD_GUI, 'q'},
+            {"Fullscr", "Super+F", CLR_CYAN, LV_SYMBOL_NEW_LINE, MOD_GUI, 'f'},
+            {"Float", "Super+Sh+Space", CLR_INDIGO, LV_SYMBOL_SHUFFLE, (uint8_t)(MOD_GUI | MOD_SHIFT), ' '},
+            {"WS 5", "Super+5", CLR_BLUE, LV_SYMBOL_HOME, MOD_GUI, '5'},
+        };
 
-    // Focus Right
-    btn.label = "Focus R";
-    btn.description = "Super+Right";
-    btn.icon = LV_SYMBOL_RIGHT;
-    btn.keycode = KEY_RIGHT_ARROW;
-    page1.buttons.push_back(btn);
+        for (int i = 0; i < 12; i++) {
+            int16_t x, y;
+            grid_pos(i % 4, i / 4, x, y);
+            page.widgets.push_back(make_hotkey(x, y, CELL_W, CELL_H,
+                btns[i].lbl, btns[i].desc, btns[i].clr, btns[i].ico,
+                btns[i].mod, btns[i].key));
+        }
 
-    // Focus Up
-    btn.label = "Focus Up";
-    btn.description = "Super+Up";
-    btn.icon = LV_SYMBOL_UP;
-    btn.keycode = KEY_UP_ARROW;
-    page1.buttons.push_back(btn);
+        // Page nav at bottom
+        WidgetConfig pn;
+        pn.widget_type = WIDGET_PAGE_NAV;
+        pn.x = 300; pn.y = 445; pn.width = 200; pn.height = 30;
+        pn.color = 0x3498DB;
+        page.widgets.push_back(pn);
 
-    // Focus Down
-    btn.label = "Focus Dn";
-    btn.description = "Super+Down";
-    btn.icon = LV_SYMBOL_DOWN;
-    btn.keycode = KEY_DOWN_ARROW;
-    page1.buttons.push_back(btn);
-
-    // Kill
-    btn.label = "Kill";
-    btn.description = "Super+Q";
-    btn.color = CLR_RED;
-    btn.icon = LV_SYMBOL_CLOSE;
-    btn.modifiers = MOD_GUI;
-    btn.keycode = 'q';
-    page1.buttons.push_back(btn);
-
-    // Fullscreen
-    btn.label = "Fullscr";
-    btn.description = "Super+F";
-    btn.color = CLR_CYAN;
-    btn.icon = LV_SYMBOL_NEW_LINE;
-    btn.keycode = 'f';
-    page1.buttons.push_back(btn);
-
-    // Float
-    btn.label = "Float";
-    btn.description = "Super+Sh+Space";
-    btn.color = CLR_INDIGO;
-    btn.icon = LV_SYMBOL_SHUFFLE;
-    btn.modifiers = MOD_GUI | MOD_SHIFT;
-    btn.keycode = ' ';
-    page1.buttons.push_back(btn);
-
-    // WS 5
-    btn.label = "WS 5";
-    btn.description = "Super+5";
-    btn.color = CLR_BLUE;
-    btn.icon = LV_SYMBOL_HOME;
-    btn.modifiers = MOD_GUI;
-    btn.keycode = '5';
-    page1.buttons.push_back(btn);
-
-    hyprland.pages.push_back(page1);
+        hyprland.pages.push_back(page);
+    }
 
     // ===== Page 2: System Actions =====
-    PageConfig page2;
-    page2.name = "System Actions";
+    {
+        PageConfig page;
+        page.name = "System Actions";
 
-    const uint32_t CLR_GREEN = 0x2ECC71;
-    const uint32_t CLR_ORANGE = 0xE67E22;
-    const uint32_t CLR_LIME = 0x8BC34A;
-    const uint32_t CLR_PINK = 0xE91E63;
-    const uint32_t CLR_AMBER = 0xFFC107;
-    const uint32_t CLR_GREY = 0x7F8C8D;
+        WidgetConfig sb;
+        sb.widget_type = WIDGET_STATUS_BAR;
+        sb.x = 0; sb.y = 0; sb.width = 800; sb.height = 45;
+        sb.label = "Hotkeys";
+        sb.color = 0xE0E0E0;
+        sb.bg_color = 0x16213e;
+        page.widgets.push_back(sb);
 
-    // Terminal
-    btn.label = "Terminal";
-    btn.description = "Super+Enter";
-    btn.color = CLR_GREEN;
-    btn.icon = LV_SYMBOL_KEYBOARD;
-    btn.action_type = ACTION_HOTKEY;
-    btn.modifiers = MOD_GUI;
-    btn.keycode = KEY_RETURN;
-    page2.buttons.push_back(btn);
+        struct { const char* lbl; const char* desc; uint32_t clr; const char* ico; uint8_t mod; uint8_t key; } btns[] = {
+            {"Terminal", "Super+Enter", CLR_GREEN, LV_SYMBOL_KEYBOARD, MOD_GUI, KEY_RETURN},
+            {"Files", "Super+T", CLR_ORANGE, LV_SYMBOL_DIRECTORY, MOD_GUI, 't'},
+            {"Launcher", "Super+D", CLR_LIME, LV_SYMBOL_LIST, MOD_GUI, 'd'},
+            {"Browser", "Super+B", CLR_BLUE, LV_SYMBOL_EYE_OPEN, MOD_GUI, 'b'},
+            {"ScreenSel", "Super+Sh+S", CLR_PINK, LV_SYMBOL_IMAGE, (uint8_t)(MOD_GUI | MOD_SHIFT), 's'},
+            {"ScreenFull", "Print", CLR_PINK, LV_SYMBOL_IMAGE, MOD_NONE, KEY_PRINT_SCREEN},
+            {"ColorPick", "Super+Sh+C", CLR_AMBER, LV_SYMBOL_EYE_OPEN, (uint8_t)(MOD_GUI | MOD_SHIFT), 'c'},
+            {"Lock", "Super+L", CLR_RED, LV_SYMBOL_EYE_CLOSE, MOD_GUI, 'l'},
+            {"Logout", "Super+Sh+Q", CLR_RED, LV_SYMBOL_WARNING, (uint8_t)(MOD_GUI | MOD_SHIFT), 'q'},
+            {"Notify", "Super+N", CLR_TEAL, LV_SYMBOL_BELL, MOD_GUI, 'n'},
+            {"Clipboard", "Super+V", CLR_GREEN, LV_SYMBOL_PASTE, MOD_GUI, 'v'},
+            {"Settings", "Super+I", CLR_GREY, LV_SYMBOL_SETTINGS, MOD_GUI, 'i'},
+        };
 
-    // Files
-    btn.label = "Files";
-    btn.description = "Super+T";
-    btn.color = CLR_ORANGE;
-    btn.icon = LV_SYMBOL_DIRECTORY;
-    btn.keycode = 't';
-    page2.buttons.push_back(btn);
+        for (int i = 0; i < 12; i++) {
+            int16_t x, y;
+            grid_pos(i % 4, i / 4, x, y);
+            page.widgets.push_back(make_hotkey(x, y, CELL_W, CELL_H,
+                btns[i].lbl, btns[i].desc, btns[i].clr, btns[i].ico,
+                btns[i].mod, btns[i].key));
+        }
 
-    // Launcher
-    btn.label = "Launcher";
-    btn.description = "Super+D";
-    btn.color = CLR_LIME;
-    btn.icon = LV_SYMBOL_LIST;
-    btn.keycode = 'd';
-    page2.buttons.push_back(btn);
+        WidgetConfig pn;
+        pn.widget_type = WIDGET_PAGE_NAV;
+        pn.x = 300; pn.y = 445; pn.width = 200; pn.height = 30;
+        pn.color = 0x3498DB;
+        page.widgets.push_back(pn);
 
-    // Browser
-    btn.label = "Browser";
-    btn.description = "Super+B";
-    btn.color = CLR_BLUE;
-    btn.icon = LV_SYMBOL_EYE_OPEN;
-    btn.keycode = 'b';
-    page2.buttons.push_back(btn);
-
-    // Screenshot Select
-    btn.label = "ScreenSel";
-    btn.description = "Super+Sh+S";
-    btn.color = CLR_PINK;
-    btn.icon = LV_SYMBOL_IMAGE;
-    btn.modifiers = MOD_GUI | MOD_SHIFT;
-    btn.keycode = 's';
-    page2.buttons.push_back(btn);
-
-    // Screenshot Full
-    btn.label = "ScreenFull";
-    btn.description = "Print";
-    btn.color = CLR_PINK;
-    btn.icon = LV_SYMBOL_IMAGE;
-    btn.modifiers = MOD_NONE;
-    btn.keycode = KEY_PRINT_SCREEN;
-    page2.buttons.push_back(btn);
-
-    // Color Picker
-    btn.label = "ColorPick";
-    btn.description = "Super+Sh+C";
-    btn.color = CLR_AMBER;
-    btn.icon = LV_SYMBOL_EYE_OPEN;
-    btn.modifiers = MOD_GUI | MOD_SHIFT;
-    btn.keycode = 'c';
-    page2.buttons.push_back(btn);
-
-    // Lock
-    btn.label = "Lock";
-    btn.description = "Super+L";
-    btn.color = CLR_RED;
-    btn.icon = LV_SYMBOL_EYE_CLOSE;
-    btn.modifiers = MOD_GUI;
-    btn.keycode = 'l';
-    page2.buttons.push_back(btn);
-
-    // Logout
-    btn.label = "Logout";
-    btn.description = "Super+Sh+Q";
-    btn.color = CLR_RED;
-    btn.icon = LV_SYMBOL_WARNING;
-    btn.modifiers = MOD_GUI | MOD_SHIFT;
-    btn.keycode = 'q';
-    page2.buttons.push_back(btn);
-
-    // Notify
-    btn.label = "Notify";
-    btn.description = "Super+N";
-    btn.color = CLR_TEAL;
-    btn.icon = LV_SYMBOL_BELL;
-    btn.modifiers = MOD_GUI;
-    btn.keycode = 'n';
-    page2.buttons.push_back(btn);
-
-    // Clipboard
-    btn.label = "Clipboard";
-    btn.description = "Super+V";
-    btn.color = CLR_GREEN;
-    btn.icon = LV_SYMBOL_PASTE;
-    btn.keycode = 'v';
-    page2.buttons.push_back(btn);
-
-    // Settings
-    btn.label = "Settings";
-    btn.description = "Super+I";
-    btn.color = CLR_GREY;
-    btn.icon = LV_SYMBOL_SETTINGS;
-    btn.keycode = 'i';
-    page2.buttons.push_back(btn);
-
-    hyprland.pages.push_back(page2);
+        hyprland.pages.push_back(page);
+    }
 
     // ===== Page 3: Media Controls =====
-    PageConfig page3;
-    page3.name = "Media + Extras";
+    {
+        PageConfig page;
+        page.name = "Media + Extras";
 
-    // Media keys (consumer control codes)
-    btn.label = "Play/Pause";
-    btn.description = "Media Play/Pause";
-    btn.color = 0x9B59B6; // Purple
-    btn.icon = LV_SYMBOL_PLAY;
-    btn.action_type = ACTION_MEDIA_KEY;
-    btn.modifiers = 0;
-    btn.keycode = 0;
-    btn.consumer_code = 0x00CD;  // Play/Pause
-    page3.buttons.push_back(btn);
+        WidgetConfig sb;
+        sb.widget_type = WIDGET_STATUS_BAR;
+        sb.x = 0; sb.y = 0; sb.width = 800; sb.height = 45;
+        sb.label = "Hotkeys";
+        sb.color = 0xE0E0E0;
+        sb.bg_color = 0x16213e;
+        page.widgets.push_back(sb);
 
-    btn.label = "Next";
-    btn.description = "Media Next";
-    btn.icon = LV_SYMBOL_RIGHT;  // Use right arrow for next
-    btn.consumer_code = 0x00B5;  // Next track
-    page3.buttons.push_back(btn);
+        // Media keys (first 6)
+        struct { const char* lbl; const char* desc; const char* ico; uint16_t cc; } media[] = {
+            {"Play/Pause", "Media Play/Pause", LV_SYMBOL_PLAY, 0x00CD},
+            {"Next", "Media Next", LV_SYMBOL_RIGHT, 0x00B5},
+            {"Prev", "Media Previous", LV_SYMBOL_LEFT, 0x00B6},
+            {"VolUp", "Volume Up", LV_SYMBOL_PLUS, 0x00E9},
+            {"VolDn", "Volume Down", LV_SYMBOL_MINUS, 0x00EA},
+            {"Mute", "Mute", LV_SYMBOL_MUTE, 0x00E2},
+        };
 
-    btn.label = "Prev";
-    btn.description = "Media Previous";
-    btn.icon = LV_SYMBOL_LEFT;  // Use left arrow for previous
-    btn.consumer_code = 0x00B6;  // Previous track
-    page3.buttons.push_back(btn);
+        for (int i = 0; i < 6; i++) {
+            int16_t x, y;
+            grid_pos(i % 4, i / 4, x, y);
+            page.widgets.push_back(make_hotkey(x, y, CELL_W, CELL_H,
+                media[i].lbl, media[i].desc, CLR_PURPLE, media[i].ico,
+                0, 0, ACTION_MEDIA_KEY, media[i].cc));
+        }
 
-    btn.label = "VolUp";
-    btn.description = "Volume Up";
-    btn.icon = LV_SYMBOL_PLUS;
-    btn.consumer_code = 0x00E9;  // Volume Up
-    page3.buttons.push_back(btn);
+        // Hotkeys (last 6)
+        struct { const char* lbl; const char* desc; uint32_t clr; const char* ico; uint8_t mod; uint8_t key; } hotkeys[] = {
+            {"Redo", "Ctrl+Sh+Z", CLR_BLUE, LV_SYMBOL_REFRESH, (uint8_t)(MOD_CTRL | MOD_SHIFT), 'z'},
+            {"Copy", "Ctrl+C", CLR_GREEN, LV_SYMBOL_COPY, MOD_CTRL, 'c'},
+            {"Cut", "Ctrl+X", CLR_RED, LV_SYMBOL_CUT, MOD_CTRL, 'x'},
+            {"Paste", "Ctrl+V", CLR_ORANGE, LV_SYMBOL_PASTE, MOD_CTRL, 'v'},
+            {"Save", "Ctrl+S", CLR_GREEN, LV_SYMBOL_SAVE, MOD_CTRL, 's'},
+            {"Undo", "Ctrl+Z", CLR_CYAN, LV_SYMBOL_LOOP, MOD_CTRL, 'z'},
+        };
 
-    btn.label = "VolDn";
-    btn.description = "Volume Down";
-    btn.icon = LV_SYMBOL_MINUS;
-    btn.consumer_code = 0x00EA;  // Volume Down
-    page3.buttons.push_back(btn);
+        for (int i = 0; i < 6; i++) {
+            int16_t x, y;
+            grid_pos((i + 6) % 4, (i + 6) / 4, x, y);
+            page.widgets.push_back(make_hotkey(x, y, CELL_W, CELL_H,
+                hotkeys[i].lbl, hotkeys[i].desc, hotkeys[i].clr, hotkeys[i].ico,
+                hotkeys[i].mod, hotkeys[i].key));
+        }
 
-    btn.label = "Mute";
-    btn.description = "Mute";
-    btn.icon = LV_SYMBOL_MUTE;
-    btn.consumer_code = 0x00E2;  // Mute
-    page3.buttons.push_back(btn);
+        WidgetConfig pn;
+        pn.widget_type = WIDGET_PAGE_NAV;
+        pn.x = 300; pn.y = 445; pn.width = 200; pn.height = 30;
+        pn.color = 0x3498DB;
+        page.widgets.push_back(pn);
 
-    // Regular hotkeys for remaining 6 buttons
-    btn.action_type = ACTION_HOTKEY;
-    btn.consumer_code = 0;
-
-    btn.label = "Redo";
-    btn.description = "Ctrl+Sh+Z";
-    btn.color = CLR_BLUE;
-    btn.icon = LV_SYMBOL_REFRESH;
-    btn.modifiers = MOD_CTRL | MOD_SHIFT;
-    btn.keycode = 'z';
-    page3.buttons.push_back(btn);
-
-    btn.label = "Copy";
-    btn.description = "Ctrl+C";
-    btn.color = CLR_GREEN;
-    btn.icon = LV_SYMBOL_COPY;
-    btn.modifiers = MOD_CTRL;
-    btn.keycode = 'c';
-    page3.buttons.push_back(btn);
-
-    btn.label = "Cut";
-    btn.description = "Ctrl+X";
-    btn.color = CLR_RED;
-    btn.icon = LV_SYMBOL_CUT;
-    btn.modifiers = MOD_CTRL;
-    btn.keycode = 'x';
-    page3.buttons.push_back(btn);
-
-    btn.label = "Paste";
-    btn.description = "Ctrl+V";
-    btn.color = CLR_ORANGE;
-    btn.icon = LV_SYMBOL_PASTE;
-    btn.modifiers = MOD_CTRL;
-    btn.keycode = 'v';
-    page3.buttons.push_back(btn);
-
-    btn.label = "Save";
-    btn.description = "Ctrl+S";
-    btn.color = CLR_GREEN;
-    btn.icon = LV_SYMBOL_SAVE;
-    btn.modifiers = MOD_CTRL;
-    btn.keycode = 's';
-    page3.buttons.push_back(btn);
-
-    btn.label = "Undo";
-    btn.description = "Ctrl+Z";
-    btn.color = CLR_CYAN;
-    btn.icon = LV_SYMBOL_LOOP;
-    btn.modifiers = MOD_CTRL;
-    btn.keycode = 'z';
-    page3.buttons.push_back(btn);
-
-    hyprland.pages.push_back(page3);
+        hyprland.pages.push_back(page);
+    }
 
     cfg.profiles.push_back(hyprland);
 
-    // Default stats header: matches the original hardcoded 8 stats
+    // Default stats header
     cfg.stats_header = {
         {STAT_CPU_PERCENT, 0x3498DB, 0},
         {STAT_RAM_PERCENT, 0x2ECC71, 1},
@@ -370,127 +240,243 @@ AppConfig config_create_defaults() {
 }
 
 // ============================================================
-// JSON Serialization/Deserialization (ArduinoJson v7 API)
+// JSON Serialization/Deserialization (ArduinoJson v7 API) — v2
 // ============================================================
 
-// Helper: Serialize button to JSON object
-static void button_to_json(JsonObject obj, const ButtonConfig& btn) {
-    obj["label"] = btn.label.c_str();
-    obj["description"] = btn.description.c_str();
-    obj["color"] = btn.color;
-    obj["icon"] = btn.icon.c_str();
-    obj["action_type"] = (int)btn.action_type;
-    obj["modifiers"] = btn.modifiers;
-    obj["keycode"] = btn.keycode;
-    obj["consumer_code"] = btn.consumer_code;
-    obj["grid_row"] = btn.grid_row;
-    obj["grid_col"] = btn.grid_col;
-    obj["pressed_color"] = btn.pressed_color;
-    obj["col_span"] = btn.col_span;
-    obj["row_span"] = btn.row_span;
-}
+// Helper: Serialize widget to JSON object
+static void widget_to_json(JsonObject obj, const WidgetConfig& w) {
+    obj["widget_type"] = (int)w.widget_type;
+    obj["x"] = w.x;
+    obj["y"] = w.y;
+    obj["width"] = w.width;
+    obj["height"] = w.height;
+    obj["label"] = w.label.c_str();
+    obj["color"] = w.color;
+    obj["bg_color"] = w.bg_color;
 
-// Helper: Deserialize button from JSON object
-static void json_to_button(JsonObject obj, ButtonConfig& btn) {
-    if (!obj["label"].isNull()) btn.label = obj["label"].as<const char*>();
-    if (!obj["description"].isNull()) btn.description = obj["description"].as<const char*>();
-    if (!obj["color"].isNull()) btn.color = obj["color"].as<uint32_t>();
-    if (!obj["icon"].isNull()) btn.icon = obj["icon"].as<const char*>();
-    if (!obj["action_type"].isNull()) btn.action_type = (ActionType)obj["action_type"].as<int>();
-    if (!obj["modifiers"].isNull()) btn.modifiers = obj["modifiers"].as<uint8_t>();
-    if (!obj["keycode"].isNull()) btn.keycode = obj["keycode"].as<uint8_t>();
-    if (!obj["consumer_code"].isNull()) btn.consumer_code = obj["consumer_code"].as<uint16_t>();
-
-    // Grid positioning (v0.9.1)
-    if (!obj["grid_row"].isNull()) btn.grid_row = obj["grid_row"].as<int8_t>();
-    if (!obj["grid_col"].isNull()) btn.grid_col = obj["grid_col"].as<int8_t>();
-    if (!obj["pressed_color"].isNull()) btn.pressed_color = obj["pressed_color"].as<uint32_t>();
-
-    // Grid span fields (v0.9.1 - default 1 if missing for backward compat)
-    btn.col_span = obj["col_span"] | (uint8_t)1;
-    btn.row_span = obj["row_span"] | (uint8_t)1;
-
-    // Validate grid positioning constraints
-    if (btn.grid_row < -1 || btn.grid_row >= GRID_ROWS) {
-        Serial.printf("CONFIG: WARNING - grid_row %d out of range [-1,%d], clamping\n",
-                      btn.grid_row, GRID_ROWS - 1);
-        btn.grid_row = (btn.grid_row < -1) ? -1 : (GRID_ROWS - 1);
-    }
-    if (btn.grid_col < -1 || btn.grid_col >= GRID_COLS) {
-        Serial.printf("CONFIG: WARNING - grid_col %d out of range [-1,%d], clamping\n",
-                      btn.grid_col, GRID_COLS - 1);
-        btn.grid_col = (btn.grid_col < -1) ? -1 : (GRID_COLS - 1);
-    }
-    // If one is explicit and the other is auto, force both to auto
-    if ((btn.grid_row >= 0) != (btn.grid_col >= 0)) {
-        Serial.printf("CONFIG: WARNING - partial grid position (row=%d, col=%d), resetting to auto-flow\n",
-                      btn.grid_row, btn.grid_col);
-        btn.grid_row = -1;
-        btn.grid_col = -1;
-    }
-
-    // Validate col_span
-    if (btn.col_span < 1 || btn.col_span > 4) {
-        Serial.printf("CONFIG: WARNING - col_span=%d invalid, clamping to 1\n", btn.col_span);
-        btn.col_span = 1;
-    }
-
-    // Validate row_span
-    if (btn.row_span < 1 || btn.row_span > 3) {
-        Serial.printf("CONFIG: WARNING - row_span=%d invalid, clamping to 1\n", btn.row_span);
-        btn.row_span = 1;
-    }
-
-    // Validate span doesn't exceed grid bounds (only for explicitly positioned buttons)
-    if (btn.grid_col >= 0 && btn.grid_col + btn.col_span > GRID_COLS) {
-        Serial.printf("CONFIG: WARNING - col %d + span %d exceeds grid, clamping span\n",
-                      btn.grid_col, btn.col_span);
-        btn.col_span = GRID_COLS - btn.grid_col;
-    }
-    if (btn.grid_row >= 0 && btn.grid_row + btn.row_span > GRID_ROWS) {
-        Serial.printf("CONFIG: WARNING - row %d + span %d exceeds grid, clamping span\n",
-                      btn.grid_row, btn.row_span);
-        btn.row_span = GRID_ROWS - btn.grid_row;
-    }
-
-    // Auto-flow buttons ignore span (force 1x1)
-    if (btn.grid_row < 0 || btn.grid_col < 0) {
-        btn.col_span = 1;
-        btn.row_span = 1;
+    switch (w.widget_type) {
+        case WIDGET_HOTKEY_BUTTON:
+            obj["description"] = w.description.c_str();
+            obj["icon"] = w.icon.c_str();
+            if (!w.icon_path.empty()) obj["icon_path"] = w.icon_path.c_str();
+            obj["action_type"] = (int)w.action_type;
+            obj["modifiers"] = w.modifiers;
+            obj["keycode"] = w.keycode;
+            obj["consumer_code"] = w.consumer_code;
+            obj["pressed_color"] = w.pressed_color;
+            break;
+        case WIDGET_STAT_MONITOR:
+            obj["stat_type"] = w.stat_type;
+            break;
+        case WIDGET_CLOCK:
+            obj["clock_analog"] = w.clock_analog;
+            break;
+        case WIDGET_STATUS_BAR:
+            obj["show_wifi"] = w.show_wifi;
+            obj["show_battery"] = w.show_battery;
+            obj["show_time"] = w.show_time;
+            break;
+        case WIDGET_TEXT_LABEL:
+            obj["font_size"] = w.font_size;
+            obj["text_align"] = w.text_align;
+            break;
+        case WIDGET_SEPARATOR:
+            obj["separator_vertical"] = w.separator_vertical;
+            obj["thickness"] = w.thickness;
+            break;
+        case WIDGET_PAGE_NAV:
+            break;
     }
 }
 
-// Helper: Serialize page to JSON object
+// Helper: Deserialize widget from JSON object
+static void json_to_widget(JsonObject obj, WidgetConfig& w) {
+    w.widget_type = (WidgetType)(obj["widget_type"] | (int)WIDGET_HOTKEY_BUTTON);
+    w.x = obj["x"] | (int16_t)0;
+    w.y = obj["y"] | (int16_t)0;
+    w.width = obj["width"] | (int16_t)180;
+    w.height = obj["height"] | (int16_t)100;
+
+    if (!obj["label"].isNull()) w.label = obj["label"].as<const char*>();
+    w.color = obj["color"] | (uint32_t)0xFFFFFF;
+    w.bg_color = obj["bg_color"] | (uint32_t)0;
+
+    // Clamp to display bounds
+    if (w.x < 0) w.x = 0;
+    if (w.y < 0) w.y = 0;
+    if (w.x + w.width > DISPLAY_WIDTH) w.width = DISPLAY_WIDTH - w.x;
+    if (w.y + w.height > DISPLAY_HEIGHT) w.height = DISPLAY_HEIGHT - w.y;
+    if (w.width < WIDGET_MIN_W) w.width = WIDGET_MIN_W;
+    if (w.height < WIDGET_MIN_H) w.height = WIDGET_MIN_H;
+
+    // Validate widget type
+    if (w.widget_type > WIDGET_TYPE_MAX) {
+        Serial.printf("CONFIG: WARNING - widget_type %d invalid, defaulting to HOTKEY_BUTTON\n", w.widget_type);
+        w.widget_type = WIDGET_HOTKEY_BUTTON;
+    }
+
+    switch (w.widget_type) {
+        case WIDGET_HOTKEY_BUTTON:
+            if (!obj["description"].isNull()) w.description = obj["description"].as<const char*>();
+            if (!obj["icon"].isNull()) w.icon = obj["icon"].as<const char*>();
+            if (!obj["icon_path"].isNull()) w.icon_path = obj["icon_path"].as<const char*>();
+            w.action_type = (ActionType)(obj["action_type"] | (int)ACTION_HOTKEY);
+            w.modifiers = obj["modifiers"] | (uint8_t)0;
+            w.keycode = obj["keycode"] | (uint8_t)0;
+            w.consumer_code = obj["consumer_code"] | (uint16_t)0;
+            w.pressed_color = obj["pressed_color"] | (uint32_t)0;
+            break;
+        case WIDGET_STAT_MONITOR:
+            w.stat_type = obj["stat_type"] | (uint8_t)0;
+            if (w.stat_type < 1 || w.stat_type > STAT_TYPE_MAX) {
+                Serial.printf("CONFIG: WARNING - stat_type %d invalid\n", w.stat_type);
+                w.stat_type = STAT_CPU_PERCENT;
+            }
+            break;
+        case WIDGET_CLOCK:
+            w.clock_analog = obj["clock_analog"] | false;
+            break;
+        case WIDGET_STATUS_BAR:
+            w.show_wifi = obj["show_wifi"] | true;
+            w.show_battery = obj["show_battery"] | true;
+            w.show_time = obj["show_time"] | true;
+            break;
+        case WIDGET_TEXT_LABEL:
+            w.font_size = obj["font_size"] | (uint8_t)16;
+            w.text_align = obj["text_align"] | (uint8_t)1;
+            break;
+        case WIDGET_SEPARATOR:
+            w.separator_vertical = obj["separator_vertical"] | false;
+            w.thickness = obj["thickness"] | (uint8_t)2;
+            if (w.thickness < 1) w.thickness = 1;
+            if (w.thickness > 8) w.thickness = 8;
+            break;
+        case WIDGET_PAGE_NAV:
+            break;
+    }
+}
+
+// Helper: Serialize page to JSON object (v2)
 static void page_to_json(JsonObject obj, const PageConfig& page) {
     obj["name"] = page.name.c_str();
-    JsonArray buttons_array = obj["buttons"].to<JsonArray>();
-    for (const auto& btn : page.buttons) {
-        JsonObject btn_obj = buttons_array.add<JsonObject>();
-        button_to_json(btn_obj, btn);
+    JsonArray widgets_array = obj["widgets"].to<JsonArray>();
+    for (const auto& w : page.widgets) {
+        JsonObject w_obj = widgets_array.add<JsonObject>();
+        widget_to_json(w_obj, w);
     }
 }
 
-// Helper: Deserialize page from JSON object
-static void json_to_page(JsonObject obj, PageConfig& page) {
+// Helper: Deserialize page from JSON object (v2)
+static void json_to_page_v2(JsonObject obj, PageConfig& page) {
     if (!obj["name"].isNull()) page.name = obj["name"].as<const char*>();
-    page.buttons.clear();
-    if (!obj["buttons"].isNull()) {
-        JsonArray buttons_array = obj["buttons"].as<JsonArray>();
-        int btn_count = 0;
-        for (JsonObject btn_obj : buttons_array) {
-            if (btn_count >= CONFIG_MAX_BUTTONS) {
-                Serial.printf("CONFIG: WARNING - page '%s' has >%d buttons, truncating\n",
-                              page.name.c_str(), CONFIG_MAX_BUTTONS);
+    page.widgets.clear();
+    if (!obj["widgets"].isNull()) {
+        JsonArray widgets_array = obj["widgets"].as<JsonArray>();
+        int count = 0;
+        for (JsonObject w_obj : widgets_array) {
+            if (count >= CONFIG_MAX_WIDGETS) {
+                Serial.printf("CONFIG: WARNING - page '%s' has >%d widgets, truncating\n",
+                              page.name.c_str(), CONFIG_MAX_WIDGETS);
                 break;
             }
-            ButtonConfig btn;
-            json_to_button(btn_obj, btn);
-            page.buttons.push_back(btn);
-            btn_count++;
+            WidgetConfig w;
+            json_to_widget(w_obj, w);
+            page.widgets.push_back(w);
+            count++;
         }
     }
-    Serial.printf("CONFIG: Page '%s': %d buttons loaded\n",
-                  page.name.c_str(), (int)page.buttons.size());
+    Serial.printf("CONFIG: Page '%s': %d widgets loaded\n",
+                  page.name.c_str(), (int)page.widgets.size());
+}
+
+// ============================================================
+// V1 Migration: Convert old grid-based buttons to v2 widgets
+// ============================================================
+
+static void migrate_v1_page(JsonObject page_obj, PageConfig& page) {
+    if (!page_obj["name"].isNull()) page.name = page_obj["name"].as<const char*>();
+    page.widgets.clear();
+
+    // Add a default status bar at top
+    WidgetConfig sb;
+    sb.widget_type = WIDGET_STATUS_BAR;
+    sb.x = 0; sb.y = 0; sb.width = DISPLAY_WIDTH; sb.height = 45;
+    sb.label = "Hotkeys";
+    sb.color = 0xE0E0E0;
+    sb.bg_color = 0x16213e;
+    page.widgets.push_back(sb);
+
+    // Grid cell dimensions for v1 layout
+    const int16_t GRID_X0 = 6;
+    const int16_t GRID_Y0 = 50;
+    const int16_t CELL_W = 192;
+    const int16_t CELL_H = 122;
+    const int16_t GAP = 6;
+
+    if (page_obj["buttons"].isNull()) return;
+
+    JsonArray buttons_array = page_obj["buttons"].as<JsonArray>();
+    int auto_row = 0, auto_col = 0;
+    int btn_count = 0;
+
+    for (JsonObject btn_obj : buttons_array) {
+        if (btn_count >= 12) break;
+
+        WidgetConfig w;
+        w.widget_type = WIDGET_HOTKEY_BUTTON;
+
+        // Read v1 button fields
+        if (!btn_obj["label"].isNull()) w.label = btn_obj["label"].as<const char*>();
+        if (!btn_obj["description"].isNull()) w.description = btn_obj["description"].as<const char*>();
+        w.color = btn_obj["color"] | (uint32_t)0xFFFFFF;
+        if (!btn_obj["icon"].isNull()) w.icon = btn_obj["icon"].as<const char*>();
+        w.action_type = (ActionType)(btn_obj["action_type"] | (int)ACTION_HOTKEY);
+        w.modifiers = btn_obj["modifiers"] | (uint8_t)0;
+        w.keycode = btn_obj["keycode"] | (uint8_t)0;
+        w.consumer_code = btn_obj["consumer_code"] | (uint16_t)0;
+        w.pressed_color = btn_obj["pressed_color"] | (uint32_t)0;
+
+        // Convert grid position to pixel coordinates
+        int8_t grid_row = btn_obj["grid_row"] | (int8_t)-1;
+        int8_t grid_col = btn_obj["grid_col"] | (int8_t)-1;
+        uint8_t col_span = btn_obj["col_span"] | (uint8_t)1;
+        uint8_t row_span = btn_obj["row_span"] | (uint8_t)1;
+
+        int target_row, target_col;
+        if (grid_row >= 0 && grid_col >= 0) {
+            target_row = grid_row;
+            target_col = grid_col;
+        } else {
+            target_row = auto_row;
+            target_col = auto_col;
+            col_span = 1;
+            row_span = 1;
+            auto_col++;
+            if (auto_col >= GRID_COLS) {
+                auto_col = 0;
+                auto_row++;
+            }
+        }
+
+        // Convert to pixel coordinates
+        w.x = GRID_X0 + target_col * (CELL_W + GAP);
+        w.y = GRID_Y0 + target_row * (CELL_H + GAP);
+        w.width = col_span * CELL_W + (col_span - 1) * GAP;
+        w.height = row_span * CELL_H + (row_span - 1) * GAP;
+
+        page.widgets.push_back(w);
+        btn_count++;
+    }
+
+    // Add page nav at bottom
+    WidgetConfig pn;
+    pn.widget_type = WIDGET_PAGE_NAV;
+    pn.x = 300; pn.y = 445; pn.width = 200; pn.height = 30;
+    pn.color = 0x3498DB;
+    page.widgets.push_back(pn);
+
+    Serial.printf("CONFIG: Migrated v1 page '%s': %d buttons -> %d widgets\n",
+                  page.name.c_str(), btn_count, (int)page.widgets.size());
 }
 
 // Helper: Serialize profile to JSON object
@@ -504,7 +490,7 @@ static void profile_to_json(JsonObject obj, const ProfileConfig& profile) {
 }
 
 // Helper: Deserialize profile from JSON object
-static void json_to_profile(JsonObject obj, ProfileConfig& profile) {
+static void json_to_profile(JsonObject obj, ProfileConfig& profile, uint8_t config_version) {
     if (!obj["name"].isNull()) profile.name = obj["name"].as<const char*>();
     profile.pages.clear();
     if (!obj["pages"].isNull()) {
@@ -517,9 +503,13 @@ static void json_to_profile(JsonObject obj, ProfileConfig& profile) {
                 break;
             }
             PageConfig page;
-            json_to_page(page_obj, page);
-            // Skip empty pages
-            if (page.buttons.empty()) {
+            if (config_version < 2) {
+                // V1 migration: convert grid buttons to absolute widgets
+                migrate_v1_page(page_obj, page);
+            } else {
+                json_to_page_v2(page_obj, page);
+            }
+            if (page.widgets.empty()) {
                 Serial.printf("CONFIG: WARNING - skipping empty page '%s'\n", page.name.c_str());
                 continue;
             }
@@ -555,32 +545,26 @@ AppConfig config_load() {
         return config_create_defaults();
     }
 
-    buffer[bytes_read] = '\0';  // Null-terminate JSON string
+    buffer[bytes_read] = '\0';
 
-    // Parse JSON (ArduinoJson v7 auto-sizing JsonDocument)
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, (const char*)buffer);
-    free(buffer);  // Done with file buffer
+    free(buffer);
 
     if (error) {
         Serial.printf("CONFIG: JSON parse failed: %s, using defaults\n", error.c_str());
         return config_create_defaults();
     }
 
-    // Deserialize AppConfig
     AppConfig cfg;
 
-    // Read version field (CFG-06)
-    if (!doc["version"].isNull()) {
-        cfg.version = doc["version"].as<uint8_t>();
-    } else {
-        cfg.version = 0;  // No version field in file
-    }
-    Serial.printf("CONFIG: schema version %d (expected %d)\n", cfg.version, CONFIG_VERSION);
-    if (cfg.version > CONFIG_VERSION) {
-        Serial.println("CONFIG: WARNING - config was created by a newer version, some fields may be ignored");
-    } else if (cfg.version < CONFIG_VERSION) {
-        Serial.println("CONFIG: NOTE - older config format, will be upgraded on next save");
+    // Read version field
+    uint8_t file_version = doc["version"] | (uint8_t)0;
+    cfg.version = CONFIG_VERSION;  // Always upgrade to current
+    Serial.printf("CONFIG: file schema version %d (current %d)\n", file_version, CONFIG_VERSION);
+
+    if (file_version < 2) {
+        Serial.println("CONFIG: Migrating v1 -> v2 (grid -> absolute positioning)");
     }
 
     if (!doc["active_profile_name"].isNull()) {
@@ -590,17 +574,15 @@ AppConfig config_load() {
         cfg.brightness_level = doc["brightness_level"].as<uint8_t>();
     }
 
-    // Parse display mode settings (v0.9.1) -- defaults if missing
-    cfg.default_mode = doc["default_mode"] | (uint8_t)0;  // MODE_HOTKEYS
+    // Parse display mode settings
+    cfg.default_mode = doc["default_mode"] | (uint8_t)0;
     cfg.slideshow_interval_sec = doc["slideshow_interval_sec"] | (uint16_t)30;
     cfg.clock_analog = doc["clock_analog"] | false;
 
-    // Validate default_mode range
     if (cfg.default_mode > 3) {
         Serial.printf("CONFIG: WARNING - invalid default_mode=%d, using MODE_HOTKEYS\n", cfg.default_mode);
         cfg.default_mode = 0;
     }
-    // Validate slideshow interval
     if (cfg.slideshow_interval_sec < 5) cfg.slideshow_interval_sec = 5;
     if (cfg.slideshow_interval_sec > 300) cfg.slideshow_interval_sec = 300;
 
@@ -609,12 +591,12 @@ AppConfig config_load() {
         JsonArray profiles_array = doc["profiles"].as<JsonArray>();
         for (JsonObject profile_obj : profiles_array) {
             ProfileConfig profile;
-            json_to_profile(profile_obj, profile);
+            json_to_profile(profile_obj, profile, file_version);
             cfg.profiles.push_back(profile);
         }
     }
 
-    // Parse stats_header (v0.9.1) -- defaults if missing
+    // Parse stats_header
     if (!doc["stats_header"].isNull()) {
         cfg.stats_header.clear();
         JsonArray stats_arr = doc["stats_header"].as<JsonArray>();
@@ -625,7 +607,6 @@ AppConfig config_load() {
             sc.type = stat_obj["type"] | (uint8_t)0;
             sc.color = stat_obj["color"] | (uint32_t)0xFFFFFF;
             sc.position = stat_obj["position"] | (uint8_t)0;
-            // Validate type range
             if (sc.type < 1 || sc.type > STAT_TYPE_MAX) {
                 Serial.printf("CONFIG: WARNING - invalid stat type %d, skipping\n", sc.type);
                 continue;
@@ -635,7 +616,6 @@ AppConfig config_load() {
         }
         Serial.printf("CONFIG: Loaded %d stats_header entries\n", (int)cfg.stats_header.size());
     } else {
-        // No stats_header in JSON -- apply defaults (matches original hardcoded 8)
         cfg.stats_header = {
             {STAT_CPU_PERCENT, 0x3498DB, 0},
             {STAT_RAM_PERCENT, 0x2ECC71, 1},
@@ -649,13 +629,12 @@ AppConfig config_load() {
         Serial.println("CONFIG: No stats_header in JSON, using 8 defaults");
     }
 
-    // Validate: ensure active profile exists
+    // Validate
     if (cfg.profiles.empty() || !cfg.get_active_profile()) {
         Serial.println("CONFIG: Invalid configuration (no valid active profile), using defaults");
         return config_create_defaults();
     }
 
-    // Validate page count (CFG-03)
     ProfileConfig *active = cfg.get_active_profile();
     if (active->pages.empty()) {
         Serial.println("CONFIG: Active profile has 0 pages, using defaults");
@@ -667,14 +646,19 @@ AppConfig config_load() {
         active->pages.resize(CONFIG_MAX_PAGES);
     }
 
-    // Load summary logging
-    int total_buttons = 0;
-    for (const auto& page : active->pages) {
-        total_buttons += (int)page.buttons.size();
+    // If migrated from v1, save upgraded config
+    if (file_version < 2) {
+        Serial.println("CONFIG: Saving migrated v2 config...");
+        config_save(cfg);
     }
-    Serial.printf("CONFIG: Loaded '%s' - %zu pages, %d total buttons, version %d\n",
+
+    int total_widgets = 0;
+    for (const auto& page : active->pages) {
+        total_widgets += (int)page.widgets.size();
+    }
+    Serial.printf("CONFIG: Loaded '%s' - %zu pages, %d total widgets, version %d\n",
                   cfg.active_profile_name.c_str(), active->pages.size(),
-                  total_buttons, cfg.version);
+                  total_widgets, cfg.version);
     return cfg;
 }
 
@@ -684,9 +668,8 @@ bool config_save(const AppConfig& config) {
         return false;
     }
 
-    // Backup existing config.json to config.json.bak (CFG-07)
+    // Backup existing config.json
     if (sdcard_file_exists("/config.json")) {
-        // Read existing file into PSRAM buffer
         uint8_t *backup_buf = (uint8_t *)ps_malloc(64 * 1024);
         if (backup_buf) {
             int backup_bytes = sdcard_read_file("/config.json", backup_buf, (64 * 1024) - 1);
@@ -698,18 +681,15 @@ bool config_save(const AppConfig& config) {
                 }
             }
             free(backup_buf);
-        } else {
-            Serial.println("CONFIG: WARNING - PSRAM alloc failed for backup, continuing save");
         }
     }
 
-    // Build JSON document (ArduinoJson v7 auto-sizing)
+    // Build JSON document
     JsonDocument doc;
     doc["version"] = CONFIG_VERSION;
     doc["active_profile_name"] = config.active_profile_name.c_str();
     doc["brightness_level"] = config.brightness_level;
 
-    // Display mode settings (v0.9.1)
     doc["default_mode"] = config.default_mode;
     doc["slideshow_interval_sec"] = config.slideshow_interval_sec;
     doc["clock_analog"] = config.clock_analog;
@@ -720,7 +700,6 @@ bool config_save(const AppConfig& config) {
         profile_to_json(profile_obj, profile);
     }
 
-    // Serialize stats_header
     if (!config.stats_header.empty()) {
         JsonArray stats_arr = doc["stats_header"].to<JsonArray>();
         for (const auto& sc : config.stats_header) {
@@ -731,23 +710,19 @@ bool config_save(const AppConfig& config) {
         }
     }
 
-    // Serialize to string
     String json_str;
     serializeJson(doc, json_str);
 
-    // Atomic write pattern (CFG-08): write to /config.tmp, then rename
+    // Atomic write
     if (!sdcard_write_file("/config.tmp", (const uint8_t*)json_str.c_str(), json_str.length())) {
         Serial.println("CONFIG: Failed to write /config.tmp");
         return false;
     }
 
-    // Remove old config.json before rename (FAT may not support overwrite-rename)
     sdcard_file_remove("/config.json");
 
-    // Rename temp to final
     if (!sdcard_file_rename("/config.tmp", "/config.json")) {
         Serial.println("CONFIG: Failed to rename /config.tmp to /config.json");
-        // Attempt recovery: restore from backup
         if (sdcard_file_exists("/config.json.bak")) {
             sdcard_file_rename("/config.json.bak", "/config.json");
             Serial.println("CONFIG: Restored /config.json from backup");
@@ -755,7 +730,7 @@ bool config_save(const AppConfig& config) {
         return false;
     }
 
-    // Verify the written file parses correctly
+    // Verify
     uint8_t *verify_buf = (uint8_t *)ps_malloc(64 * 1024);
     if (verify_buf) {
         int verify_bytes = sdcard_read_file("/config.json", verify_buf, (64 * 1024) - 1);
@@ -765,7 +740,6 @@ bool config_save(const AppConfig& config) {
             DeserializationError verify_err = deserializeJson(verify_doc, (const char*)verify_buf);
             if (verify_err) {
                 Serial.printf("CONFIG: WARNING - saved file failed verification: %s\n", verify_err.c_str());
-                // Restore from backup
                 if (sdcard_file_exists("/config.json.bak")) {
                     sdcard_file_remove("/config.json");
                     sdcard_file_rename("/config.json.bak", "/config.json");

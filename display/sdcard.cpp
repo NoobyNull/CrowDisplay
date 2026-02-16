@@ -115,3 +115,15 @@ bool sdcard_file_rename(const char *old_path, const char *new_path) {
     Serial.printf("SD: renamed %s -> %s\n", old_path, new_path);
     return true;
 }
+
+bool sdcard_mkdir(const char *path) {
+    if (!mounted) return false;
+    if (SD.exists(path)) return true;  // Already exists
+
+    if (!SD.mkdir(path)) {
+        Serial.printf("SD: mkdir failed: %s\n", path);
+        return false;
+    }
+    Serial.printf("SD: created directory %s\n", path);
+    return true;
+}

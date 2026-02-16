@@ -5,30 +5,60 @@
 #include <string>
 
 // ============================================================
-// Configuration Schema for Configurable Hotkey Layouts
+// Configuration Schema for WYSIWYG Widget Layouts
 // ============================================================
 //
 // Config version: increment when schema changes require migration.
-#define CONFIG_VERSION 1
+// v1: Grid-based button layout (4x3 grid with spans)
+// v2: WYSIWYG absolute pixel positioning with widget types
+#define CONFIG_VERSION 2
 
 // Maximum pages per profile (validated on load)
 #define CONFIG_MAX_PAGES 16
 
-// Maximum buttons per page (4x3 grid = 12)
-#define CONFIG_MAX_BUTTONS 12
+// Maximum widgets per page
+#define CONFIG_MAX_WIDGETS 32
 
-// Grid dimensions
+// Display dimensions
+#define DISPLAY_WIDTH  800
+#define DISPLAY_HEIGHT 480
+
+// Snap grid for editor positioning (pixels)
+#define SNAP_GRID 10
+
+// Minimum widget dimensions
+#define WIDGET_MIN_W 40
+#define WIDGET_MIN_H 30
+
+// Legacy grid dimensions (for v1 migration)
 #define GRID_COLS 4
 #define GRID_ROWS 3
+
 //
-// This schema defines the JSON structure for hotkey profiles
+// This schema defines the JSON structure for widget layouts
 // that can be stored on SD card and loaded at runtime.
 //
-// Format: profiles[] contains pages, each page contains buttons
-// JSON: { "profiles": [ { "name": "...", "pages": [ { "buttons": [...] } ] } ] }
+// Format: profiles[] contains pages, each page contains widgets
+// JSON: { "profiles": [ { "name": "...", "pages": [ { "widgets": [...] } ] } ] }
 
 // ============================================================
-// Button Action Types
+// Widget Types
+// ============================================================
+
+enum WidgetType : uint8_t {
+    WIDGET_HOTKEY_BUTTON = 0,    // Keyboard shortcut trigger with icon/label/color
+    WIDGET_STAT_MONITOR  = 1,    // Single system stat (CPU%, temp, etc.)
+    WIDGET_STATUS_BAR    = 2,    // Device info: WiFi, battery, time
+    WIDGET_CLOCK         = 3,    // Analog or digital clock face
+    WIDGET_TEXT_LABEL    = 4,    // Static text with configurable font/color
+    WIDGET_SEPARATOR     = 5,    // Horizontal or vertical divider line
+    WIDGET_PAGE_NAV      = 6,    // Visual page indicator dots/arrows
+};
+
+#define WIDGET_TYPE_MAX 6
+
+// ============================================================
+// Button Action Types (used by WIDGET_HOTKEY_BUTTON)
 // ============================================================
 
 enum ActionType : uint8_t {
@@ -37,35 +67,64 @@ enum ActionType : uint8_t {
 };
 
 // ============================================================
-// Button Configuration
+// Widget Configuration (replaces ButtonConfig)
 // ============================================================
 
-struct ButtonConfig {
-    // Display properties
-    std::string label;        // Short button label (e.g., "WS 1", "Kill")
-    std::string description;  // Tooltip description (e.g., "Super+1")
-    uint32_t color;           // LVGL color (0xRRGGBB)
-    std::string icon;         // LVGL symbol string (e.g., LV_SYMBOL_HOME)
+struct WidgetConfig {
+    // --- Layout (absolute pixel positioning on 800x480 display) ---
+    int16_t x;                // X position in pixels (0 = left edge)
+    int16_t y;                // Y position in pixels (0 = top edge)
+    int16_t width;            // Width in pixels
+    int16_t height;           // Height in pixels
 
-    // Action properties
+    // --- Common properties ---
+    WidgetType widget_type;   // Which widget type this is
+    std::string label;        // Display label (used by most widget types)
+    uint32_t color;           // Primary color (0xRRGGBB)
+    uint32_t bg_color;        // Background color (0xRRGGBB, 0 = transparent/default)
+
+    // --- Hotkey Button properties (widget_type == WIDGET_HOTKEY_BUTTON) ---
+    std::string description;  // Tooltip description (e.g., "Super+1")
+    std::string icon;         // LVGL symbol string (e.g., LV_SYMBOL_HOME)
+    std::string icon_path;    // SD card image path (e.g., "/icons/calc.png") — overrides icon symbol
     ActionType action_type;   // HOTKEY or MEDIA_KEY
     uint8_t modifiers;        // MOD_CTRL | MOD_SHIFT | MOD_ALT | MOD_GUI
-    uint8_t keycode;          // ASCII key or special key code (for HOTKEY)
+    uint8_t keycode;          // ASCII key or special key code
     uint16_t consumer_code;   // USB HID consumer control code (for MEDIA_KEY)
+    uint32_t pressed_color;   // 0x000000 = auto-darken, else explicit color
 
-    // Grid positioning (optional, defaults to auto-flow)
-    int8_t grid_row;          // -1 = auto-flow (default), 0-2 = explicit row
-    int8_t grid_col;          // -1 = auto-flow (default), 0-3 = explicit column
-    uint32_t pressed_color;   // 0x000000 = auto-darken (default), else explicit color
-    uint8_t col_span;         // Column span: 1-4 (default 1, only for explicit positioning)
-    uint8_t row_span;         // Row span: 1-3 (default 1, only for explicit positioning)
+    // --- Stat Monitor properties (widget_type == WIDGET_STAT_MONITOR) ---
+    uint8_t stat_type;        // StatType enum value (1-20)
+
+    // --- Clock properties (widget_type == WIDGET_CLOCK) ---
+    bool clock_analog;        // true = analog, false = digital
+
+    // --- Status Bar properties (widget_type == WIDGET_STATUS_BAR) ---
+    bool show_wifi;           // Show WiFi icon
+    bool show_battery;        // Show battery percentage
+    bool show_time;           // Show current time
+
+    // --- Text Label properties (widget_type == WIDGET_TEXT_LABEL) ---
+    uint8_t font_size;        // Font size (12, 14, 16, 20, 22, 28, 40)
+    uint8_t text_align;       // 0=left, 1=center, 2=right
+
+    // --- Separator properties (widget_type == WIDGET_SEPARATOR) ---
+    bool separator_vertical;  // true = vertical, false = horizontal
+    uint8_t thickness;        // Line thickness in pixels (1-8)
 
     // Constructor with defaults
-    ButtonConfig()
-        : label(""), description(""), color(0xFFFFFF), icon(""),
+    WidgetConfig()
+        : x(0), y(0), width(180), height(100),
+          widget_type(WIDGET_HOTKEY_BUTTON),
+          label(""), color(0xFFFFFF), bg_color(0),
+          description(""), icon(""), icon_path(""),
           action_type(ACTION_HOTKEY), modifiers(0), keycode(0),
-          consumer_code(0), grid_row(-1), grid_col(-1), pressed_color(0x000000),
-          col_span(1), row_span(1) {}
+          consumer_code(0), pressed_color(0x000000),
+          stat_type(0),
+          clock_analog(false),
+          show_wifi(true), show_battery(true), show_time(true),
+          font_size(16), text_align(1),
+          separator_vertical(false), thickness(2) {}
 };
 
 // ============================================================
@@ -73,10 +132,10 @@ struct ButtonConfig {
 // ============================================================
 
 struct PageConfig {
-    std::string name;                     // Page name (e.g., "Window Manager")
-    std::vector<ButtonConfig> buttons;    // Buttons on this page (up to 12)
+    std::string name;                       // Page name (e.g., "Window Manager")
+    std::vector<WidgetConfig> widgets;      // Widgets on this page
 
-    PageConfig() : name(""), buttons() {}
+    PageConfig() : name(""), widgets() {}
 };
 
 // ============================================================
@@ -115,12 +174,12 @@ struct AppConfig {
     std::vector<ProfileConfig> profiles;  // All loaded profiles
     uint8_t brightness_level;             // Display brightness (0-100)
 
-    // Display mode settings (v0.9.1)
+    // Display mode settings
     uint8_t default_mode;                 // DisplayMode enum value (0=HOTKEYS, 1=CLOCK, 2=PICTURE_FRAME, 3=STANDBY)
     uint16_t slideshow_interval_sec;      // Picture frame slideshow interval in seconds (default 30)
-    bool clock_analog;                    // true = analog clock, false = digital clock
+    bool clock_analog;                    // true = analog clock, false = digital clock (global fallback)
 
-    // Stats header configuration (v0.9.1)
+    // Stats header configuration (for stat monitor widgets without explicit config)
     std::vector<StatConfig> stats_header; // User-selected stats (default 8, max CONFIG_MAX_STATS)
 
     AppConfig() : version(CONFIG_VERSION), active_profile_name(""), profiles(), brightness_level(100),
@@ -162,6 +221,7 @@ struct AppConfig {
 
 // Load configuration from SD card (/config.json)
 // Returns AppConfig with defaults on failure
+// Handles v1→v2 migration automatically
 AppConfig config_load();
 
 // Save configuration to SD card (/config.json)
