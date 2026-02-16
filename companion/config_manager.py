@@ -306,6 +306,18 @@ class ConfigManager:
         if not isinstance(clock_analog, bool):
             return False, "clock_analog must be a boolean"
 
+        # Check notification settings (optional, defaults to disabled)
+        notifications_enabled = self.config.get("notifications_enabled", False)
+        if not isinstance(notifications_enabled, bool):
+            return False, "notifications_enabled must be a boolean"
+
+        notification_filter = self.config.get("notification_filter", [])
+        if not isinstance(notification_filter, list):
+            return False, "notification_filter must be an array"
+        for i, app in enumerate(notification_filter):
+            if not isinstance(app, str):
+                return False, f"notification_filter[{i}]: must be a string"
+
         # Check profiles
         profiles = self.config.get("profiles", [])
         if not profiles:

@@ -29,6 +29,9 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QAbstractItemView,
     QScrollArea,
+    QListWidget,
+    QLineEdit,
+    QToolTip,
 )
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QColor, QFont, QKeySequence, QAction
@@ -338,6 +341,100 @@ class StatsHeaderPanel(QGroupBox):
             self.preview_label.setText("")
 
 
+class NotificationsPanel(QGroupBox):
+    """Notification forwarding configuration panel"""
+
+    notifications_changed = Signal()
+
+    def __init__(self, config_manager, parent=None):
+        super().__init__("Notifications", parent)
+        self.config_manager = config_manager
+
+        layout = QVBoxLayout()
+
+        # Enable checkbox
+        self.enabled_checkbox = QCheckBox("Enable notification forwarding")
+        self.enabled_checkbox.stateChanged.connect(self._on_changed)
+        layout.addWidget(self.enabled_checkbox)
+
+        # Info label
+        info_label = QLabel(
+            '<span style="color: #888; font-size: 10px;">'
+            "Empty list = forward ALL notifications. "
+            'Run <code>dbus-monitor --session interface=org.freedesktop.Notifications</code> '
+            "to discover app names."
+            "</span>"
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        # App filter list
+        self.filter_list = QListWidget()
+        self.filter_list.setMaximumHeight(120)
+        layout.addWidget(self.filter_list)
+
+        # Add row: line edit + add button
+        add_row = QHBoxLayout()
+        self.app_name_input = QLineEdit()
+        self.app_name_input.setPlaceholderText("e.g., Slack, Discord, Thunderbird, Signal")
+        self.app_name_input.returnPressed.connect(self._on_add_app)
+        add_row.addWidget(self.app_name_input)
+
+        self.add_btn = QPushButton("Add")
+        self.add_btn.clicked.connect(self._on_add_app)
+        add_row.addWidget(self.add_btn)
+
+        self.remove_btn = QPushButton("Remove")
+        self.remove_btn.clicked.connect(self._on_remove_app)
+        add_row.addWidget(self.remove_btn)
+
+        layout.addLayout(add_row)
+        self.setLayout(layout)
+
+    def load_from_config(self):
+        """Load notification settings from config"""
+        config = self.config_manager.config
+        self.enabled_checkbox.setChecked(config.get("notifications_enabled", False))
+        self.filter_list.clear()
+        for app in config.get("notification_filter", []):
+            self.filter_list.addItem(str(app))
+
+    def _on_add_app(self):
+        """Add app name to filter list"""
+        text = self.app_name_input.text().strip()
+        if not text:
+            return
+        # Check for duplicates
+        for i in range(self.filter_list.count()):
+            if self.filter_list.item(i).text() == text:
+                return
+        self.filter_list.addItem(text)
+        self.app_name_input.clear()
+        self._save_to_config()
+        self.notifications_changed.emit()
+
+    def _on_remove_app(self):
+        """Remove selected app from filter list"""
+        row = self.filter_list.currentRow()
+        if row >= 0:
+            self.filter_list.takeItem(row)
+            self._save_to_config()
+            self.notifications_changed.emit()
+
+    def _on_changed(self):
+        """Checkbox toggled"""
+        self._save_to_config()
+        self.notifications_changed.emit()
+
+    def _save_to_config(self):
+        """Save notification settings to config"""
+        self.config_manager.config["notifications_enabled"] = self.enabled_checkbox.isChecked()
+        apps = []
+        for i in range(self.filter_list.count()):
+            apps.append(self.filter_list.item(i).text())
+        self.config_manager.config["notification_filter"] = apps
+
+
 class ButtonGridWidget(QWidget):
     """Custom widget for 4x3 button grid display"""
 
@@ -578,6 +675,12 @@ class EditorMainWindow(QMainWindow):
         right_layout.addWidget(self.stats_panel)
         self.stats_panel.load_from_config()
 
+        # Notifications panel
+        self.notifications_panel = NotificationsPanel(self.config_manager)
+        self.notifications_panel.notifications_changed.connect(self._on_notifications_changed)
+        right_layout.addWidget(self.notifications_panel)
+        self.notifications_panel.load_from_config()
+
         # Deploy button
         self.deploy_btn = QPushButton("Deploy to Device")
         self.deploy_btn.setMinimumHeight(40)
@@ -731,6 +834,7 @@ class EditorMainWindow(QMainWindow):
             self.button_grid.set_page(0)
             self._load_display_mode_settings()
             self.stats_panel.load_from_config()
+            self.notifications_panel.load_from_config()
             self.statusBar().showMessage("Created new config")
 
     def _on_file_open(self):
@@ -745,6 +849,7 @@ class EditorMainWindow(QMainWindow):
                 self.button_grid.set_page(0)
                 self._load_display_mode_settings()
                 self.stats_panel.load_from_config()
+                self.notifications_panel.load_from_config()
                 self.statusBar().showMessage(f"Loaded: {file_path}")
             else:
                 QMessageBox.critical(self, "Error", f"Failed to load: {file_path}")
@@ -781,6 +886,10 @@ class EditorMainWindow(QMainWindow):
     def _on_stats_header_changed(self):
         """Stats header panel changed"""
         self.statusBar().showMessage("Stats header updated")
+
+    def _on_notifications_changed(self):
+        """Notifications panel changed"""
+        self.statusBar().showMessage("Notification settings updated")
 
     def _on_deploy_clicked(self):
         """Deploy button clicked"""
