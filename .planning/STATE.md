@@ -83,6 +83,7 @@ Recent decisions affecting current work:
 ### Pending Todos
 
 1. **Execute image support plan from Claude plans** (ui) -- add custom image icons to hotkey buttons via BMP on SD card, Pillow optimizer, HTTP upload endpoint
+2. **Companion executes button actions instead of blind keyboard shortcuts** (companion) -- bridge forwards MSG_HOTKEY to vendor HID, companion intercepts and launches apps/commands directly
 
 ### Blockers/Concerns
 
