@@ -53,6 +53,14 @@ void loop() {
                         Serial.printf("NOTIF: relayed (%d bytes)\n", (int)sizeof(NotificationMsg));
                     }
                     break;
+                case MSG_CONFIG_MODE:
+                    espnow_send(MSG_CONFIG_MODE, nullptr, 0);
+                    Serial.println("CONFIG_MODE: relayed to display");
+                    break;
+                case MSG_CONFIG_DONE:
+                    espnow_send(MSG_CONFIG_DONE, nullptr, 0);
+                    Serial.println("CONFIG_DONE: relayed to display");
+                    break;
                 default:
                     Serial.printf("VENDOR: unknown type 0x%02X len=%zu\n", msg_type, vendor_len);
                     break;
@@ -91,6 +99,19 @@ void loop() {
                     fire_media_key(cmd->consumer_code);
                 } else {
                     Serial.printf("ERR: media key payload too short (%d)\n", payload_len);
+                }
+                break;
+            }
+            case MSG_BUTTON_PRESS: {
+                if (payload_len >= sizeof(ButtonPressMsg)) {
+                    // Immediately ACK display (fast visual feedback)
+                    HotkeyAckMsg ack = { 0 };
+                    espnow_send(MSG_HOTKEY_ACK, (uint8_t *)&ack, sizeof(ack));
+
+                    // Relay to companion via vendor HID INPUT report
+                    send_vendor_report(MSG_BUTTON_PRESS, payload, sizeof(ButtonPressMsg));
+                    Serial.printf("BTN: page=%d widget=%d -> companion\n",
+                                  payload[0], payload[1]);
                 }
                 break;
             }

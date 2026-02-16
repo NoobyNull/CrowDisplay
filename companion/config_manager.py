@@ -16,6 +16,11 @@ from typing import Dict, List, Any, Optional
 # Action type constants (must match device/protocol.h)
 ACTION_HOTKEY = 0
 ACTION_MEDIA_KEY = 1
+ACTION_LAUNCH_APP = 2    # Launch/focus application
+ACTION_SHELL_CMD = 3     # Run shell command (fire and forget)
+ACTION_OPEN_URL = 4      # Open URL in default browser
+
+VALID_ACTION_TYPES = (ACTION_HOTKEY, ACTION_MEDIA_KEY, ACTION_LAUNCH_APP, ACTION_SHELL_CMD, ACTION_OPEN_URL)
 
 # Widget type constants (must match display/config.h WidgetType enum)
 WIDGET_HOTKEY_BUTTON = 0
@@ -117,6 +122,11 @@ def make_default_widget(widget_type: int, x: int = 0, y: int = 0) -> Dict[str, A
             "keycode": 0,
             "consumer_code": 0,
             "pressed_color": 0,
+            "launch_command": "",
+            "launch_wm_class": "",
+            "launch_focus_or_launch": True,
+            "shell_command": "",
+            "url": "",
         })
     elif widget_type == WIDGET_STAT_MONITOR:
         widget.update({
@@ -209,6 +219,11 @@ def _migrate_v1_page(v1_page: Dict[str, Any]) -> Dict[str, Any]:
             "keycode": btn.get("keycode", 0),
             "consumer_code": btn.get("consumer_code", 0),
             "pressed_color": btn.get("pressed_color", 0),
+            "launch_command": btn.get("launch_command", ""),
+            "launch_wm_class": btn.get("launch_wm_class", ""),
+            "launch_focus_or_launch": btn.get("launch_focus_or_launch", True),
+            "shell_command": btn.get("shell_command", ""),
+            "url": btn.get("url", ""),
         }
         v2_page["widgets"].append(widget)
 
@@ -549,7 +564,7 @@ class ConfigManager:
                     if not isinstance(widget.get("color", 0), int):
                         return False, f"Page {pi} widget {wi}: invalid color"
                     at = widget.get("action_type", ACTION_HOTKEY)
-                    if at not in (ACTION_HOTKEY, ACTION_MEDIA_KEY):
+                    if at not in VALID_ACTION_TYPES:
                         return False, f"Page {pi} widget {wi}: invalid action_type"
                     icon_path = widget.get("icon_path", "")
                     if icon_path:

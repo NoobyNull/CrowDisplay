@@ -76,3 +76,11 @@ bool poll_vendor_hid(uint8_t *buf, size_t &len) {
     }
     return false;
 }
+
+void send_vendor_report(uint8_t msg_type, const uint8_t *payload, uint8_t len) {
+    uint8_t buf[63];
+    memset(buf, 0, sizeof(buf));
+    buf[0] = msg_type;
+    if (len > 0 && payload) memcpy(&buf[1], payload, min((int)len, 62));
+    Vendor.write(buf, 1 + len);
+}
