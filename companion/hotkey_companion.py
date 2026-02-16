@@ -211,45 +211,70 @@ def _run_session_lock_listener():
 
 
 async def _start_session_lock_listener():
-    """Listen for Lock/Unlock signals on the logind session object.
+    """Listen for screen lock/unlock via D-Bus.
 
-    Uses org.freedesktop.login1.Session interface on the current session.
+    Tries two approaches (both run concurrently):
+    1. Session bus: org.freedesktop.ScreenSaver.ActiveChanged signal
+       (works with KDE, GNOME, and most desktop environments)
+    2. System bus: logind session Lock/Unlock signals
+       (works with loginctl lock-session)
+
     Gracefully degrades if dbus-next is unavailable.
     """
     try:
         from dbus_next.aio import MessageBus
-        from dbus_next import BusType
+        from dbus_next import BusType, Message, MessageType
     except ImportError:
         logging.warning("dbus-next not installed -- session lock detection disabled")
         return
 
-    try:
-        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
-    except Exception as exc:
-        logging.warning("Cannot connect to system D-Bus for lock listener: %s", exc)
-        return
+    tasks = []
 
+    # --- Approach 1: Session bus ScreenSaver (KDE, GNOME, etc.) ---
     try:
-        # Get the current session path from logind
-        introspection = await bus.introspect(
+        session_bus = await MessageBus(bus_type=BusType.SESSION).connect()
+
+        # Subscribe to ActiveChanged signal via match rule
+        await session_bus.call(Message(
+            destination='org.freedesktop.DBus',
+            path='/org/freedesktop/DBus',
+            interface='org.freedesktop.DBus',
+            member='AddMatch',
+            signature='s',
+            body=["type='signal',interface='org.freedesktop.ScreenSaver',member='ActiveChanged'"],
+        ))
+
+        def on_screensaver_message(msg):
+            if (msg.message_type == MessageType.SIGNAL and
+                    msg.member == 'ActiveChanged' and
+                    msg.signature == 'b'):
+                _on_session_lock_change(msg.body[0])
+
+        session_bus.add_message_handler(on_screensaver_message)
+        logging.info("D-Bus ScreenSaver lock listener active (session bus)")
+        tasks.append(session_bus.wait_for_disconnect())
+    except Exception as exc:
+        logging.warning("ScreenSaver listener failed: %s", exc)
+
+    # --- Approach 2: System bus logind session Lock/Unlock ---
+    try:
+        system_bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+        introspection = await system_bus.introspect(
             "org.freedesktop.login1", "/org/freedesktop/login1"
         )
-        proxy = bus.get_proxy_object(
+        proxy = system_bus.get_proxy_object(
             "org.freedesktop.login1",
             "/org/freedesktop/login1",
             introspection,
         )
         manager = proxy.get_interface("org.freedesktop.login1.Manager")
 
-        # Get our session — try by PID first, fall back to current user's
-        # graphical session (needed when launched from a non-session context)
         try:
             session_path = await manager.call_get_session_by_pid(os.getpid())
         except Exception:
             import getpass
             username = getpass.getuser()
             sessions = await manager.call_list_sessions()
-            # sessions is list of (id, uid, user, seat, path)
             session_path = None
             for sess in sessions:
                 sid, uid, user, seat, path = sess
@@ -257,27 +282,31 @@ async def _start_session_lock_listener():
                     session_path = path
                     break
             if session_path is None:
-                logging.warning("No logind session found for user %s", username)
-                return
-        logging.info("Session lock listener: session path = %s", session_path)
+                logging.warning("No logind session found for user")
 
-        session_introspection = await bus.introspect(
-            "org.freedesktop.login1", session_path
-        )
-        session_proxy = bus.get_proxy_object(
-            "org.freedesktop.login1",
-            session_path,
-            session_introspection,
-        )
-        session = session_proxy.get_interface("org.freedesktop.login1.Session")
-
-        session.on_lock(lambda: _on_session_lock_change(True))
-        session.on_unlock(lambda: _on_session_lock_change(False))
-        logging.info("D-Bus session lock listener active")
-
-        await bus.wait_for_disconnect()
+        if session_path:
+            logging.info("Session lock listener: session path = %s", session_path)
+            session_introspection = await system_bus.introspect(
+                "org.freedesktop.login1", session_path
+            )
+            session_proxy = system_bus.get_proxy_object(
+                "org.freedesktop.login1",
+                session_path,
+                session_introspection,
+            )
+            session = session_proxy.get_interface("org.freedesktop.login1.Session")
+            session.on_lock(lambda: _on_session_lock_change(True))
+            session.on_unlock(lambda: _on_session_lock_change(False))
+            logging.info("D-Bus logind lock listener active (system bus)")
+            tasks.append(system_bus.wait_for_disconnect())
     except Exception as exc:
-        logging.warning("Session lock listener error: %s", exc)
+        logging.warning("Logind lock listener failed: %s", exc)
+
+    if tasks:
+        import asyncio
+        await asyncio.gather(*tasks)
+    else:
+        logging.warning("No lock listeners could be started")
 
 
 def _on_session_lock_change(locked):
