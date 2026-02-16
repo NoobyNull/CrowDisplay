@@ -478,14 +478,17 @@ class ButtonGridWidget(QWidget):
             return
 
         buttons_data = page.get("buttons", [])
+        grid_layout = self.layout()
 
-        # Clear all cells first
+        # Clear all cells first and reset spans
         for row in range(3):
             for col in range(4):
                 btn = self.buttons[row][col]
                 btn.setText("")
                 btn.setStyleSheet("background-color: #f0f0f0;")
                 btn.setToolTip("")
+                btn.setVisible(True)
+                grid_layout.addWidget(btn, row, col, 1, 1)
 
         # Place buttons: explicit grid positions first, then auto-flow
         auto_row, auto_col = 0, 0
@@ -497,12 +500,16 @@ class ButtonGridWidget(QWidget):
             grid_row = button_dict.get("grid_row", -1)
             grid_col = button_dict.get("grid_col", -1)
             pressed_color = button_dict.get("pressed_color", 0x000000)
+            col_span = button_dict.get("col_span", 1)
+            row_span = button_dict.get("row_span", 1)
 
             # Determine grid cell
             if grid_row >= 0 and grid_col >= 0:
                 target_row, target_col = grid_row, grid_col
             else:
                 target_row, target_col = auto_row, auto_col
+                col_span = 1  # Auto-flow always 1x1
+                row_span = 1
                 auto_col += 1
                 if auto_col >= 4:
                     auto_col = 0
@@ -511,7 +518,22 @@ class ButtonGridWidget(QWidget):
             if target_row >= 3 or target_col >= 4:
                 continue
 
+            # Clamp span to grid bounds
+            if target_col + col_span > 4:
+                col_span = 4 - target_col
+            if target_row + row_span > 3:
+                row_span = 3 - target_row
+
             btn = self.buttons[target_row][target_col]
+
+            # For spanned buttons, re-add with correct span in grid layout
+            if col_span > 1 or row_span > 1:
+                grid_layout.addWidget(btn, target_row, target_col, row_span, col_span)
+                # Hide buttons in spanned-over cells
+                for r in range(target_row, target_row + row_span):
+                    for c in range(target_col, target_col + col_span):
+                        if r != target_row or c != target_col:
+                            self.buttons[r][c].setVisible(False)
 
             # Resolve icon display
             icon_display = ""
@@ -524,21 +546,28 @@ class ButtonGridWidget(QWidget):
                 else:
                     icon_display = icon
 
-            # Format button text
+            # Format button text (show span indicator for multi-cell buttons)
             parts = []
             if icon_display:
                 parts.append(icon_display)
             parts.append(label)
             if description:
                 parts.append(description)
+            if col_span > 1 or row_span > 1:
+                parts.append(f"[{col_span}x{row_span}]")
             btn.setText("\n".join(parts))
 
-            # Tooltip with position and pressed color info
+            # Tooltip with position, span, and pressed color info
             pos_info = f"Grid: ({target_row}, {target_col})"
             if grid_row >= 0 and grid_col >= 0:
                 pos_info += " [explicit]"
+            span_info = f"Span: {col_span}x{row_span}" if (col_span > 1 or row_span > 1) else ""
             pressed_info = "Pressed: auto-darken" if pressed_color == 0 else f"Pressed: #{pressed_color:06X}"
-            btn.setToolTip(f"{pos_info}\n{pressed_info}")
+            tooltip_parts = [pos_info]
+            if span_info:
+                tooltip_parts.append(span_info)
+            tooltip_parts.append(pressed_info)
+            btn.setToolTip("\n".join(tooltip_parts))
 
             # Set background color with luminance-based text contrast
             qcolor = self._value_to_qcolor(color)
@@ -726,6 +755,25 @@ class EditorMainWindow(QMainWindow):
         exit_action = file_menu.addAction("Exit")
         exit_action.triggered.connect(self.close)
 
+        # Edit menu with span resize shortcuts
+        edit_menu = menubar.addMenu("Edit")
+
+        inc_col_span = edit_menu.addAction("Increase Column Span")
+        inc_col_span.setShortcut(QKeySequence("Ctrl+Right"))
+        inc_col_span.triggered.connect(lambda: self._adjust_span("col", 1))
+
+        dec_col_span = edit_menu.addAction("Decrease Column Span")
+        dec_col_span.setShortcut(QKeySequence("Ctrl+Left"))
+        dec_col_span.triggered.connect(lambda: self._adjust_span("col", -1))
+
+        inc_row_span = edit_menu.addAction("Increase Row Span")
+        inc_row_span.setShortcut(QKeySequence("Ctrl+Down"))
+        inc_row_span.triggered.connect(lambda: self._adjust_span("row", 1))
+
+        dec_row_span = edit_menu.addAction("Decrease Row Span")
+        dec_row_span.setShortcut(QKeySequence("Ctrl+Up"))
+        dec_row_span.triggered.connect(lambda: self._adjust_span("row", -1))
+
     def _update_page_display(self):
         """Update page buttons and labels"""
         page_count = self.config_manager.get_page_count()
@@ -890,6 +938,39 @@ class EditorMainWindow(QMainWindow):
     def _on_notifications_changed(self):
         """Notifications panel changed"""
         self.statusBar().showMessage("Notification settings updated")
+
+    def _adjust_span(self, axis: str, delta: int):
+        """Adjust col_span or row_span of selected button by delta"""
+        sel = self.button_grid.get_selected_button()
+        if sel is None:
+            self.statusBar().showMessage("No button selected for span adjustment")
+            return
+        page_idx, button_idx = sel
+        button = self.config_manager.get_button(page_idx, button_idx)
+        if button is None:
+            return
+        # Only allow span adjustment for explicitly positioned buttons
+        if button.get("grid_row", -1) < 0 or button.get("grid_col", -1) < 0:
+            self.statusBar().showMessage("Position button explicitly to enable spanning")
+            return
+
+        if axis == "col":
+            old_val = button.get("col_span", 1)
+            max_val = 4 - button["grid_col"]
+            new_val = max(1, min(max_val, old_val + delta))
+            button["col_span"] = new_val
+        else:
+            old_val = button.get("row_span", 1)
+            max_val = 3 - button["grid_row"]
+            new_val = max(1, min(max_val, old_val + delta))
+            button["row_span"] = new_val
+
+        self.config_manager.set_button(page_idx, button_idx, button)
+        self.button_editor.load_button(button, page_idx, button_idx)
+        self.button_grid.refresh_grid()
+        self.statusBar().showMessage(
+            f"Span: {button.get('col_span', 1)}x{button.get('row_span', 1)}"
+        )
 
     def _on_deploy_clicked(self):
         """Deploy button clicked"""

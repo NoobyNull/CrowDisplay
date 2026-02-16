@@ -104,6 +104,20 @@ class ButtonEditor(QWidget):
         self.grid_col_spin.setSpecialValueText("Auto")
         self.grid_col_spin.valueChanged.connect(self._on_grid_pos_changed)
 
+        # Grid span spinboxes
+        self.col_span_spin = QSpinBox()
+        self.col_span_spin.setRange(1, 4)
+        self.col_span_spin.setValue(1)
+        self.col_span_spin.valueChanged.connect(self._on_span_changed)
+
+        self.row_span_spin = QSpinBox()
+        self.row_span_spin.setRange(1, 3)
+        self.row_span_spin.setValue(1)
+        self.row_span_spin.valueChanged.connect(self._on_span_changed)
+
+        self.span_hint_label = QLabel("Spans only apply to explicitly positioned buttons")
+        self.span_hint_label.setStyleSheet("color: #888; font-size: 10px;")
+
         # Pressed color controls
         self.auto_darken_check = QCheckBox("Auto-darken")
         self.auto_darken_check.setChecked(True)
@@ -172,6 +186,16 @@ class ButtonEditor(QWidget):
         self.grid_hint_label.setStyleSheet("color: #888; font-size: 10px;")
         layout.addWidget(self.grid_hint_label)
 
+        # Grid span section
+        layout.addWidget(QLabel("Grid Span:"))
+        span_layout = QHBoxLayout()
+        span_layout.addWidget(QLabel("Col Span:"))
+        span_layout.addWidget(self.col_span_spin)
+        span_layout.addWidget(QLabel("Row Span:"))
+        span_layout.addWidget(self.row_span_spin)
+        layout.addLayout(span_layout)
+        layout.addWidget(self.span_hint_label)
+
         # Pressed color section
         layout.addWidget(QLabel("Pressed Color:"))
         layout.addWidget(self.auto_darken_check)
@@ -221,6 +245,13 @@ class ButtonEditor(QWidget):
         self.grid_row_spin.setValue(button_dict.get("grid_row", -1))
         self.grid_col_spin.setValue(button_dict.get("grid_col", -1))
 
+        # Load grid span
+        col_span = button_dict.get("col_span", 1)
+        row_span = button_dict.get("row_span", 1)
+        self.col_span_spin.setValue(col_span)
+        self.row_span_spin.setValue(row_span)
+        self._update_span_ui()
+
         # Load pressed color
         pressed_color = button_dict.get("pressed_color", 0x000000)
         self._pressed_color_value = pressed_color
@@ -252,6 +283,16 @@ class ButtonEditor(QWidget):
         grid_row = self.grid_row_spin.value()
         grid_col = self.grid_col_spin.value()
 
+        # Grid span (only meaningful for explicit positioning)
+        col_span = self.col_span_spin.value() if (grid_row >= 0 and grid_col >= 0) else 1
+        row_span = self.row_span_spin.value() if (grid_row >= 0 and grid_col >= 0) else 1
+
+        # Clamp span to grid bounds
+        if grid_col >= 0 and grid_col + col_span > 4:
+            col_span = 4 - grid_col
+        if grid_row >= 0 and grid_row + row_span > 3:
+            row_span = 3 - grid_row
+
         # Pressed color
         pressed_color = 0x000000 if self.auto_darken_check.isChecked() else self._pressed_color_value
 
@@ -267,6 +308,8 @@ class ButtonEditor(QWidget):
             "grid_row": grid_row,
             "grid_col": grid_col,
             "pressed_color": pressed_color,
+            "col_span": col_span,
+            "row_span": row_span,
         }
 
     def _set_media_key_combo(self, consumer_code: int):
@@ -341,7 +384,34 @@ class ButtonEditor(QWidget):
             else:
                 self.grid_hint_label.setText("Both -1 = auto-flow, both >= 0 = explicit")
                 self.grid_hint_label.setStyleSheet("color: #888; font-size: 10px;")
+            self._update_span_ui()
             self._emit_update()
+
+    def _on_span_changed(self):
+        """Grid span spinbox changed"""
+        if not self._updating:
+            self._update_span_ui()
+            self._emit_update()
+
+    def _update_span_ui(self):
+        """Update span UI: enable/disable based on explicit positioning"""
+        row = self.grid_row_spin.value()
+        col = self.grid_col_spin.value()
+        is_explicit = (row >= 0 and col >= 0)
+        self.col_span_spin.setEnabled(is_explicit)
+        self.row_span_spin.setEnabled(is_explicit)
+        if not is_explicit:
+            self.span_hint_label.setText("Position button explicitly to enable spanning")
+            self.span_hint_label.setStyleSheet("color: #E67E22; font-size: 10px;")
+        else:
+            max_col_span = 4 - col
+            max_row_span = 3 - row
+            self.col_span_spin.setMaximum(max_col_span)
+            self.row_span_spin.setMaximum(max_row_span)
+            self.span_hint_label.setText(
+                f"Max span: {max_col_span}x{max_row_span} from ({row},{col})"
+            )
+            self.span_hint_label.setStyleSheet("color: #888; font-size: 10px;")
 
     def _on_auto_darken_changed(self, state: int):
         """Auto-darken checkbox changed"""
