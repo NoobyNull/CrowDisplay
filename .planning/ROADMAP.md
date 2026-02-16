@@ -4,7 +4,7 @@
 
 - [x] **v1.0 MVP** - Phases 1-4 (shipped 2026-02-15)
 - [x] **v0.8 System Control (beta)** - Phases 5-8 (shipped 2026-02-15)
-- [ ] **v0.9.1 Tweaks and Break-Fix** - Phase 9 (in progress)
+- [x] **v0.9.1 Tweaks and Break-Fix** - Phase 9 (in progress) (completed 2026-02-16)
 
 ## Phases
 
@@ -139,7 +139,7 @@ Phases execute in numeric order: 5 -> 6 -> 7 -> 8 -> 9
 | 6. Data-Driven Display UI | v0.8 | 2/2 | Complete | 2026-02-15 |
 | 7. Config Server (SoftAP + HTTP) | v0.8 | 2/2 | Complete | 2026-02-15 |
 | 8. Desktop GUI Editor | v0.8 | 3/3 | Complete | 2026-02-15 |
-| 9. Tweaks and Break-Fix | v0.9.1 | 0/5 | Planning complete | - |
+| 9. Tweaks and Break-Fix | v0.9.1 | Complete    | 2026-02-16 | - |
 
 ## v0.9.1 Tweaks and Break-Fix
 
