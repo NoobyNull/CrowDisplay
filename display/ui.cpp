@@ -464,6 +464,90 @@ void hide_stats_header() {
 }
 
 // ============================================================
+//  Public: show_notification_toast() -- Desktop notification overlay
+// ============================================================
+static lv_obj_t *active_toast = nullptr;
+
+static void toast_anim_opa_cb(void *obj, int32_t v) {
+    lv_obj_set_style_opa((lv_obj_t *)obj, (lv_opa_t)v, LV_PART_MAIN);
+}
+
+void show_notification_toast(const char *app_name, const char *summary, const char *body) {
+    // Remove existing toast if present (prevents stacking)
+    if (active_toast) {
+        lv_anim_del(active_toast, nullptr);
+        lv_obj_del(active_toast);
+        active_toast = nullptr;
+    }
+
+    // Create toast container on the active screen
+    lv_obj_t *toast = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(toast, 600, 120);
+    lv_obj_align(toast, LV_ALIGN_TOP_RIGHT, -20, 50);
+    lv_obj_set_style_bg_color(toast, lv_color_hex(0x1a1a2e), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(toast, LV_OPA_90, LV_PART_MAIN);
+    lv_obj_set_style_border_color(toast, lv_color_hex(0x3498DB), LV_PART_MAIN);
+    lv_obj_set_style_border_width(toast, 2, LV_PART_MAIN);
+    lv_obj_set_style_radius(toast, 12, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(toast, 12, LV_PART_MAIN);
+    lv_obj_set_style_shadow_opa(toast, LV_OPA_40, LV_PART_MAIN);
+    lv_obj_clear_flag(toast, LV_OBJ_FLAG_SCROLLABLE);
+
+    // App name header
+    lv_obj_t *app_lbl = lv_label_create(toast);
+    lv_label_set_text(app_lbl, app_name);
+    lv_obj_set_style_text_font(app_lbl, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(app_lbl, lv_color_hex(0x3498DB), LV_PART_MAIN);
+    lv_obj_align(app_lbl, LV_ALIGN_TOP_LEFT, 12, 8);
+
+    // Summary (title)
+    lv_obj_t *sum_lbl = lv_label_create(toast);
+    lv_label_set_text(sum_lbl, summary);
+    lv_obj_set_style_text_font(sum_lbl, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_set_style_text_color(sum_lbl, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_width(sum_lbl, 560);
+    lv_label_set_long_mode(sum_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_align(sum_lbl, LV_ALIGN_TOP_LEFT, 12, 28);
+
+    // Body text (if present)
+    if (body && strlen(body) > 0) {
+        lv_obj_t *body_lbl = lv_label_create(toast);
+        lv_label_set_text(body_lbl, body);
+        lv_label_set_long_mode(body_lbl, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(body_lbl, 560);
+        lv_obj_set_style_text_font(body_lbl, &lv_font_montserrat_12, LV_PART_MAIN);
+        lv_obj_set_style_text_color(body_lbl, lv_color_hex(0xBBBBBB), LV_PART_MAIN);
+        lv_obj_align(body_lbl, LV_ALIGN_TOP_LEFT, 12, 52);
+    }
+
+    // Tap to dismiss
+    lv_obj_add_flag(toast, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(toast, [](lv_event_t *e) {
+        lv_obj_t *obj = lv_event_get_target(e);
+        lv_anim_del(obj, nullptr);
+        lv_obj_del(obj);
+        active_toast = nullptr;
+    }, LV_EVENT_CLICKED, nullptr);
+
+    // Auto-dismiss after 5 seconds with fade-out
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, toast);
+    lv_anim_set_values(&a, LV_OPA_90, LV_OPA_TRANSP);
+    lv_anim_set_exec_cb(&a, toast_anim_opa_cb);
+    lv_anim_set_time(&a, 300);
+    lv_anim_set_delay(&a, 5000);
+    lv_anim_set_ready_cb(&a, [](lv_anim_t *anim) {
+        lv_obj_del((lv_obj_t *)anim->var);
+        active_toast = nullptr;
+    });
+    lv_anim_start(&a);
+
+    active_toast = toast;
+    Serial.printf("[ui] Toast: %s - %s\n", app_name, summary);
+}
+
+// ============================================================
 //  Public: update_device_status() -- Update header indicators
 // ============================================================
 void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_level) {

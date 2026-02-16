@@ -35,5 +35,8 @@ void hide_config_screen();
 // Request deferred UI rebuild (safe to call from any context, executes in loop)
 void request_ui_rebuild();
 
+// Show a desktop notification as a toast overlay (auto-dismisses after 5s, tap to dismiss)
+void show_notification_toast(const char *app_name, const char *summary, const char *body);
+
 // Access the global config (for config_server to update before rebuild)
 AppConfig& get_global_config();

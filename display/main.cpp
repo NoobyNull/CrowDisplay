@@ -139,6 +139,14 @@ void loop() {
             settimeofday(&tv, nullptr);
             Serial.printf("Time synced: %lu\n", (unsigned long)ts->epoch_seconds);
         }
+        else if (msg_type == MSG_NOTIFICATION && msg_len >= sizeof(NotificationMsg)) {
+            NotificationMsg *notif = (NotificationMsg *)msg_payload;
+            // Safety: force null-terminate all strings
+            notif->app_name[31] = '\0';
+            notif->summary[99] = '\0';
+            notif->body[115] = '\0';
+            show_notification_toast(notif->app_name, notif->summary, notif->body);
+        }
     }
 
     // Stats timeout: hide header if no stats received for 5 seconds
