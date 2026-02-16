@@ -71,9 +71,10 @@ DEFAULT_STATS_CONFIG = [
 ]
 
 # HID vendor message type prefixes (first byte after report ID)
-MSG_STATS       = 0x03
-MSG_POWER_STATE = 0x05
-MSG_TIME_SYNC   = 0x06
+MSG_STATS        = 0x03
+MSG_POWER_STATE  = 0x05
+MSG_TIME_SYNC    = 0x06
+MSG_NOTIFICATION = 0x08
 
 # Power state values
 POWER_SHUTDOWN = 0
@@ -184,6 +185,130 @@ async def start_dbus_shutdown_listener():
         await bus.wait_for_disconnect()
     except Exception as exc:
         logging.warning("D-Bus shutdown listener error: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# D-Bus notification listener
+# ---------------------------------------------------------------------------
+
+class NotificationListener:
+    """Monitors D-Bus session bus for desktop notifications and forwards
+    matching ones (by app name filter) via a callback.
+
+    If app_filter is empty, all notifications are forwarded.
+    """
+
+    def __init__(self, app_filter: set, callback):
+        self.app_filter = app_filter
+        self.callback = callback
+
+    async def run(self):
+        try:
+            from dbus_next.aio import MessageBus
+            from dbus_next import BusType, MessageType, Message
+        except ImportError:
+            logging.warning(
+                "dbus-next not installed -- notification forwarding disabled. "
+                "Install with: pip install dbus-next"
+            )
+            return
+
+        try:
+            bus = await MessageBus(bus_type=BusType.SESSION).connect()
+        except Exception as exc:
+            logging.warning("Cannot connect to session D-Bus: %s", exc)
+            return
+
+        try:
+            # Add match rule to intercept Notify method calls
+            await bus.call(
+                Message(
+                    destination='org.freedesktop.DBus',
+                    path='/org/freedesktop/DBus',
+                    interface='org.freedesktop.DBus',
+                    member='AddMatch',
+                    signature='s',
+                    body=["type='method_call',interface='org.freedesktop.Notifications',member='Notify'"]
+                )
+            )
+
+            def message_filter(msg):
+                if (msg.message_type == MessageType.METHOD_CALL and
+                    msg.interface == 'org.freedesktop.Notifications' and
+                    msg.member == 'Notify'):
+                    args = msg.body
+                    if len(args) >= 5:
+                        app_name = str(args[0])
+                        summary = str(args[3])
+                        body = str(args[4])
+                        if not self.app_filter or app_name in self.app_filter:
+                            logging.info("Forwarding notification: %s - %s", app_name, summary)
+                            try:
+                                self.callback(app_name, summary, body)
+                            except Exception as exc:
+                                logging.debug("Notification callback error: %s", exc)
+
+            bus.add_message_handler(message_filter)
+            logging.info("D-Bus notification listener active (filter: %s)",
+                         list(self.app_filter) if self.app_filter else "ALL")
+            await bus.wait_for_disconnect()
+        except Exception as exc:
+            logging.warning("D-Bus notification listener error: %s", exc)
+
+
+def _run_notification_listener(app_filter, callback):
+    """Entry point for notification listener thread."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        listener = NotificationListener(app_filter, callback)
+        loop.run_until_complete(listener.run())
+    except Exception as exc:
+        logging.debug("Notification listener loop exited: %s", exc)
+    finally:
+        loop.close()
+
+
+def send_notification_to_display(device, app_name, summary, body):
+    """Encode and send a MSG_NOTIFICATION payload to the bridge.
+
+    NotificationMsg: app_name[32] + summary[100] + body[116] = 248 bytes.
+    Packet: [0x00 report ID] [0x08 MSG_NOTIFICATION] [248-byte payload]
+    """
+    app_bytes = app_name.encode('utf-8')[:31] + b'\x00'
+    sum_bytes = summary.encode('utf-8')[:99] + b'\x00'
+    body_bytes = body.encode('utf-8')[:115] + b'\x00'
+
+    payload = (app_bytes.ljust(32, b'\x00') +
+               sum_bytes.ljust(100, b'\x00') +
+               body_bytes.ljust(116, b'\x00'))
+
+    try:
+        device.write(b"\x00" + bytes([MSG_NOTIFICATION]) + payload)
+    except (IOError, OSError) as exc:
+        logging.debug("Failed to send notification: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Notification config loading
+# ---------------------------------------------------------------------------
+
+def load_notification_config(config_path=None):
+    """Load notification settings from config.json.
+
+    Returns (enabled: bool, filter_set: set of app name strings).
+    """
+    if config_path and os.path.isfile(config_path):
+        try:
+            with open(config_path, "r") as f:
+                data = json.load(f)
+            enabled = data.get("notifications_enabled", False)
+            filter_list = data.get("notification_filter", [])
+            if isinstance(filter_list, list):
+                return enabled, set(str(s) for s in filter_list)
+        except (json.JSONDecodeError, IOError) as exc:
+            logging.warning("Failed to load notification config: %s", exc)
+    return False, set()
 
 
 # ---------------------------------------------------------------------------
@@ -710,6 +835,14 @@ def main():
     dbus_thread = threading.Thread(target=_run_dbus_listener, daemon=True)
     dbus_thread.start()
 
+    # Load notification forwarding config
+    notif_enabled, notif_filter = load_notification_config(config_path)
+    if notif_enabled:
+        logging.info("Notification forwarding enabled (filter: %s)",
+                     list(notif_filter) if notif_filter else "ALL")
+    else:
+        logging.info("Notification forwarding disabled")
+
     # Discover and connect to bridge
     device = None
     while running:
@@ -733,6 +866,15 @@ def main():
     if not running or device is None:
         logging.info("Shutting down (no bridge connected)")
         return
+
+    # Start notification listener if enabled (needs device reference for callback)
+    if notif_enabled and device is not None:
+        notif_thread = threading.Thread(
+            target=_run_notification_listener,
+            args=(notif_filter, lambda app, s, b: send_notification_to_display(device, app, s, b)),
+            daemon=True,
+        )
+        notif_thread.start()
 
     # Initialize network and disk I/O baselines
     prev_net = psutil.net_io_counters()
