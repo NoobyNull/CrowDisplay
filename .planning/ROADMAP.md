@@ -169,7 +169,7 @@ Plans:
 
 **Goal:** Companion service intercepts button presses from the bridge via vendor HID and executes configured actions (launch apps, open URLs, run commands) instead of relying on blind keyboard shortcuts
 **Depends on:** Phase 9
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
 - [ ] 10-01-PLAN.md -- Protocol + firmware: MSG_BUTTON_PRESS message, display sends page+widget, bridge relays via vendor HID
