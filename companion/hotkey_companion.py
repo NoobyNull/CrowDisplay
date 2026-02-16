@@ -21,6 +21,7 @@ Dependencies:
 """
 
 import hid
+import json
 import psutil
 import struct
 import time
@@ -40,16 +41,34 @@ PRODUCT_ID = 0x0002         # Default ESP32-S3 TinyUSB
 PRODUCT_STRING = "HotkeyBridge"
 UPDATE_INTERVAL = 1.0       # Seconds between stat reports (1 Hz)
 
-# Matches StatsPayload in shared/protocol.h:
-#   uint8  cpu_percent
-#   uint8  ram_percent
-#   uint8  gpu_percent     (0xFF = unavailable)
-#   uint8  cpu_temp        (0xFF = unavailable)
-#   uint8  gpu_temp        (0xFF = unavailable)
-#   uint8  disk_percent
-#   uint16 net_up_kbps     (little-endian)
-#   uint16 net_down_kbps   (little-endian)
+# Legacy StatsPayload format (v0.9.0 backwards compatibility)
 STATS_FORMAT = "<BBBBBBhh"  # 6 x uint8 + 2 x int16 = 10 bytes
+
+# TLV stat type IDs (must match StatType enum in shared/protocol.h)
+STAT_TYPES = {
+    'cpu_percent':    0x01, 'ram_percent':    0x02, 'gpu_percent':    0x03,
+    'cpu_temp':       0x04, 'gpu_temp':       0x05, 'disk_percent':   0x06,
+    'net_up':         0x07, 'net_down':       0x08, 'cpu_freq':       0x09,
+    'gpu_freq':       0x0A, 'swap_percent':   0x0B, 'uptime_hours':   0x0C,
+    'battery_pct':    0x0D, 'fan_rpm':        0x0E, 'load_avg':       0x0F,
+    'proc_count':     0x10, 'gpu_mem_pct':    0x11, 'gpu_power_w':    0x12,
+    'disk_read_kbs':  0x13, 'disk_write_kbs': 0x14,
+}
+
+# Reverse lookup: type_id -> name
+STAT_ID_TO_NAME = {v: k for k, v in STAT_TYPES.items()}
+
+# Default stats header config (matches original 8 hardcoded stats)
+DEFAULT_STATS_CONFIG = [
+    {"type": 0x01, "color": 0x3498DB, "position": 0},  # cpu_percent
+    {"type": 0x02, "color": 0x2ECC71, "position": 1},  # ram_percent
+    {"type": 0x03, "color": 0xE67E22, "position": 2},  # gpu_percent
+    {"type": 0x04, "color": 0xE74C3C, "position": 3},  # cpu_temp
+    {"type": 0x05, "color": 0xF1C40F, "position": 4},  # gpu_temp
+    {"type": 0x07, "color": 0x1ABC9C, "position": 5},  # net_up
+    {"type": 0x08, "color": 0x1ABC9C, "position": 6},  # net_down
+    {"type": 0x06, "color": 0x7F8C8D, "position": 7},  # disk_percent
+]
 
 # HID vendor message type prefixes (first byte after report ID)
 MSG_STATS       = 0x03
@@ -284,6 +303,35 @@ class GPUCollector:
                 pass
         return (gpu_percent, gpu_temp)
 
+    def collect_extended(self):
+        """Return (gpu_mem_pct, gpu_power_w, gpu_freq_mhz) for NVIDIA GPUs.
+
+        Returns (0xFF, 0, 0) if not NVIDIA or on error.
+        """
+        if self.gpu_type != "nvidia":
+            return (0xFF, 0, 0)
+        try:
+            import pynvml
+            # GPU memory
+            mem = pynvml.nvmlDeviceGetMemoryInfo(self._nvml_handle)
+            gpu_mem_pct = min(int(mem.used * 100 / mem.total), 100) if mem.total > 0 else 0xFF
+            # GPU power
+            try:
+                power_mw = pynvml.nvmlDeviceGetPowerUsage(self._nvml_handle)
+                gpu_power_w = min(int(power_mw / 1000), 0xFFFF)
+            except Exception:
+                gpu_power_w = 0
+            # GPU clock
+            try:
+                clock = pynvml.nvmlDeviceGetClockInfo(self._nvml_handle, pynvml.NVML_CLOCK_GRAPHICS)
+                gpu_freq_mhz = min(int(clock), 0xFFFF)
+            except Exception:
+                gpu_freq_mhz = 0
+            return (gpu_mem_pct, gpu_power_w, gpu_freq_mhz)
+        except Exception as exc:
+            logging.debug("NVIDIA extended stats failed: %s", exc)
+            return (0xFF, 0, 0)
+
 
 # ---------------------------------------------------------------------------
 # Bridge discovery
@@ -355,69 +403,275 @@ def get_cpu_temp():
 
 
 # ---------------------------------------------------------------------------
-# Stats collection
+# TLV encoding
 # ---------------------------------------------------------------------------
 
-def collect_stats(gpu_collector, prev_net, prev_time):
-    """Collect system metrics and pack into StatsPayload bytes.
+def encode_stats_tlv(stats_list):
+    """Encode a list of (stat_type_id, value) pairs into TLV packet bytes.
 
-    Returns (packed_bytes, current_net_counters, current_time).
+    Format: [count] [type1][len1][val1...] [type2][len2][val2...] ...
+    Values < 256 use 1 byte, values >= 256 use 2 bytes (little-endian).
+    """
+    packet = bytearray([len(stats_list)])
+    for stat_type, value in stats_list:
+        packet.append(stat_type)
+        if value < 256:
+            packet.append(1)
+            packet.append(value & 0xFF)
+        else:
+            packet.append(2)
+            packet.extend(struct.pack('<H', value & 0xFFFF))
+    return bytes(packet)
+
+
+# ---------------------------------------------------------------------------
+# Stats config loading
+# ---------------------------------------------------------------------------
+
+def load_stats_config(config_path=None):
+    """Load stats_header config from config.json file.
+
+    Returns list of stat type IDs to collect, or default set.
+    """
+    if config_path and os.path.isfile(config_path):
+        try:
+            with open(config_path, "r") as f:
+                data = json.load(f)
+            stats_header = data.get("stats_header")
+            if stats_header and isinstance(stats_header, list):
+                type_ids = [s.get("type", 0) for s in stats_header if isinstance(s, dict)]
+                type_ids = [t for t in type_ids if 1 <= t <= 0x14]
+                if type_ids:
+                    logging.info("Loaded %d stat types from config: %s",
+                                 len(type_ids),
+                                 [STAT_ID_TO_NAME.get(t, f"0x{t:02X}") for t in type_ids])
+                    return type_ids
+        except (json.JSONDecodeError, IOError, KeyError) as exc:
+            logging.warning("Failed to load stats config: %s", exc)
+
+    # Default: original 8 stats
+    return [s["type"] for s in DEFAULT_STATS_CONFIG]
+
+
+# ---------------------------------------------------------------------------
+# Expanded stat collectors
+# ---------------------------------------------------------------------------
+
+def get_swap_percent():
+    """Return swap usage percent, or 0xFF if unavailable."""
+    try:
+        swap = psutil.swap_memory()
+        return min(int(swap.percent), 100)
+    except Exception:
+        return 0xFF
+
+
+def get_cpu_freq_mhz():
+    """Return current CPU frequency in MHz, or 0."""
+    try:
+        freq = psutil.cpu_freq()
+        if freq:
+            return min(int(freq.current), 0xFFFF)
+    except Exception:
+        pass
+    return 0
+
+
+def get_uptime_hours():
+    """Return system uptime in hours."""
+    try:
+        boot = psutil.boot_time()
+        return min(int((time.time() - boot) / 3600), 0xFFFF)
+    except Exception:
+        return 0
+
+
+def get_battery_percent():
+    """Return battery percentage, or 0xFF if no battery."""
+    try:
+        bat = psutil.sensors_battery()
+        if bat is not None:
+            return min(int(bat.percent), 100)
+    except Exception:
+        pass
+    return 0xFF
+
+
+def get_fan_rpm():
+    """Return first fan RPM, or 0."""
+    try:
+        fans = psutil.sensors_fans()
+        if fans:
+            for fan_list in fans.values():
+                if fan_list:
+                    return min(int(fan_list[0].current), 0xFFFF)
+    except Exception:
+        pass
+    return 0
+
+
+def get_load_avg_x100():
+    """Return 1-min load average x 100 as uint16."""
+    try:
+        load1, _, _ = os.getloadavg()
+        return min(int(load1 * 100), 0xFFFF)
+    except Exception:
+        return 0
+
+
+def get_proc_count():
+    """Return number of running processes."""
+    try:
+        return min(len(psutil.pids()), 0xFFFF)
+    except Exception:
+        return 0
+
+
+def get_disk_io(prev_disk_io, dt):
+    """Return (read_kbs, write_kbs, current_counters)."""
+    try:
+        curr = psutil.disk_io_counters()
+        if prev_disk_io is None:
+            return (0, 0, curr)
+        read_kbs = int((curr.read_bytes - prev_disk_io.read_bytes) / dt / 1024)
+        write_kbs = int((curr.write_bytes - prev_disk_io.write_bytes) / dt / 1024)
+        return (max(0, min(read_kbs, 0xFFFF)), max(0, min(write_kbs, 0xFFFF)), curr)
+    except Exception:
+        return (0, 0, prev_disk_io)
+
+
+# ---------------------------------------------------------------------------
+# Stats collection (TLV + legacy)
+# ---------------------------------------------------------------------------
+
+def collect_stats_tlv(gpu_collector, enabled_types, prev_net, prev_time, prev_disk_io):
+    """Collect system metrics based on enabled types and return TLV-encoded bytes.
+
+    Returns (tlv_bytes, current_net_counters, current_time, current_disk_io).
+    Only collects stats that are in enabled_types (saves CPU on unused psutil calls).
     """
     now = time.time()
     dt = now - prev_time
     if dt <= 0:
-        dt = 1.0  # Avoid division by zero on first call
+        dt = 1.0
 
-    # CPU (interval=None uses the cached value from previous psutil call)
-    try:
-        cpu_percent = min(int(psutil.cpu_percent(interval=None)), 100)
-    except Exception:
-        cpu_percent = 0
+    enabled_set = set(enabled_types)
+    stats_list = []
+    curr_net = prev_net
+    curr_disk_io = prev_disk_io
 
-    # RAM
-    try:
-        ram_percent = min(int(psutil.virtual_memory().percent), 100)
-    except Exception:
-        ram_percent = 0
+    # CPU percent
+    if STAT_TYPES['cpu_percent'] in enabled_set:
+        try:
+            val = min(int(psutil.cpu_percent(interval=None)), 100)
+        except Exception:
+            val = 0
+        stats_list.append((STAT_TYPES['cpu_percent'], val))
 
-    # GPU
-    gpu_percent, gpu_temp = gpu_collector.collect()
+    # RAM percent
+    if STAT_TYPES['ram_percent'] in enabled_set:
+        try:
+            val = min(int(psutil.virtual_memory().percent), 100)
+        except Exception:
+            val = 0
+        stats_list.append((STAT_TYPES['ram_percent'], val))
 
-    # CPU temperature
-    cpu_temp = get_cpu_temp()
+    # GPU percent & temp
+    need_gpu = (STAT_TYPES['gpu_percent'] in enabled_set or
+                STAT_TYPES['gpu_temp'] in enabled_set or
+                STAT_TYPES['gpu_mem_pct'] in enabled_set or
+                STAT_TYPES['gpu_power_w'] in enabled_set or
+                STAT_TYPES['gpu_freq'] in enabled_set)
+    if need_gpu:
+        gpu_pct, gpu_temp = gpu_collector.collect()
+        if STAT_TYPES['gpu_percent'] in enabled_set:
+            stats_list.append((STAT_TYPES['gpu_percent'], gpu_pct))
+        if STAT_TYPES['gpu_temp'] in enabled_set:
+            stats_list.append((STAT_TYPES['gpu_temp'], gpu_temp))
+        # Extended GPU stats (NVIDIA only)
+        if gpu_collector.gpu_type == "nvidia":
+            gpu_mem, gpu_power, gpu_freq = gpu_collector.collect_extended()
+            if STAT_TYPES['gpu_mem_pct'] in enabled_set:
+                stats_list.append((STAT_TYPES['gpu_mem_pct'], gpu_mem))
+            if STAT_TYPES['gpu_power_w'] in enabled_set:
+                stats_list.append((STAT_TYPES['gpu_power_w'], gpu_power))
+            if STAT_TYPES['gpu_freq'] in enabled_set:
+                stats_list.append((STAT_TYPES['gpu_freq'], gpu_freq))
+        else:
+            if STAT_TYPES['gpu_mem_pct'] in enabled_set:
+                stats_list.append((STAT_TYPES['gpu_mem_pct'], 0xFF))
+            if STAT_TYPES['gpu_power_w'] in enabled_set:
+                stats_list.append((STAT_TYPES['gpu_power_w'], 0))
+            if STAT_TYPES['gpu_freq'] in enabled_set:
+                stats_list.append((STAT_TYPES['gpu_freq'], 0))
 
-    # Disk
-    try:
-        disk_percent = min(int(psutil.disk_usage("/").percent), 100)
-    except Exception:
-        disk_percent = 0
+    # CPU temp
+    if STAT_TYPES['cpu_temp'] in enabled_set:
+        stats_list.append((STAT_TYPES['cpu_temp'], get_cpu_temp()))
 
-    # Network delta (KB/s)
-    try:
-        curr_net = psutil.net_io_counters()
-        net_up_kbps = int((curr_net.bytes_sent - prev_net.bytes_sent) / dt / 1024)
-        net_down_kbps = int((curr_net.bytes_recv - prev_net.bytes_recv) / dt / 1024)
-        # Clamp to int16 range (struct format uses signed h, but values are positive)
-        net_up_kbps = max(0, min(net_up_kbps, 32767))
-        net_down_kbps = max(0, min(net_down_kbps, 32767))
-    except Exception:
-        curr_net = prev_net
-        net_up_kbps = 0
-        net_down_kbps = 0
+    # Disk percent
+    if STAT_TYPES['disk_percent'] in enabled_set:
+        try:
+            val = min(int(psutil.disk_usage("/").percent), 100)
+        except Exception:
+            val = 0
+        stats_list.append((STAT_TYPES['disk_percent'], val))
 
-    packed = struct.pack(
-        STATS_FORMAT,
-        cpu_percent,
-        ram_percent,
-        gpu_percent,
-        cpu_temp,
-        gpu_temp,
-        disk_percent,
-        net_up_kbps,
-        net_down_kbps,
-    )
+    # Network
+    if STAT_TYPES['net_up'] in enabled_set or STAT_TYPES['net_down'] in enabled_set:
+        try:
+            curr_net = psutil.net_io_counters()
+            net_up = int((curr_net.bytes_sent - prev_net.bytes_sent) / dt / 1024)
+            net_down = int((curr_net.bytes_recv - prev_net.bytes_recv) / dt / 1024)
+            net_up = max(0, min(net_up, 0xFFFF))
+            net_down = max(0, min(net_down, 0xFFFF))
+        except Exception:
+            curr_net = prev_net
+            net_up = 0
+            net_down = 0
+        if STAT_TYPES['net_up'] in enabled_set:
+            stats_list.append((STAT_TYPES['net_up'], net_up))
+        if STAT_TYPES['net_down'] in enabled_set:
+            stats_list.append((STAT_TYPES['net_down'], net_down))
 
-    return (packed, curr_net, now)
+    # CPU freq
+    if STAT_TYPES['cpu_freq'] in enabled_set:
+        stats_list.append((STAT_TYPES['cpu_freq'], get_cpu_freq_mhz()))
+
+    # Swap
+    if STAT_TYPES['swap_percent'] in enabled_set:
+        stats_list.append((STAT_TYPES['swap_percent'], get_swap_percent()))
+
+    # Uptime
+    if STAT_TYPES['uptime_hours'] in enabled_set:
+        stats_list.append((STAT_TYPES['uptime_hours'], get_uptime_hours()))
+
+    # Battery
+    if STAT_TYPES['battery_pct'] in enabled_set:
+        stats_list.append((STAT_TYPES['battery_pct'], get_battery_percent()))
+
+    # Fan RPM
+    if STAT_TYPES['fan_rpm'] in enabled_set:
+        stats_list.append((STAT_TYPES['fan_rpm'], get_fan_rpm()))
+
+    # Load average
+    if STAT_TYPES['load_avg'] in enabled_set:
+        stats_list.append((STAT_TYPES['load_avg'], get_load_avg_x100()))
+
+    # Process count
+    if STAT_TYPES['proc_count'] in enabled_set:
+        stats_list.append((STAT_TYPES['proc_count'], get_proc_count()))
+
+    # Disk I/O
+    if STAT_TYPES['disk_read_kbs'] in enabled_set or STAT_TYPES['disk_write_kbs'] in enabled_set:
+        read_kbs, write_kbs, curr_disk_io = get_disk_io(prev_disk_io, dt)
+        if STAT_TYPES['disk_read_kbs'] in enabled_set:
+            stats_list.append((STAT_TYPES['disk_read_kbs'], read_kbs))
+        if STAT_TYPES['disk_write_kbs'] in enabled_set:
+            stats_list.append((STAT_TYPES['disk_write_kbs'], write_kbs))
+
+    tlv_bytes = encode_stats_tlv(stats_list)
+    return (tlv_bytes, curr_net, now, curr_disk_io)
 
 
 # ---------------------------------------------------------------------------
@@ -439,6 +693,12 @@ def main():
     signal.signal(signal.SIGTERM, _signal_handler)
 
     logging.info("Hotkey Bridge Companion starting...")
+
+    # Load stats config from config.json if present in working dir
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    enabled_stat_types = load_stats_config(config_path)
+    logging.info("Enabled stat types: %s",
+                 [STAT_ID_TO_NAME.get(t, f"0x{t:02X}") for t in enabled_stat_types])
 
     # Initialize GPU collector once at startup
     gpu = GPUCollector()
@@ -474,12 +734,18 @@ def main():
         logging.info("Shutting down (no bridge connected)")
         return
 
-    # Initialize network baseline
+    # Initialize network and disk I/O baselines
     prev_net = psutil.net_io_counters()
     prev_time = time.time()
+    prev_disk_io = None
+    try:
+        prev_disk_io = psutil.disk_io_counters()
+    except Exception:
+        pass
 
     # Main stats loop
-    logging.info("Streaming stats at %.1f Hz", 1.0 / UPDATE_INTERVAL)
+    logging.info("Streaming TLV stats at %.1f Hz (%d stat types)",
+                 1.0 / UPDATE_INTERVAL, len(enabled_stat_types))
     while running:
         # Check for system shutdown signal from D-Bus
         if shutdown_event.is_set():
@@ -493,7 +759,9 @@ def main():
         if not running:
             break
 
-        packed, prev_net, prev_time = collect_stats(gpu, prev_net, prev_time)
+        packed, prev_net, prev_time, prev_disk_io = collect_stats_tlv(
+            gpu, enabled_stat_types, prev_net, prev_time, prev_disk_io
+        )
 
         try:
             # Leading 0x00 is the HID report ID byte required by hidapi on

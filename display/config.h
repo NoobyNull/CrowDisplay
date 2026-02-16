@@ -77,6 +77,21 @@ struct PageConfig {
 };
 
 // ============================================================
+// Stats Header Configuration
+// ============================================================
+
+#define CONFIG_MAX_STATS 8
+
+struct StatConfig {
+    uint8_t type;      // StatType enum value (1-20)
+    uint32_t color;    // Display color (0xRRGGBB)
+    uint8_t position;  // Display order (0-based, left-to-right then row wrap)
+
+    StatConfig() : type(0), color(0xFFFFFF), position(0) {}
+    StatConfig(uint8_t t, uint32_t c, uint8_t p) : type(t), color(c), position(p) {}
+};
+
+// ============================================================
 // Profile Configuration
 // ============================================================
 
@@ -97,7 +112,16 @@ struct AppConfig {
     std::vector<ProfileConfig> profiles;  // All loaded profiles
     uint8_t brightness_level;             // Display brightness (0-100)
 
-    AppConfig() : version(CONFIG_VERSION), active_profile_name(""), profiles(), brightness_level(100) {}
+    // Display mode settings (v0.9.1)
+    uint8_t default_mode;                 // DisplayMode enum value (0=HOTKEYS, 1=CLOCK, 2=PICTURE_FRAME, 3=STANDBY)
+    uint16_t slideshow_interval_sec;      // Picture frame slideshow interval in seconds (default 30)
+    bool clock_analog;                    // true = analog clock, false = digital clock
+
+    // Stats header configuration (v0.9.1)
+    std::vector<StatConfig> stats_header; // User-selected stats (default 8, max CONFIG_MAX_STATS)
+
+    AppConfig() : version(CONFIG_VERSION), active_profile_name(""), profiles(), brightness_level(100),
+                  default_mode(0), slideshow_interval_sec(30), clock_analog(false), stats_header() {}
 
     // Helper: Get currently active profile
     ProfileConfig* get_active_profile() {

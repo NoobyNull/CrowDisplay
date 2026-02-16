@@ -353,6 +353,19 @@ AppConfig config_create_defaults() {
     hyprland.pages.push_back(page3);
 
     cfg.profiles.push_back(hyprland);
+
+    // Default stats header: matches the original hardcoded 8 stats
+    cfg.stats_header = {
+        {STAT_CPU_PERCENT, 0x3498DB, 0},
+        {STAT_RAM_PERCENT, 0x2ECC71, 1},
+        {STAT_GPU_PERCENT, 0xE67E22, 2},
+        {STAT_CPU_TEMP,    0xE74C3C, 3},
+        {STAT_GPU_TEMP,    0xF1C40F, 4},
+        {STAT_NET_UP,      0x1ABC9C, 5},
+        {STAT_NET_DOWN,    0x1ABC9C, 6},
+        {STAT_DISK_PERCENT,0x7F8C8D, 7},
+    };
+
     return cfg;
 }
 
@@ -551,6 +564,41 @@ AppConfig config_load() {
         }
     }
 
+    // Parse stats_header (v0.9.1) -- defaults if missing
+    if (!doc["stats_header"].isNull()) {
+        cfg.stats_header.clear();
+        JsonArray stats_arr = doc["stats_header"].as<JsonArray>();
+        int stat_count = 0;
+        for (JsonObject stat_obj : stats_arr) {
+            if (stat_count >= CONFIG_MAX_STATS) break;
+            StatConfig sc;
+            sc.type = stat_obj["type"] | (uint8_t)0;
+            sc.color = stat_obj["color"] | (uint32_t)0xFFFFFF;
+            sc.position = stat_obj["position"] | (uint8_t)0;
+            // Validate type range
+            if (sc.type < 1 || sc.type > STAT_TYPE_MAX) {
+                Serial.printf("CONFIG: WARNING - invalid stat type %d, skipping\n", sc.type);
+                continue;
+            }
+            cfg.stats_header.push_back(sc);
+            stat_count++;
+        }
+        Serial.printf("CONFIG: Loaded %d stats_header entries\n", (int)cfg.stats_header.size());
+    } else {
+        // No stats_header in JSON -- apply defaults (matches original hardcoded 8)
+        cfg.stats_header = {
+            {STAT_CPU_PERCENT, 0x3498DB, 0},
+            {STAT_RAM_PERCENT, 0x2ECC71, 1},
+            {STAT_GPU_PERCENT, 0xE67E22, 2},
+            {STAT_CPU_TEMP,    0xE74C3C, 3},
+            {STAT_GPU_TEMP,    0xF1C40F, 4},
+            {STAT_NET_UP,      0x1ABC9C, 5},
+            {STAT_NET_DOWN,    0x1ABC9C, 6},
+            {STAT_DISK_PERCENT,0x7F8C8D, 7},
+        };
+        Serial.println("CONFIG: No stats_header in JSON, using 8 defaults");
+    }
+
     // Validate: ensure active profile exists
     if (cfg.profiles.empty() || !cfg.get_active_profile()) {
         Serial.println("CONFIG: Invalid configuration (no valid active profile), using defaults");
@@ -615,6 +663,17 @@ bool config_save(const AppConfig& config) {
     for (const auto& profile : config.profiles) {
         JsonObject profile_obj = profiles_array.add<JsonObject>();
         profile_to_json(profile_obj, profile);
+    }
+
+    // Serialize stats_header
+    if (!config.stats_header.empty()) {
+        JsonArray stats_arr = doc["stats_header"].to<JsonArray>();
+        for (const auto& sc : config.stats_header) {
+            JsonObject stat_obj = stats_arr.add<JsonObject>();
+            stat_obj["type"] = sc.type;
+            stat_obj["color"] = sc.color;
+            stat_obj["position"] = sc.position;
+        }
     }
 
     // Serialize to string
