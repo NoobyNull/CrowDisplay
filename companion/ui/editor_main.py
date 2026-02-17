@@ -71,6 +71,15 @@ from companion.config_manager import (
     ACTION_DISPLAY_SETTINGS,
     ACTION_DISPLAY_CLOCK,
     ACTION_DISPLAY_PICTURE,
+    ACTION_PAGE_NEXT,
+    ACTION_PAGE_PREV,
+    ACTION_PAGE_GOTO,
+    ACTION_MODE_CYCLE,
+    ACTION_BRIGHTNESS,
+    ACTION_CONFIG_MODE,
+    ACTION_TYPE_NAMES,
+    ENCODER_MODE_NAMES,
+    DISPLAY_LOCAL_ACTIONS,
     MOD_NONE,
     DISPLAY_WIDTH,
     DISPLAY_HEIGHT,
@@ -81,6 +90,8 @@ from companion.config_manager import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_ICONS_DIR,
     make_default_widget,
+    get_default_hardware_buttons,
+    get_default_encoder,
 )
 from companion.ui.icon_picker import IconPicker
 from companion.ui.keyboard_recorder import KeyboardRecorder
@@ -1265,6 +1276,7 @@ class PropertiesPanel(QScrollArea):
     """Right sidebar for editing selected widget properties."""
 
     widget_updated = Signal(str, dict)  # widget_id, updated widget_dict
+    hw_config_updated = Signal()  # hardware input config changed
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1286,7 +1298,8 @@ class PropertiesPanel(QScrollArea):
         self.main_layout.addWidget(self.type_label)
 
         # Position group
-        pos_group = QGroupBox("Position && Size")
+        self.pos_group = QGroupBox("Position && Size")
+        pos_group = self.pos_group
         pos_layout = QGridLayout()
         self.x_spin = QSpinBox()
         self.x_spin.setRange(0, DISPLAY_WIDTH)
@@ -1316,7 +1329,8 @@ class PropertiesPanel(QScrollArea):
             spin.setFocusPolicy(Qt.StrongFocus)
 
         # Common group: label + color
-        common_group = QGroupBox("Common")
+        self.common_group = QGroupBox("Common")
+        common_group = self.common_group
         common_layout = QVBoxLayout()
 
         common_layout.addWidget(QLabel("Label:"))
@@ -1393,16 +1407,22 @@ class PropertiesPanel(QScrollArea):
 
         hotkey_layout.addWidget(QLabel("Action Type:"))
         self.action_type_combo = NoScrollComboBox()
-        self.action_type_combo.addItem("Keyboard Shortcut", ACTION_HOTKEY)
-        self.action_type_combo.addItem("Media Key", ACTION_MEDIA_KEY)
-        self.action_type_combo.addItem("Launch App", ACTION_LAUNCH_APP)
-        self.action_type_combo.addItem("Shell Command", ACTION_SHELL_CMD)
-        self.action_type_combo.addItem("Open URL", ACTION_OPEN_URL)
-        self.action_type_combo.addItem("Display: Settings", ACTION_DISPLAY_SETTINGS)
-        self.action_type_combo.addItem("Display: Clock Mode", ACTION_DISPLAY_CLOCK)
-        self.action_type_combo.addItem("Display: Picture Frame", ACTION_DISPLAY_PICTURE)
+        for action_id, action_name in ACTION_TYPE_NAMES.items():
+            self.action_type_combo.addItem(action_name, action_id)
         self.action_type_combo.currentIndexChanged.connect(self._on_action_type_changed)
         hotkey_layout.addWidget(self.action_type_combo)
+
+        # Page number spinner (for ACTION_PAGE_GOTO)
+        self.page_goto_label = QLabel("Target Page:")
+        self.page_goto_label.setVisible(False)
+        hotkey_layout.addWidget(self.page_goto_label)
+        self.page_goto_spin = QSpinBox()
+        self.page_goto_spin.setRange(1, 16)
+        self.page_goto_spin.setValue(1)
+        self.page_goto_spin.setFocusPolicy(Qt.StrongFocus)
+        self.page_goto_spin.setVisible(False)
+        self.page_goto_spin.valueChanged.connect(self._on_property_changed)
+        hotkey_layout.addWidget(self.page_goto_spin)
 
         self.shortcut_label = QLabel("Shortcut:")
         hotkey_layout.addWidget(self.shortcut_label)
@@ -1570,19 +1590,76 @@ class PropertiesPanel(QScrollArea):
         self.separator_group.setLayout(sep_layout)
         self.main_layout.addWidget(self.separator_group)
 
+        # Hardware Input group (for encoder rotation mode)
+        self.hw_encoder_group = QGroupBox("Encoder Rotation")
+        enc_layout = QVBoxLayout()
+        enc_layout.addWidget(QLabel("Rotation Mode:"))
+        self.encoder_mode_combo = NoScrollComboBox()
+        for mode_id, mode_name in ENCODER_MODE_NAMES.items():
+            self.encoder_mode_combo.addItem(mode_name, mode_id)
+        self.encoder_mode_combo.currentIndexChanged.connect(self._on_hw_property_changed)
+        enc_layout.addWidget(self.encoder_mode_combo)
+        self.encoder_mode_info = QLabel("")
+        self.encoder_mode_info.setStyleSheet("color: #888; font-size: 10px;")
+        self.encoder_mode_info.setWordWrap(True)
+        enc_layout.addWidget(self.encoder_mode_info)
+        self.hw_encoder_group.setLayout(enc_layout)
+        self.main_layout.addWidget(self.hw_encoder_group)
+
+        # Hardware action group (reuses action type combo for hw buttons/encoder push)
+        self.hw_action_group = QGroupBox("Action")
+        hw_action_layout = QVBoxLayout()
+        hw_action_layout.addWidget(QLabel("Action Type:"))
+        self.hw_action_type_combo = NoScrollComboBox()
+        for action_id, action_name in ACTION_TYPE_NAMES.items():
+            self.hw_action_type_combo.addItem(action_name, action_id)
+        self.hw_action_type_combo.currentIndexChanged.connect(self._on_hw_action_type_changed)
+        hw_action_layout.addWidget(self.hw_action_type_combo)
+
+        hw_action_layout.addWidget(QLabel("Label:"))
+        self.hw_label_input = QLineEdit()
+        self.hw_label_input.setMaxLength(32)
+        self.hw_label_input.textChanged.connect(self._on_hw_property_changed)
+        hw_action_layout.addWidget(self.hw_label_input)
+
+        # Page goto for hardware
+        self.hw_page_goto_label = QLabel("Target Page:")
+        self.hw_page_goto_label.setVisible(False)
+        hw_action_layout.addWidget(self.hw_page_goto_label)
+        self.hw_page_goto_spin = QSpinBox()
+        self.hw_page_goto_spin.setRange(1, 16)
+        self.hw_page_goto_spin.setValue(1)
+        self.hw_page_goto_spin.setFocusPolicy(Qt.StrongFocus)
+        self.hw_page_goto_spin.setVisible(False)
+        self.hw_page_goto_spin.valueChanged.connect(self._on_hw_property_changed)
+        hw_action_layout.addWidget(self.hw_page_goto_spin)
+
+        self.hw_action_group.setLayout(hw_action_layout)
+        self.main_layout.addWidget(self.hw_action_group)
+
         self.main_layout.addStretch()
         self.setWidget(container)
+
+        # Hardware input state
+        self._hw_mode = False  # True when showing hardware input properties
+        self._hw_type = None   # "button" or "encoder"
+        self._hw_index = -1
+        self._hw_config_manager = None
 
         # Initially hide all type-specific groups
         self._hide_all_groups()
 
     def _hide_all_groups(self):
+        self.pos_group.setVisible(False)
+        self.common_group.setVisible(False)
         self.hotkey_group.setVisible(False)
         self.stat_group.setVisible(False)
         self.status_bar_group.setVisible(False)
         self.clock_group.setVisible(False)
         self.text_group.setVisible(False)
         self.separator_group.setVisible(False)
+        self.hw_encoder_group.setVisible(False)
+        self.hw_action_group.setVisible(False)
 
     def clear_selection(self):
         """Clear the properties panel (no widget selected)."""
@@ -1619,6 +1696,8 @@ class PropertiesPanel(QScrollArea):
 
         # Show/hide type-specific groups
         self._hide_all_groups()
+        self.pos_group.setVisible(True)
+        self.common_group.setVisible(True)
 
         if wtype == WIDGET_HOTKEY_BUTTON:
             self.hotkey_group.setVisible(True)
@@ -1715,7 +1794,135 @@ class PropertiesPanel(QScrollArea):
             self.sep_vertical_check.setChecked(widget_dict.get("separator_vertical", False))
             self.thickness_spin.setValue(widget_dict.get("thickness", 2))
 
+        self._hw_mode = False
         self._updating = False
+
+    def load_hardware_input(self, config_manager, hw_type, index):
+        """Load hardware button or encoder properties into the panel."""
+        self._updating = True
+        self._hw_mode = True
+        self._hw_type = hw_type
+        self._hw_index = index
+        self._hw_config_manager = config_manager
+        self._widget_dict = None
+        self._widget_idx = -1
+        self._widget_id = ""
+
+        self._hide_all_groups()
+
+        if hw_type == "button":
+            buttons = config_manager.config.get("hardware_buttons", get_default_hardware_buttons())
+            if index < len(buttons):
+                btn_cfg = buttons[index]
+            else:
+                btn_cfg = get_default_hardware_buttons()[0]
+
+            self.type_label.setText(f"Hardware Button {index + 1}")
+            self.hw_action_group.setVisible(True)
+
+            # Set action type
+            action_type = btn_cfg.get("action_type", ACTION_PAGE_NEXT)
+            for i in range(self.hw_action_type_combo.count()):
+                if self.hw_action_type_combo.itemData(i) == action_type:
+                    self.hw_action_type_combo.setCurrentIndex(i)
+                    break
+            self._update_hw_action_visibility(action_type)
+
+            # Set label
+            self.hw_label_input.setText(btn_cfg.get("label", ""))
+
+            # Page goto
+            self.hw_page_goto_spin.setValue(btn_cfg.get("keycode", 0) + 1)
+
+        elif hw_type == "encoder":
+            encoder = config_manager.config.get("encoder", get_default_encoder())
+
+            self.type_label.setText("Rotary Encoder")
+            self.hw_action_group.setVisible(True)
+            self.hw_encoder_group.setVisible(True)
+
+            # Set push action type
+            push_action = encoder.get("push_action", ACTION_BRIGHTNESS)
+            for i in range(self.hw_action_type_combo.count()):
+                if self.hw_action_type_combo.itemData(i) == push_action:
+                    self.hw_action_type_combo.setCurrentIndex(i)
+                    break
+            self._update_hw_action_visibility(push_action)
+
+            # Set push label
+            self.hw_label_input.setText(encoder.get("push_label", ""))
+
+            # Set encoder mode
+            enc_mode = encoder.get("encoder_mode", 0)
+            for i in range(self.encoder_mode_combo.count()):
+                if self.encoder_mode_combo.itemData(i) == enc_mode:
+                    self.encoder_mode_combo.setCurrentIndex(i)
+                    break
+            self._update_encoder_mode_info(enc_mode)
+
+            # Page goto
+            self.hw_page_goto_spin.setValue(encoder.get("push_keycode", 0) + 1)
+
+        self._updating = False
+
+    def _update_hw_action_visibility(self, action_type):
+        """Show/hide hardware action fields based on action type."""
+        is_goto = (action_type == ACTION_PAGE_GOTO)
+        self.hw_page_goto_label.setVisible(is_goto)
+        self.hw_page_goto_spin.setVisible(is_goto)
+
+    def _update_encoder_mode_info(self, mode):
+        """Show informational text about what encoder rotation does in each mode."""
+        info_texts = {
+            0: "CW: Next page, CCW: Previous page",
+            1: "CW: Volume up, CCW: Volume down",
+            2: "CW: Brighter, CCW: Dimmer",
+            3: "CW: Next widget, CCW: Previous widget, Push: Activate",
+            4: "CW: Next mode, CCW: Previous mode",
+        }
+        self.encoder_mode_info.setText(info_texts.get(mode, ""))
+
+    def _on_hw_action_type_changed(self):
+        action_type = self.hw_action_type_combo.currentData()
+        self._update_hw_action_visibility(action_type)
+        if not self._updating:
+            self._save_hw_config()
+
+    def _on_hw_property_changed(self, *args):
+        if not self._updating:
+            self._save_hw_config()
+            # Update encoder mode info
+            if self._hw_type == "encoder":
+                mode = self.encoder_mode_combo.currentData()
+                if mode is not None:
+                    self._update_encoder_mode_info(mode)
+
+    def _save_hw_config(self):
+        """Write hardware input changes back to config dict."""
+        if not self._hw_mode or self._hw_config_manager is None:
+            return
+
+        if self._hw_type == "button":
+            buttons = self._hw_config_manager.config.get("hardware_buttons", get_default_hardware_buttons())
+            if self._hw_index < len(buttons):
+                btn = buttons[self._hw_index]
+                btn["action_type"] = self.hw_action_type_combo.currentData() or ACTION_PAGE_NEXT
+                btn["label"] = self.hw_label_input.text()
+                if btn["action_type"] == ACTION_PAGE_GOTO:
+                    btn["keycode"] = self.hw_page_goto_spin.value() - 1
+                self._hw_config_manager.config["hardware_buttons"] = buttons
+
+        elif self._hw_type == "encoder":
+            encoder = self._hw_config_manager.config.get("encoder", get_default_encoder())
+            encoder["push_action"] = self.hw_action_type_combo.currentData() or ACTION_BRIGHTNESS
+            encoder["push_label"] = self.hw_label_input.text()
+            encoder["encoder_mode"] = self.encoder_mode_combo.currentData() or 0
+            if encoder["push_action"] == ACTION_PAGE_GOTO:
+                encoder["push_keycode"] = self.hw_page_goto_spin.value() - 1
+            self._hw_config_manager.config["encoder"] = encoder
+
+        self._hw_config_manager._emit_changed()
+        self.hw_config_updated.emit()
 
     def update_position(self, x, y, w, h):
         """Update position spinboxes without triggering property changed."""
@@ -1862,6 +2069,11 @@ class PropertiesPanel(QScrollArea):
         is_url = (action_type == ACTION_OPEN_URL)
         self.url_label.setVisible(is_url)
         self.url_input.setVisible(is_url)
+
+        # Page goto section
+        is_goto = (action_type == ACTION_PAGE_GOTO)
+        self.page_goto_label.setVisible(is_goto)
+        self.page_goto_spin.setVisible(is_goto)
 
     def _ensure_apps_loaded(self):
         """Lazy-load applications list into app_picker_combo."""
@@ -2074,6 +2286,115 @@ class PropertiesPanel(QScrollArea):
 
 
 # ============================================================
+# Hardware Input Section
+# ============================================================
+
+class HardwareSection(QWidget):
+    """Hardware button/encoder strip below the canvas, simulating the device bezel."""
+
+    hw_input_selected = Signal(str, int)  # "button" or "encoder", index (0-3 for buttons, 0 for encoder)
+    hw_input_deselected = Signal()
+    hw_config_changed = Signal()
+
+    def __init__(self, config_manager, parent=None):
+        super().__init__(parent)
+        self.config_manager = config_manager
+        self._selected_type = None  # "button" or "encoder"
+        self._selected_index = -1
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 4, 0, 0)
+
+        header = QLabel("Hardware Inputs")
+        header.setStyleSheet("color: #888; font-size: 11px; font-weight: bold;")
+        outer.addWidget(header)
+
+        strip = QWidget()
+        strip.setStyleSheet("background: #2a2a2a; border: 1px solid #444; border-radius: 4px;")
+        strip_layout = QHBoxLayout(strip)
+        strip_layout.setContentsMargins(8, 6, 8, 6)
+        strip_layout.setSpacing(8)
+
+        # 4 hardware buttons
+        self.hw_buttons = []
+        for i in range(4):
+            btn = QPushButton(f"B{i+1}")
+            btn.setFixedSize(100, 50)
+            btn.setStyleSheet(self._button_style(False))
+            btn.clicked.connect(lambda checked, idx=i: self._on_button_clicked(idx))
+            strip_layout.addWidget(btn)
+            self.hw_buttons.append(btn)
+
+        strip_layout.addSpacing(16)
+
+        # Encoder widget
+        self.enc_button = QPushButton("ENC")
+        self.enc_button.setFixedSize(60, 60)
+        self.enc_button.setStyleSheet(self._encoder_style(False))
+        self.enc_button.clicked.connect(self._on_encoder_clicked)
+        strip_layout.addWidget(self.enc_button)
+
+        strip_layout.addStretch()
+        outer.addWidget(strip)
+
+    def _button_style(self, selected):
+        base = ("QPushButton { background: #3a3a3a; border: 2px solid %s; "
+                "border-radius: 4px; color: %s; font-weight: bold; font-size: 12px; }"
+                "QPushButton:hover { background: #4a4a4a; }")
+        if selected:
+            return base % ("#FFD700", "#FFD700")
+        return base % ("#555", "#aaa")
+
+    def _encoder_style(self, selected):
+        base = ("QPushButton { background: #3a3a3a; border: 2px solid %s; "
+                "border-radius: 30px; color: %s; font-weight: bold; font-size: 11px; }"
+                "QPushButton:hover { background: #4a4a4a; }")
+        if selected:
+            return base % ("#FFD700", "#FFD700")
+        return base % ("#555", "#aaa")
+
+    def _on_button_clicked(self, index):
+        self._select("button", index)
+
+    def _on_encoder_clicked(self):
+        self._select("encoder", 0)
+
+    def _select(self, hw_type, index):
+        # Deselect previous
+        self._clear_highlight()
+        self._selected_type = hw_type
+        self._selected_index = index
+        # Highlight selected
+        if hw_type == "button":
+            self.hw_buttons[index].setStyleSheet(self._button_style(True))
+        else:
+            self.enc_button.setStyleSheet(self._encoder_style(True))
+        self.hw_input_selected.emit(hw_type, index)
+
+    def deselect(self):
+        """Deselect any hardware input (called when canvas widget is selected)."""
+        if self._selected_type is not None:
+            self._clear_highlight()
+            self._selected_type = None
+            self._selected_index = -1
+
+    def _clear_highlight(self):
+        for btn in self.hw_buttons:
+            btn.setStyleSheet(self._button_style(False))
+        self.enc_button.setStyleSheet(self._encoder_style(False))
+
+    def update_labels(self):
+        """Update button labels from config."""
+        buttons = self.config_manager.config.get("hardware_buttons", get_default_hardware_buttons())
+        for i, btn in enumerate(self.hw_buttons):
+            if i < len(buttons):
+                label = buttons[i].get("label", f"B{i+1}")
+                btn.setText(label[:10] if label else f"B{i+1}")
+            else:
+                btn.setText(f"B{i+1}")
+
+
+# ============================================================
 # Editor Main Window
 # ============================================================
 
@@ -2149,6 +2470,12 @@ class EditorMainWindow(QMainWindow):
         page_layout.addWidget(self.deploy_btn)
 
         center_layout.addWidget(page_toolbar)
+
+        # Hardware input section below canvas
+        self.hardware_section = HardwareSection(self.config_manager)
+        self.hardware_section.hw_input_selected.connect(self._on_hw_input_selected)
+        center_layout.addWidget(self.hardware_section)
+
         main_layout.addWidget(center_widget, stretch=1)
 
         # Right: Tabbed panel (Widget Properties | Settings | Stats | Notifications)
@@ -2165,6 +2492,7 @@ class EditorMainWindow(QMainWindow):
         # Tab 1: Widget Properties
         self.properties_panel = PropertiesPanel()
         self.properties_panel.widget_updated.connect(self._on_widget_property_changed)
+        self.properties_panel.hw_config_updated.connect(self._on_hw_config_changed)
         right_tabs.addTab(self.properties_panel, "Widget")
 
         # Tab 2: Display Settings
@@ -2233,6 +2561,7 @@ class EditorMainWindow(QMainWindow):
         self._load_display_mode_settings()
         self.stats_panel.load_from_config()
         self.notifications_panel.load_from_config()
+        self.hardware_section.update_labels()
         self._rebuild_canvas()
         self._update_page_display()
 
@@ -2398,6 +2727,8 @@ class EditorMainWindow(QMainWindow):
     # -- Canvas signal handlers --
 
     def _on_canvas_widget_selected(self, widget_id):
+        # Deselect hardware inputs when canvas widget is selected
+        self.hardware_section.deselect()
         widget_idx = self._resolve_widget_idx(widget_id)
         if widget_idx < 0:
             return
@@ -2598,6 +2929,7 @@ class EditorMainWindow(QMainWindow):
             self._load_display_mode_settings()
             self.stats_panel.load_from_config()
             self.notifications_panel.load_from_config()
+            self.hardware_section.update_labels()
             self.statusBar().showMessage("Created new config")
 
     def _on_file_open(self):
@@ -2615,6 +2947,7 @@ class EditorMainWindow(QMainWindow):
                 self._load_display_mode_settings()
                 self.stats_panel.load_from_config()
                 self.notifications_panel.load_from_config()
+                self.hardware_section.update_labels()
                 self.statusBar().showMessage(f"Loaded: {file_path}")
             else:
                 QMessageBox.critical(self, "Error", f"Failed to load: {file_path}")
@@ -2668,6 +3001,24 @@ class EditorMainWindow(QMainWindow):
 
     def _on_notifications_changed(self):
         self.statusBar().showMessage("Notification settings updated")
+
+    # -- Hardware input handlers --
+
+    def _on_hw_input_selected(self, hw_type, index):
+        """Hardware button or encoder clicked in the hardware section."""
+        # Deselect any canvas widget
+        self.canvas_scene.clearSelection()
+        self.properties_panel.load_hardware_input(
+            self.config_manager, hw_type, index
+        )
+        if hw_type == "button":
+            self.statusBar().showMessage(f"Selected: Hardware Button {index + 1}")
+        else:
+            self.statusBar().showMessage("Selected: Rotary Encoder")
+
+    def _on_hw_config_changed(self):
+        """Hardware config changed in properties panel -- update button labels."""
+        self.hardware_section.update_labels()
 
     def _on_test_action_clicked(self):
         """Fire the currently configured action directly on the PC."""
