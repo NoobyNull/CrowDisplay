@@ -10,12 +10,12 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 ## Current Position
 
 **Phase:** 11 (Hardware Buttons + System Actions)
-**Current Plan:** 1
+**Current Plan:** 4
 **Total Plans in Phase:** 4
-**Status:** Executing (plan 11-01 complete)
+**Status:** Complete (all 4 plans executed)
 **Last Activity:** 2026-02-16
 
-Progress: [#####...............] 25% (11-01 complete)
+Progress: [####################] 100% (11-01 through 11-04 complete)
 
 ## Performance Metrics
 
@@ -37,6 +37,7 @@ Progress: [#####...............] 25% (11-01 complete)
 | 08 | 3 | 7min | 2.3min |
 | 09 | 5 | ~60min | ~12min |
 | 10 | 3 | 11min | 3.7min |
+| 11 | 4 | 27min | 6.75min |
 
 *Updated after each plan completion*
 
@@ -91,10 +92,16 @@ Recent decisions affecting current work:
 - [Phase 10]: NoScrollComboBox replaces all QComboBox in editor to prevent scroll wheel hijacking
 - [Phase 10]: Lazy-load app picker on first use of Launch App action type
 - [Phase 10]: Test Action fires on background thread to avoid UI freeze
+- [Phase 11]: PCF8575 auto-detected at 0x20-0x27 on TCA9548A channel 0 -- graceful degradation if absent
+- [Phase 11]: Active LOW pin logic for buttons (pressed = bit 0)
+- [Phase 11]: Encoder switch in app-select mode fires focused widget; normal mode uses push_action config
+- [Phase 11]: Config.json protected from deletion via HTTP API (403 Forbidden)
+- [Phase 11]: PropertiesPanel dual mode: canvas widget mode vs hardware input mode
+- [Phase 11]: Settings accessed via toggle button in page toolbar with QStackedWidget view swap
 
 ### Pending Todos
 
-1. **Add physical buttons rotary encoder and display function settings** (companion) -- map hardware buttons/encoder to actions, add clock/slideshow settings in companion editor
+*(No pending todos -- Phase 11 completed all hardware button/encoder/settings requirements)*
 
 ### Roadmap Evolution
 
@@ -109,5 +116,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 11-01-PLAN.md (Config model + system action types)
+Stopped at: Completed Phase 11 (all 4 plans: config model, PCF8575 driver, companion config/editor, settings tab)
 Resume file: None
