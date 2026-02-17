@@ -31,3 +31,11 @@ bool sdcard_file_rename(const char *old_path, const char *new_path);
 
 // Create a directory on SD card (recursive). Returns true on success or if already exists.
 bool sdcard_mkdir(const char *path);
+
+// List files in a directory. Calls callback for each entry.
+// Returns number of entries, or -1 on error.
+typedef void (*sdcard_dir_callback_t)(const char* name, size_t size, bool is_dir, void* user_data);
+int sdcard_list_dir(const char* path, sdcard_dir_callback_t cb, void* user_data);
+
+// Get SD card usage stats. Returns total and used in bytes.
+bool sdcard_get_usage(uint64_t* total_bytes, uint64_t* used_bytes);

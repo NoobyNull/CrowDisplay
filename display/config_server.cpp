@@ -438,6 +438,89 @@ static void handle_image_done() {
     }
 }
 
+// ============================================================
+// SD Card Management Endpoints
+// ============================================================
+
+// GET /api/sd/usage
+static void handle_sd_usage() {
+    last_activity_time = millis();
+    uint64_t total, used;
+    if (!sdcard_get_usage(&total, &used)) {
+        web_server->send(503, "application/json", "{\"error\":\"SD not mounted\"}");
+        return;
+    }
+    uint32_t total_mb = (uint32_t)(total / (1024 * 1024));
+    uint32_t used_mb = (uint32_t)(used / (1024 * 1024));
+    uint32_t free_mb = total_mb > used_mb ? total_mb - used_mb : 0;
+    String json = "{\"total_mb\":" + String(total_mb) +
+                  ",\"used_mb\":" + String(used_mb) +
+                  ",\"free_mb\":" + String(free_mb) + "}";
+    web_server->send(200, "application/json", json);
+}
+
+// GET /api/sd/list?path=/
+struct ListContext { String json; bool first; };
+
+static void list_entry_cb(const char* name, size_t size, bool is_dir, void* user_data) {
+    ListContext* ctx = (ListContext*)user_data;
+    if (!ctx->first) ctx->json += ",";
+    ctx->first = false;
+    ctx->json += "{\"name\":\"" + String(name) + "\"";
+    ctx->json += ",\"size\":" + String((uint32_t)size);
+    ctx->json += ",\"dir\":" + String(is_dir ? "true" : "false") + "}";
+}
+
+static void handle_sd_list() {
+    last_activity_time = millis();
+    if (!sdcard_mounted()) {
+        web_server->send(503, "application/json", "{\"error\":\"SD not mounted\"}");
+        return;
+    }
+    String path = web_server->hasArg("path") ? web_server->arg("path") : "/";
+    ListContext ctx;
+    ctx.json = "{\"path\":\"" + path + "\",\"files\":[";
+    ctx.first = true;
+    int count = sdcard_list_dir(path.c_str(), list_entry_cb, &ctx);
+    if (count < 0) {
+        web_server->send(404, "application/json", "{\"error\":\"Not a directory\"}");
+        return;
+    }
+    ctx.json += "]}";
+    web_server->send(200, "application/json", ctx.json);
+}
+
+// POST /api/sd/delete (JSON body: {"path": "/slideshow/img.png"})
+static void handle_sd_delete() {
+    last_activity_time = millis();
+    if (!sdcard_mounted()) {
+        web_server->send(503, "application/json", "{\"error\":\"SD not mounted\"}");
+        return;
+    }
+    String body = web_server->arg("plain");
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, body);
+    if (err) {
+        web_server->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+    const char* path = doc["path"];
+    if (!path || strlen(path) == 0) {
+        web_server->send(400, "application/json", "{\"error\":\"Empty path\"}");
+        return;
+    }
+    // Safety: don't allow deleting config files
+    if (strcmp(path, "/config.json") == 0 || strcmp(path, "/config.json.bak") == 0) {
+        web_server->send(403, "application/json", "{\"error\":\"Cannot delete config files\"}");
+        return;
+    }
+    if (sdcard_file_remove(path)) {
+        web_server->send(200, "application/json", "{\"success\":true}");
+    } else {
+        web_server->send(404, "application/json", "{\"error\":\"File not found or delete failed\"}");
+    }
+}
+
 bool config_server_start() {
     if (active) return true;
 
@@ -473,6 +556,9 @@ bool config_server_start() {
     web_server->on("/api/health", HTTP_GET, handle_health);
     web_server->on("/api/config/upload", HTTP_POST, handle_config_done, handle_config_upload);
     web_server->on("/api/image/upload", HTTP_POST, handle_image_done, handle_image_upload);
+    web_server->on("/api/sd/usage", HTTP_GET, handle_sd_usage);
+    web_server->on("/api/sd/list", HTTP_GET, handle_sd_list);
+    web_server->on("/api/sd/delete", HTTP_POST, handle_sd_delete);
     web_server->on("/update", HTTP_POST, handle_ota_done, handle_ota_upload);
     web_server->begin();
     Serial.println("Config Server: web server on port 80");

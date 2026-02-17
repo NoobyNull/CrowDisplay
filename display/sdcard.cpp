@@ -130,3 +130,25 @@ bool sdcard_mkdir(const char *path) {
     Serial.printf("SD: created directory %s\n", path);
     return true;
 }
+
+int sdcard_list_dir(const char* path, sdcard_dir_callback_t cb, void* user_data) {
+    if (!mounted) return -1;
+    File dir = SD.open(path);
+    if (!dir || !dir.isDirectory()) return -1;
+    int count = 0;
+    File entry;
+    while ((entry = dir.openNextFile())) {
+        if (cb) cb(entry.name(), entry.size(), entry.isDirectory(), user_data);
+        count++;
+        entry.close();
+    }
+    dir.close();
+    return count;
+}
+
+bool sdcard_get_usage(uint64_t* total_bytes, uint64_t* used_bytes) {
+    if (!mounted) return false;
+    *total_bytes = SD.totalBytes();
+    *used_bytes = SD.usedBytes();
+    return true;
+}
