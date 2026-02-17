@@ -94,8 +94,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-1. **Execute image support plan from Claude plans** (ui) -- add custom image icons to hotkey buttons via BMP on SD card, Pillow optimizer, HTTP upload endpoint
-2. **Add physical buttons rotary encoder and display function settings** (companion) -- map hardware buttons/encoder to actions, add clock/slideshow settings in companion editor
+1. **Add physical buttons rotary encoder and display function settings** (companion) -- map hardware buttons/encoder to actions, add clock/slideshow settings in companion editor
 
 ### Roadmap Evolution
 
