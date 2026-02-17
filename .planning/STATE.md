@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Tap a button on the display, the correct keyboard shortcut fires on the PC -- reliably, with minimal latency, whether connected by wire or wirelessly.
-**Current focus:** Phase 10 - Companion Action Execution
+**Current focus:** Phase 11 - Hardware Buttons + System Actions
 
 ## Current Position
 
-**Phase:** 10 (Companion Action Execution)
-**Current Plan:** 3
-**Total Plans in Phase:** 3
-**Status:** Phase complete — ready for verification
+**Phase:** 11 (Hardware Buttons + System Actions)
+**Current Plan:** 1
+**Total Plans in Phase:** 4
+**Status:** Executing (plan 11-01 complete)
 **Last Activity:** 2026-02-16
 
-Progress: [####################] 100% (10-01, 10-02, 10-03 complete)
+Progress: [#####...............] 25% (11-01 complete)
 
 ## Performance Metrics
 
@@ -109,5 +109,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 10-03-PLAN.md (Editor UI Overhaul -- Phase 10 complete)
+Stopped at: Completed 11-01-PLAN.md (Config model + system action types)
 Resume file: None
