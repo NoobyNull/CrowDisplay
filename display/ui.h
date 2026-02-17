@@ -40,5 +40,6 @@ AppConfig& get_global_config();
 // Page navigation (called from rotary encoder or touch)
 void ui_next_page();
 void ui_prev_page();
+void ui_goto_page(int page_index);  // Jump to specific page by index
 int ui_get_current_page();
 int ui_get_page_count();

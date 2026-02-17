@@ -2,6 +2,7 @@
 #include "display_hw.h"
 
 #include <Arduino.h>
+#include <vector>
 
 // ============================================================
 // Constants
@@ -128,4 +129,23 @@ void power_cycle_brightness() {
     last_activity_ms = millis();
 
     Serial.printf("[power] Brightness preset %d: %d\n", preset_index, user_brightness);
+}
+
+// ============================================================
+// mode_cycle_next() -- cycle through user-configured enabled modes
+// ============================================================
+void mode_cycle_next(const std::vector<uint8_t>& enabled_modes) {
+    if (enabled_modes.empty()) return;
+    DisplayMode current = display_get_mode();
+    // Find current mode in the enabled list
+    int idx = -1;
+    for (int i = 0; i < (int)enabled_modes.size(); i++) {
+        if (enabled_modes[i] == (uint8_t)current) {
+            idx = i;
+            break;
+        }
+    }
+    // Advance to next in list (wrap around)
+    int next_idx = (idx + 1) % (int)enabled_modes.size();
+    display_set_mode((DisplayMode)enabled_modes[next_idx]);
 }

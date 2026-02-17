@@ -10,6 +10,7 @@
 #include "espnow_link.h"
 #include "power.h"
 #include "config_server.h"
+#include "ui.h"
 #include <WiFi.h>
 
 // ============================================================
@@ -204,6 +205,7 @@ struct ButtonEventData {
     uint8_t page_idx;
     uint8_t widget_idx;
     uint8_t action_type;
+    uint8_t keycode;       // For PAGE_GOTO target page
 };
 static ButtonEventData btn_event_data[CONFIG_MAX_WIDGETS];
 static int btn_event_count = 0;
@@ -234,6 +236,35 @@ static void btn_event_cb(lv_event_t *e) {
                 Serial.println("Button: switch to picture frame mode");
                 display_set_mode(MODE_PICTURE_FRAME);
                 return;
+            case ACTION_PAGE_NEXT:
+                Serial.println("Button: next page");
+                ui_next_page();
+                return;
+            case ACTION_PAGE_PREV:
+                Serial.println("Button: prev page");
+                ui_prev_page();
+                return;
+            case ACTION_PAGE_GOTO:
+                Serial.printf("Button: goto page %d\n", bed->keycode);
+                ui_goto_page(bed->keycode);
+                return;
+            case ACTION_MODE_CYCLE:
+                Serial.println("Button: mode cycle");
+                mode_cycle_next(get_global_config().mode_cycle.enabled_modes);
+                return;
+            case ACTION_BRIGHTNESS:
+                Serial.println("Button: brightness cycle");
+                power_cycle_brightness();
+                return;
+            case ACTION_CONFIG_MODE:
+                Serial.println("Button: enter config mode");
+                if (!config_server_active()) {
+                    if (config_server_start()) show_config_screen();
+                } else {
+                    config_server_stop();
+                    hide_config_screen();
+                }
+                return;
             default:
                 break;
         }
@@ -250,7 +281,7 @@ static void render_hotkey_button(lv_obj_t *parent, const WidgetConfig *cfg, uint
     // Store button identity in static pool for event callback
     ButtonEventData *bed = nullptr;
     if (btn_event_count < CONFIG_MAX_WIDGETS) {
-        btn_event_data[btn_event_count] = {page_idx, widget_idx, (uint8_t)cfg->action_type};
+        btn_event_data[btn_event_count] = {page_idx, widget_idx, (uint8_t)cfg->action_type, cfg->keycode};
         bed = &btn_event_data[btn_event_count++];
     }
     lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, (void *)bed);
@@ -625,6 +656,12 @@ void ui_next_page() {
 void ui_prev_page() {
     if (current_page > 0) {
         show_page(current_page - 1);
+    }
+}
+
+void ui_goto_page(int page_index) {
+    if (page_index >= 0 && page_index < (int)page_containers.size()) {
+        show_page(page_index);
     }
 }
 

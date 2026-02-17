@@ -635,6 +635,51 @@ AppConfig config_load() {
         Serial.println("CONFIG: No stats_header in JSON, using 8 defaults");
     }
 
+    // Hardware buttons (optional, defaults if missing)
+    JsonArray hw_btns = doc["hardware_buttons"];
+    if (!hw_btns.isNull()) {
+        for (int i = 0; i < 4 && i < (int)hw_btns.size(); i++) {
+            JsonObject btn = hw_btns[i];
+            cfg.hw_buttons[i].action_type = (ActionType)(btn["action_type"] | 8); // PAGE_NEXT default
+            cfg.hw_buttons[i].label = btn["label"] | "";
+            cfg.hw_buttons[i].keycode = btn["keycode"] | 0;
+            cfg.hw_buttons[i].consumer_code = btn["consumer_code"] | 0;
+            cfg.hw_buttons[i].modifiers = btn["modifiers"] | 0;
+        }
+    }
+
+    // Encoder (optional)
+    JsonObject enc = doc["encoder"];
+    if (!enc.isNull()) {
+        cfg.encoder.push_action = (ActionType)(enc["push_action"] | 12); // BRIGHTNESS default
+        cfg.encoder.push_label = enc["push_label"] | "Brightness";
+        cfg.encoder.push_keycode = enc["push_keycode"] | 0;
+        cfg.encoder.push_consumer_code = enc["push_consumer_code"] | 0;
+        cfg.encoder.push_modifiers = enc["push_modifiers"] | 0;
+        cfg.encoder.encoder_mode = enc["encoder_mode"] | 0; // page_nav default
+    }
+
+    // Mode cycle (optional)
+    JsonArray modes = doc["mode_cycle"];
+    if (!modes.isNull()) {
+        cfg.mode_cycle.enabled_modes.clear();
+        for (JsonVariant m : modes) {
+            cfg.mode_cycle.enabled_modes.push_back(m.as<uint8_t>());
+        }
+    }
+
+    // Display settings (optional)
+    JsonObject ds = doc["display_settings"];
+    if (!ds.isNull()) {
+        cfg.display_settings.dim_timeout_sec = ds["dim_timeout_sec"] | 60;
+        cfg.display_settings.sleep_timeout_sec = ds["sleep_timeout_sec"] | 300;
+        cfg.display_settings.wake_on_touch = ds["wake_on_touch"] | true;
+        cfg.display_settings.clock_24h = ds["clock_24h"] | true;
+        cfg.display_settings.clock_color_theme = ds["clock_color_theme"] | (uint32_t)0xFFFFFF;
+        cfg.display_settings.slideshow_interval_sec = ds["slideshow_interval_sec"] | 30;
+        cfg.display_settings.slideshow_transition = ds["slideshow_transition"] | "fade";
+    }
+
     // Validate
     if (cfg.profiles.empty() || !cfg.get_active_profile()) {
         Serial.println("CONFIG: Invalid configuration (no valid active profile), using defaults");
@@ -715,6 +760,42 @@ bool config_save(const AppConfig& config) {
             stat_obj["position"] = sc.position;
         }
     }
+
+    // Hardware buttons
+    JsonArray hw_btns = doc["hardware_buttons"].to<JsonArray>();
+    for (int i = 0; i < 4; i++) {
+        JsonObject btn = hw_btns.add<JsonObject>();
+        btn["action_type"] = (uint8_t)config.hw_buttons[i].action_type;
+        btn["label"] = config.hw_buttons[i].label;
+        btn["keycode"] = config.hw_buttons[i].keycode;
+        btn["consumer_code"] = config.hw_buttons[i].consumer_code;
+        btn["modifiers"] = config.hw_buttons[i].modifiers;
+    }
+
+    // Encoder
+    JsonObject enc = doc["encoder"].to<JsonObject>();
+    enc["push_action"] = (uint8_t)config.encoder.push_action;
+    enc["push_label"] = config.encoder.push_label;
+    enc["push_keycode"] = config.encoder.push_keycode;
+    enc["push_consumer_code"] = config.encoder.push_consumer_code;
+    enc["push_modifiers"] = config.encoder.push_modifiers;
+    enc["encoder_mode"] = config.encoder.encoder_mode;
+
+    // Mode cycle
+    JsonArray modes = doc["mode_cycle"].to<JsonArray>();
+    for (uint8_t m : config.mode_cycle.enabled_modes) {
+        modes.add(m);
+    }
+
+    // Display settings
+    JsonObject ds = doc["display_settings"].to<JsonObject>();
+    ds["dim_timeout_sec"] = config.display_settings.dim_timeout_sec;
+    ds["sleep_timeout_sec"] = config.display_settings.sleep_timeout_sec;
+    ds["wake_on_touch"] = config.display_settings.wake_on_touch;
+    ds["clock_24h"] = config.display_settings.clock_24h;
+    ds["clock_color_theme"] = config.display_settings.clock_color_theme;
+    ds["slideshow_interval_sec"] = config.display_settings.slideshow_interval_sec;
+    ds["slideshow_transition"] = config.display_settings.slideshow_transition;
 
     String json_str;
     serializeJson(doc, json_str);
