@@ -47,6 +47,40 @@ def optimize_icon(input_path: str, max_width: int, max_height: int) -> bytes:
     return buf.getvalue()
 
 
+def optimize_for_slideshow(input_path: str) -> bytes:
+    """
+    Optimize an image for the device slideshow (800x480 screen).
+
+    Resizes to fit within 800x480 preserving aspect ratio, converts to JPEG.
+
+    Args:
+        input_path: Path to source image (PNG, JPG, BMP, GIF, SVG, etc.)
+
+    Returns:
+        JPEG-encoded bytes ready for upload to device /pictures/ folder
+
+    Raises:
+        ValueError: If the file is not a valid image
+    """
+    try:
+        img = _open_image(input_path)
+    except Exception as e:
+        raise ValueError(f"Cannot open image: {e}")
+
+    # Convert to RGB for JPEG (no alpha channel)
+    if img.mode in ("RGBA", "P", "LA", "PA"):
+        img = img.convert("RGB")
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+
+    # Resize preserving aspect ratio to fit 800x480
+    img.thumbnail((800, 480), Image.LANCZOS)
+
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=85, optimize=True)
+    return buf.getvalue()
+
+
 def optimize_for_widget(input_path: str, widget_width: int, widget_height: int) -> bytes:
     """
     Optimize an image for use as a button icon within a widget.

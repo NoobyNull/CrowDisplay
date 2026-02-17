@@ -363,9 +363,10 @@ static void handle_ota_done() {
 static uint8_t *g_image_buffer = nullptr;
 static size_t g_image_size = 0;
 static String g_image_filename = "";
+static String g_image_folder = "icons";  // default folder
 static bool g_image_upload_success = false;
 static String g_image_upload_error = "";
-static const size_t MAX_IMAGE_SIZE = 102400;  // 100KB max
+static const size_t MAX_IMAGE_SIZE = 204800;  // 200KB max (slideshow JPEGs can be 50-120KB)
 
 static void handle_image_upload() {
     HTTPUpload &upload = web_server->upload();
@@ -406,11 +407,51 @@ static void handle_image_upload() {
             return;
         }
 
-        // Ensure /icons directory exists
-        sdcard_mkdir("/icons");
+        // Read folder from form field (defaults to "icons")
+        g_image_folder = "icons";
+        if (web_server->hasArg("folder")) {
+            g_image_folder = web_server->arg("folder");
+        }
+
+        // Sanitize folder: strip leading /
+        while (g_image_folder.startsWith("/")) {
+            g_image_folder = g_image_folder.substring(1);
+        }
+
+        // Validate folder: allowlist only
+        if (g_image_folder != "icons" && g_image_folder != "pictures") {
+            g_image_upload_error = "Invalid folder (allowed: icons, pictures)";
+            free(g_image_buffer);
+            g_image_buffer = nullptr;
+            return;
+        }
+
+        // Validate filename: reject path traversal and unsafe chars
+        if (g_image_filename.indexOf("..") >= 0 || g_image_filename.indexOf("/") >= 0 ||
+            g_image_filename.indexOf('\0') >= 0) {
+            g_image_upload_error = "Invalid filename";
+            free(g_image_buffer);
+            g_image_buffer = nullptr;
+            return;
+        }
+
+        // Validate file extension
+        String lower_name = g_image_filename;
+        lower_name.toLowerCase();
+        if (!lower_name.endsWith(".jpg") && !lower_name.endsWith(".jpeg") &&
+            !lower_name.endsWith(".png") && !lower_name.endsWith(".bmp")) {
+            g_image_upload_error = "Invalid file type (allowed: jpg, jpeg, png, bmp)";
+            free(g_image_buffer);
+            g_image_buffer = nullptr;
+            return;
+        }
+
+        // Ensure target directory exists
+        String dir_path = "/" + g_image_folder;
+        sdcard_mkdir(dir_path.c_str());
 
         // Build destination path
-        String dest_path = "/icons/" + g_image_filename;
+        String dest_path = "/" + g_image_folder + "/" + g_image_filename;
 
         if (!sdcard_write_file(dest_path.c_str(), g_image_buffer, g_image_size)) {
             g_image_upload_error = "SD card write failed";
@@ -429,7 +470,7 @@ static void handle_image_upload() {
 
 static void handle_image_done() {
     if (g_image_upload_success) {
-        String path = "/icons/" + g_image_filename;
+        String path = "/" + g_image_folder + "/" + g_image_filename;
         String response = "{\"success\":true,\"path\":\"" + path + "\"}";
         web_server->send(200, "application/json", response);
     } else {

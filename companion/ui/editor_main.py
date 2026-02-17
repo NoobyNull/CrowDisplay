@@ -2301,15 +2301,55 @@ class SettingsTab(QScrollArea):
         self._http_client = None
 
         self.setWidgetResizable(True)
-        self.setStyleSheet("background: #0d1117; border: none;")
+        self.setStyleSheet("""
+            QScrollArea { background: #0d1117; border: none; }
+            QGroupBox {
+                font-size: 13px;
+                font-weight: bold;
+                color: #FFD700;
+                border: 1px solid #30363d;
+                border-radius: 6px;
+                margin-top: 14px;
+                padding: 12px 10px 10px 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 12px;
+                padding: 0 6px;
+                background: #0d1117;
+                color: #FFD700;
+            }
+            QLabel { color: #c9d1d9; font-size: 12px; }
+            QCheckBox { color: #c9d1d9; font-size: 12px; }
+            QCheckBox::indicator { width: 14px; height: 14px; }
+            QSpinBox, QComboBox {
+                background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
+                border-radius: 4px; padding: 3px 6px; font-size: 12px;
+            }
+            QPushButton {
+                background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+                border-radius: 4px; padding: 4px 10px; font-size: 12px;
+            }
+            QPushButton:hover { background: #30363d; }
+            QListWidget, QTreeWidget {
+                background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
+                border-radius: 4px; font-size: 12px;
+            }
+            QProgressBar {
+                background: #161b22; border: 1px solid #30363d; border-radius: 4px;
+                text-align: center; color: #c9d1d9; font-size: 11px;
+            }
+            QProgressBar::chunk { background: #238636; border-radius: 3px; }
+        """)
 
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(6)
 
         title = QLabel("Display Settings")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #FFD700; margin-bottom: 8px;")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #FFD700; margin-bottom: 4px;")
         layout.addWidget(title)
 
         # 1. Clock Settings
@@ -2362,7 +2402,7 @@ class SettingsTab(QScrollArea):
         trans_row.addStretch()
         ss_layout.addLayout(trans_row)
 
-        info = QLabel("Images must be placed in /slideshow/ folder on SD card")
+        info = QLabel("Images are stored in /pictures/ folder on SD card")
         info.setStyleSheet("color: #888; font-size: 10px; font-style: italic;")
         info.setWordWrap(True)
         ss_layout.addWidget(info)
@@ -2455,6 +2495,14 @@ class SettingsTab(QScrollArea):
         self.sd_delete_btn.clicked.connect(self._on_sd_delete)
         self.sd_delete_btn.setEnabled(False)
         sd_btn_row.addWidget(self.sd_delete_btn)
+        self.sd_upload_btn = QPushButton("Upload to Slideshow")
+        self.sd_upload_btn.setStyleSheet(
+            "QPushButton { background: #238636; color: #fff; border: 1px solid #2ea043; "
+            "border-radius: 4px; padding: 4px 10px; font-size: 12px; }"
+            "QPushButton:hover { background: #2ea043; }"
+        )
+        self.sd_upload_btn.clicked.connect(self._on_sd_upload_slideshow)
+        sd_btn_row.addWidget(self.sd_upload_btn)
         sd_btn_row.addStretch()
         sd_layout.addLayout(sd_btn_row)
 
@@ -2668,6 +2716,60 @@ class SettingsTab(QScrollArea):
         except Exception as e:
             QMessageBox.warning(self, "Delete Failed", str(e))
 
+    def _on_sd_upload_slideshow(self):
+        if not self._http_client:
+            self.sd_status_label.setText("Not connected -- deploy config to connect")
+            self.sd_status_label.setStyleSheet("color: #E74C3C; font-size: 11px;")
+            return
+
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Select Images for Slideshow", "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.gif *.svg)"
+        )
+        if not files:
+            return
+
+        from companion.image_optimizer import optimize_for_slideshow
+        import os
+
+        uploaded = 0
+        errors = 0
+        for i, path in enumerate(files):
+            basename = os.path.basename(path)
+            # Force .jpg extension since we convert to JPEG
+            name_root = os.path.splitext(basename)[0]
+            dest_name = name_root + ".jpg"
+
+            self.sd_status_label.setText(f"Uploading {i+1}/{len(files)}: {basename}")
+            self.sd_status_label.setStyleSheet("color: #3498db; font-size: 11px;")
+            # Process events so status label updates
+            from PySide6.QtWidgets import QApplication
+            QApplication.processEvents()
+
+            try:
+                data = optimize_for_slideshow(path)
+                result = self._http_client.sd_upload_image(dest_name, data, folder="pictures")
+                if result.get("success"):
+                    uploaded += 1
+                else:
+                    errors += 1
+                    print(f"Upload failed for {basename}: {result.get('error', 'unknown')}")
+            except Exception as e:
+                errors += 1
+                print(f"Skipping {basename}: {e}")
+
+        # Show summary
+        msg = f"Uploaded {uploaded}/{len(files)} images"
+        if errors:
+            msg += f" ({errors} failed)"
+        self.sd_status_label.setText(msg)
+        color = "#2ECC71" if errors == 0 else "#F39C12"
+        self.sd_status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
+
+        # Auto-refresh file list
+        if uploaded > 0:
+            self._on_sd_refresh()
+
     @staticmethod
     def _format_size(size_bytes):
         if size_bytes < 1024:
@@ -2708,9 +2810,11 @@ class HardwareSection(QWidget):
         strip_layout.setContentsMargins(8, 6, 8, 6)
         strip_layout.setSpacing(8)
 
-        # 4 hardware buttons
+        # Centered layout: [stretch] B1 B2 ENC B3 B4 [stretch]
+        strip_layout.addStretch()
+
         self.hw_buttons = []
-        for i in range(4):
+        for i in range(2):
             btn = QPushButton(f"B{i+1}")
             btn.setFixedSize(100, 50)
             btn.setStyleSheet(self._button_style(False))
@@ -2718,14 +2822,20 @@ class HardwareSection(QWidget):
             strip_layout.addWidget(btn)
             self.hw_buttons.append(btn)
 
-        strip_layout.addSpacing(16)
-
-        # Encoder widget
+        # Encoder widget between button pairs
         self.enc_button = QPushButton("ENC")
         self.enc_button.setFixedSize(60, 60)
         self.enc_button.setStyleSheet(self._encoder_style(False))
         self.enc_button.clicked.connect(self._on_encoder_clicked)
         strip_layout.addWidget(self.enc_button)
+
+        for i in range(2, 4):
+            btn = QPushButton(f"B{i+1}")
+            btn.setFixedSize(100, 50)
+            btn.setStyleSheet(self._button_style(False))
+            btn.clicked.connect(lambda checked, idx=i: self._on_button_clicked(idx))
+            strip_layout.addWidget(btn)
+            self.hw_buttons.append(btn)
 
         strip_layout.addStretch()
         outer.addWidget(strip)

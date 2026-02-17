@@ -190,6 +190,60 @@ class HTTPClient:
         except Exception as e:
             raise HTTPClientError(f"Image upload failed: {str(e)}")
 
+    def sd_upload_image(self, filename: str, data: bytes, folder: str = "icons") -> Dict[str, Any]:
+        """
+        Upload an image file to a specific folder on the device SD card.
+
+        Args:
+            filename: Destination filename (e.g., "photo.jpg")
+            data: Raw image bytes
+            folder: Target folder on SD card ("icons" or "pictures")
+
+        Returns:
+            Dict with "success" and "path" or "error" keys
+
+        Raises:
+            HTTPClientError: On connection failure
+        """
+        url = f"{self.base_url}/api/image/upload"
+
+        # Determine MIME type from extension
+        lower = filename.lower()
+        if lower.endswith(".jpg") or lower.endswith(".jpeg"):
+            mime = "image/jpeg"
+        elif lower.endswith(".bmp"):
+            mime = "image/bmp"
+        else:
+            mime = "image/png"
+
+        files = {
+            "image": (filename, data, mime),
+        }
+        form_data = {
+            "folder": folder,
+        }
+
+        try:
+            response = requests.post(url, files=files, data=form_data, timeout=self.timeout)
+
+            if response.status_code == 200:
+                try:
+                    return response.json()
+                except Exception:
+                    return {"success": True, "path": f"/{folder}/{filename}"}
+            else:
+                try:
+                    return response.json()
+                except Exception:
+                    return {"success": False, "error": f"HTTP {response.status_code}"}
+
+        except requests.Timeout:
+            raise HTTPClientError("Image upload timeout")
+        except requests.ConnectionError:
+            raise HTTPClientError("Cannot reach device for image upload")
+        except Exception as e:
+            raise HTTPClientError(f"Image upload failed: {str(e)}")
+
     def sd_usage(self) -> Dict[str, Any]:
         """
         Get SD card usage stats.
