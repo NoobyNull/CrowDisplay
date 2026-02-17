@@ -471,11 +471,12 @@ def _vendor_read_thread(device, hid_lock, config_mgr):
         try:
             with hid_lock:
                 data = device.read(63, timeout=100)
-            if data and len(data) >= 3:
-                msg_type = data[0]
+            if data and len(data) >= 4:
+                # data[0] is the HID report ID (0x06), actual payload starts at data[1]
+                msg_type = data[1]
                 if msg_type == MSG_BUTTON_PRESS:
-                    page_idx = data[1]
-                    widget_idx = data[2]
+                    page_idx = data[2]
+                    widget_idx = data[3]
                     logging.info("Button press: page=%d widget=%d", page_idx, widget_idx)
                     # Execute action on a separate thread to avoid blocking reads
                     threading.Thread(
@@ -553,17 +554,22 @@ def send_power_state(device, state, hid_lock=None):
 
 
 def send_time_sync(device, hid_lock=None):
-    """Send a MSG_TIME_SYNC message with current epoch seconds.
+    """Send a MSG_TIME_SYNC message with current epoch seconds and timezone offset.
 
-    Packet: [0x00 report ID] [0x06 MSG_TIME_SYNC] [uint32 LE epoch]
+    Packet: [0x00 report ID] [0x06 MSG_TIME_SYNC] [uint32 LE epoch] [int16 LE tz_offset_min]
     """
+    import datetime
     epoch = int(time.time())
+    # Get local UTC offset in minutes
+    local_dt = datetime.datetime.now(datetime.timezone.utc).astimezone()
+    tz_offset_min = int(local_dt.utcoffset().total_seconds() // 60)
+    payload = struct.pack("<Ih", epoch, tz_offset_min)
     try:
         if hid_lock:
             with hid_lock:
-                device.write(b"\x06" + bytes([MSG_TIME_SYNC]) + struct.pack("<I", epoch))
+                device.write(b"\x06" + bytes([MSG_TIME_SYNC]) + payload)
         else:
-            device.write(b"\x06" + bytes([MSG_TIME_SYNC]) + struct.pack("<I", epoch))
+            device.write(b"\x06" + bytes([MSG_TIME_SYNC]) + payload)
     except (IOError, OSError) as exc:
         logging.debug("Failed to send time sync: %s", exc)
 
@@ -1227,11 +1233,12 @@ class CompanionService:
             try:
                 with self._hid_lock:
                     data = self._device.read(63, timeout=100)
-                if data and len(data) >= 3:
-                    msg_type = data[0]
+                if data and len(data) >= 4:
+                    # data[0] is the HID report ID (0x06), actual payload starts at data[1]
+                    msg_type = data[1]
                     if msg_type == MSG_BUTTON_PRESS:
-                        page_idx = data[1]
-                        widget_idx = data[2]
+                        page_idx = data[2]
+                        widget_idx = data[3]
                         logging.info("Button press: page=%d widget=%d", page_idx, widget_idx)
                         if self.on_button_press:
                             self.on_button_press(page_idx, widget_idx)
