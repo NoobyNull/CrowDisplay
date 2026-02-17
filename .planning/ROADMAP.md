@@ -142,6 +142,7 @@ Phases execute in numeric order: 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 8. Desktop GUI Editor | v0.8 | 3/3 | Complete | 2026-02-15 |
 | 9. Tweaks and Break-Fix | v0.9.1 | Complete | 2026-02-16 |
 | 10. Companion Action Execution | v0.9.2 | Complete | 2026-02-16 |
+| 11. Hardware Buttons + System Actions | v0.9.3 | Complete | 2026-02-16 |
 
 ## v0.9.1 Tweaks and Break-Fix
 
@@ -182,10 +183,10 @@ Plans:
 
 **Goal:** PCF8575 button/encoder reading, quadrature decoder, system action types (page nav, mode change, sleep, brightness, config), configurable hardware inputs with same action system as touchscreen buttons, editor UI
 **Depends on:** Phase 10
-**Plans:** 4 plans
+**Plans:** 4/4 plans complete
 
 Plans:
-- [ ] 11-01-PLAN.md -- Firmware config model + system action types (ActionType enum, config structs, JSON ser/deser, action dispatch)
-- [ ] 11-02-PLAN.md -- Firmware PCF8575 driver + main loop integration + SD card HTTP API (hw_input module, quadrature decoder, replace rotary_encoder)
-- [ ] 11-03-PLAN.md -- Companion config model + hardware editor section (action types, hardware buttons/encoder below canvas)
-- [ ] 11-04-PLAN.md -- Companion settings tab + SD card management (clock/slideshow/power/mode settings, SD file manager)
+- [x] 11-01-PLAN.md -- Firmware config model + system action types (ActionType enum, config structs, JSON ser/deser, action dispatch)
+- [x] 11-02-PLAN.md -- Firmware PCF8575 driver + main loop integration + SD card HTTP API (hw_input module, quadrature decoder, replace rotary_encoder)
+- [x] 11-03-PLAN.md -- Companion config model + hardware editor section (action types, hardware buttons/encoder below canvas)
+- [x] 11-04-PLAN.md -- Companion settings tab + SD card management (clock/slideshow/power/mode settings, SD file manager)
