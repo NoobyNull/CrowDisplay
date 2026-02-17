@@ -1,4 +1,5 @@
 #pragma once
+#include <lvgl.h>
 #include "protocol.h"
 #include "config.h"
 
@@ -43,3 +44,6 @@ void ui_prev_page();
 void ui_goto_page(int page_index);  // Jump to specific page by index
 int ui_get_current_page();
 int ui_get_page_count();
+
+// Widget object access for hardware input focus management
+lv_obj_t* ui_get_widget_obj(int page_idx, int widget_idx);

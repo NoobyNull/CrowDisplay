@@ -12,7 +12,7 @@
 #include "sdcard.h"
 #include "config.h"
 #include "config_server.h"
-#include "rotary_encoder.h"
+#include "hw_input.h"
 
 static uint32_t touch_timer = 0;
 static uint32_t last_stats_time = 0;
@@ -25,10 +25,8 @@ static uint32_t clock_update_timer = 0;
 static uint32_t last_bridge_msg_time = 0;
 static const uint32_t BRIDGE_LINK_TIMEOUT_MS = 10000;  // 10s to consider link stale
 
-// Rotary encoder (I2C) for page navigation
+// Hardware input (PCF8575 buttons + encoder) polling timer
 static uint32_t encoder_timer = 0;
-static int16_t last_encoder_pos = 0;
-static bool encoder_pressed = false;
 
 // Global config with program lifetime (ButtonConfig* in LVGL events point into this)
 static AppConfig g_app_config;
@@ -49,7 +47,7 @@ void setup() {
     Serial.printf("Heap: %d bytes (free %d)\n", ESP.getHeapSize(), ESP.getFreeHeap());
 
     Wire.begin(19, 20);  // I2C SDA=19, SCL=20
-    encoder_init();    // Initialize rotary encoder I2C driver
+    hw_input_init();   // Initialize PCF8575 hardware buttons + encoder (non-fatal if absent)
 
     touch_init();      // Create I2C mutex
     display_init();    // PCA9557 touch reset + LCD init
@@ -180,38 +178,11 @@ void loop() {
         Serial.println("Stats timeout -- no data");
     }
 
-    // Rotary encoder polling (~20Hz, same rate as touch)
-    // Reads I2C encoder for page navigation.
-    // Rotation calls ui_next_page() / ui_prev_page()
-    // Button press can trigger focused widget action
+    // Hardware input polling (~20Hz, same rate as touch)
+    // Reads PCF8575 via TCA9548A mux for buttons + encoder
     if (millis() - encoder_timer >= 50) {
         encoder_timer = millis();
-        int8_t encoder_event = encoder_poll();
-
-        // Handle rotation events
-        if (encoder_event == 1) {
-            // Rotated forward (CW) - next page
-            ui_next_page();
-            power_activity();
-            Serial.println("[encoder] rotated forward - next page");
-        } else if (encoder_event == -1) {
-            // Rotated backward (CCW) - prev page
-            ui_prev_page();
-            power_activity();
-            Serial.println("[encoder] rotated backward - prev page");
-        }
-
-        // Handle button events
-        if (encoder_event == 2) {
-            // Button pressed
-            encoder_pressed = true;
-            power_activity();
-            Serial.println("[encoder] button pressed");
-        } else if (encoder_event == -2) {
-            // Button released
-            encoder_pressed = false;
-            Serial.println("[encoder] button released");
-        }
+        hw_input_poll();
     }
 
     // Device status + ping (every 5 seconds)

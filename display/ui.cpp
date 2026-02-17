@@ -668,6 +668,14 @@ void ui_goto_page(int page_index) {
 int ui_get_current_page() { return current_page; }
 int ui_get_page_count() { return (int)page_containers.size(); }
 
+lv_obj_t* ui_get_widget_obj(int page_idx, int widget_idx) {
+    if (page_idx < 0 || page_idx >= (int)page_containers.size()) return nullptr;
+    lv_obj_t *page = page_containers[page_idx];
+    int child_count = (int)lv_obj_get_child_cnt(page);
+    if (widget_idx < 0 || widget_idx >= child_count) return nullptr;
+    return lv_obj_get_child(page, widget_idx);
+}
+
 // ============================================================
 //  Create all pages from config
 // ============================================================
