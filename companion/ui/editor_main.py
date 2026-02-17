@@ -68,6 +68,9 @@ from companion.config_manager import (
     ACTION_LAUNCH_APP,
     ACTION_SHELL_CMD,
     ACTION_OPEN_URL,
+    ACTION_DISPLAY_SETTINGS,
+    ACTION_DISPLAY_CLOCK,
+    ACTION_DISPLAY_PICTURE,
     MOD_NONE,
     DISPLAY_WIDTH,
     DISPLAY_HEIGHT,
@@ -741,9 +744,15 @@ class CanvasWidgetItem(QGraphicsRectItem):
         # Right side: status items (right-aligned)
         right_parts = []
         if self.widget_dict.get("show_wifi", True):
-            right_parts.append("WiFi --dBm")
+            right_parts.append("WiFi")
+        if self.widget_dict.get("show_pc", True):
+            right_parts.append("USB")
+        if self.widget_dict.get("show_settings", True):
+            right_parts.append("Gear")
+        if self.widget_dict.get("show_brightness", True):
+            right_parts.append("Brt")
         if self.widget_dict.get("show_battery", True):
-            right_parts.append("BAT --%")
+            right_parts.append("BAT")
         if self.widget_dict.get("show_time", True):
             right_parts.append("00:00")
         if right_parts:
@@ -1389,6 +1398,9 @@ class PropertiesPanel(QScrollArea):
         self.action_type_combo.addItem("Launch App", ACTION_LAUNCH_APP)
         self.action_type_combo.addItem("Shell Command", ACTION_SHELL_CMD)
         self.action_type_combo.addItem("Open URL", ACTION_OPEN_URL)
+        self.action_type_combo.addItem("Display: Settings", ACTION_DISPLAY_SETTINGS)
+        self.action_type_combo.addItem("Display: Clock Mode", ACTION_DISPLAY_CLOCK)
+        self.action_type_combo.addItem("Display: Picture Frame", ACTION_DISPLAY_PICTURE)
         self.action_type_combo.currentIndexChanged.connect(self._on_action_type_changed)
         hotkey_layout.addWidget(self.action_type_combo)
 
@@ -1496,6 +1508,15 @@ class PropertiesPanel(QScrollArea):
         self.show_wifi_check = QCheckBox("Show WiFi")
         self.show_wifi_check.stateChanged.connect(self._on_property_changed)
         sb_layout.addWidget(self.show_wifi_check)
+        self.show_pc_check = QCheckBox("Show PC Status")
+        self.show_pc_check.stateChanged.connect(self._on_property_changed)
+        sb_layout.addWidget(self.show_pc_check)
+        self.show_settings_check = QCheckBox("Show Settings")
+        self.show_settings_check.stateChanged.connect(self._on_property_changed)
+        sb_layout.addWidget(self.show_settings_check)
+        self.show_brightness_check = QCheckBox("Show Brightness")
+        self.show_brightness_check.stateChanged.connect(self._on_property_changed)
+        sb_layout.addWidget(self.show_brightness_check)
         self.show_battery_check = QCheckBox("Show Battery")
         self.show_battery_check.stateChanged.connect(self._on_property_changed)
         sb_layout.addWidget(self.show_battery_check)
@@ -1669,6 +1690,9 @@ class PropertiesPanel(QScrollArea):
         elif wtype == WIDGET_STATUS_BAR:
             self.status_bar_group.setVisible(True)
             self.show_wifi_check.setChecked(widget_dict.get("show_wifi", True))
+            self.show_pc_check.setChecked(widget_dict.get("show_pc", True))
+            self.show_settings_check.setChecked(widget_dict.get("show_settings", True))
+            self.show_brightness_check.setChecked(widget_dict.get("show_brightness", True))
             self.show_battery_check.setChecked(widget_dict.get("show_battery", True))
             self.show_time_check.setChecked(widget_dict.get("show_time", True))
 
@@ -1758,6 +1782,9 @@ class PropertiesPanel(QScrollArea):
 
         elif wtype == WIDGET_STATUS_BAR:
             d["show_wifi"] = self.show_wifi_check.isChecked()
+            d["show_pc"] = self.show_pc_check.isChecked()
+            d["show_settings"] = self.show_settings_check.isChecked()
+            d["show_brightness"] = self.show_brightness_check.isChecked()
             d["show_battery"] = self.show_battery_check.isChecked()
             d["show_time"] = self.show_time_check.isChecked()
 

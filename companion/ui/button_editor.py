@@ -27,6 +27,9 @@ from companion.config_manager import (
     ACTION_LAUNCH_APP,
     ACTION_SHELL_CMD,
     ACTION_OPEN_URL,
+    ACTION_DISPLAY_SETTINGS,
+    ACTION_DISPLAY_CLOCK,
+    ACTION_DISPLAY_PICTURE,
     MOD_NONE,
 )
 from companion.ui.icon_picker import IconPicker
@@ -92,6 +95,9 @@ class ButtonEditor(QWidget):
         self.action_type_combo.addItem("Launch App", ACTION_LAUNCH_APP)
         self.action_type_combo.addItem("Shell Command", ACTION_SHELL_CMD)
         self.action_type_combo.addItem("Open URL", ACTION_OPEN_URL)
+        self.action_type_combo.addItem("Display: Settings", ACTION_DISPLAY_SETTINGS)
+        self.action_type_combo.addItem("Display: Clock Mode", ACTION_DISPLAY_CLOCK)
+        self.action_type_combo.addItem("Display: Picture Frame", ACTION_DISPLAY_PICTURE)
         self.action_type_combo.currentIndexChanged.connect(self._on_action_type_changed)
 
         # Keyboard shortcut recorder (for ACTION_HOTKEY)

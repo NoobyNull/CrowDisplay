@@ -22,6 +22,9 @@ from companion.config_manager import (
     ACTION_LAUNCH_APP,
     ACTION_SHELL_CMD,
     ACTION_OPEN_URL,
+    ACTION_DISPLAY_SETTINGS,
+    ACTION_DISPLAY_CLOCK,
+    ACTION_DISPLAY_PICTURE,
     MOD_CTRL,
     MOD_SHIFT,
     MOD_ALT,
@@ -116,6 +119,8 @@ def execute_action(config_manager, page_idx: int, widget_idx: int):
         _exec_keyboard_shortcut(widget)
     elif action_type == ACTION_MEDIA_KEY:
         _exec_media_key(widget)
+    elif action_type in (ACTION_DISPLAY_SETTINGS, ACTION_DISPLAY_CLOCK, ACTION_DISPLAY_PICTURE):
+        logging.debug("Display-local action_type %d handled on device, ignoring on PC", action_type)
     else:
         logging.warning("Unknown action_type %d for page=%d widget=%d",
                         action_type, page_idx, widget_idx)

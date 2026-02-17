@@ -64,6 +64,12 @@ enum WidgetType : uint8_t {
 enum ActionType : uint8_t {
     ACTION_HOTKEY = 0,        // Keyboard hotkey (modifiers + keycode)
     ACTION_MEDIA_KEY = 1,     // Media control (consumer control code)
+    ACTION_LAUNCH_APP = 2,    // Launch/focus application (PC-side)
+    ACTION_SHELL_CMD = 3,     // Run shell command (PC-side)
+    ACTION_OPEN_URL = 4,      // Open URL (PC-side)
+    ACTION_DISPLAY_SETTINGS = 5,  // Toggle config AP mode (display-local)
+    ACTION_DISPLAY_CLOCK = 6,     // Switch to clock mode (display-local)
+    ACTION_DISPLAY_PICTURE = 7,   // Switch to picture frame mode (display-local)
 };
 
 // ============================================================
@@ -101,6 +107,9 @@ struct WidgetConfig {
 
     // --- Status Bar properties (widget_type == WIDGET_STATUS_BAR) ---
     bool show_wifi;           // Show WiFi icon
+    bool show_pc;             // Show USB/PC connection icon
+    bool show_settings;       // Show settings gear icon
+    bool show_brightness;     // Show brightness icon
     bool show_battery;        // Show battery percentage
     bool show_time;           // Show current time
 
@@ -122,7 +131,8 @@ struct WidgetConfig {
           consumer_code(0), pressed_color(0x000000),
           stat_type(0),
           clock_analog(false),
-          show_wifi(true), show_battery(true), show_time(true),
+          show_wifi(true), show_pc(true), show_settings(true), show_brightness(true),
+          show_battery(true), show_time(true),
           font_size(16), text_align(1),
           separator_vertical(false), thickness(2) {}
 };

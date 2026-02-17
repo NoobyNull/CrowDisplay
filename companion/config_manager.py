@@ -22,8 +22,14 @@ ACTION_MEDIA_KEY = 1
 ACTION_LAUNCH_APP = 2    # Launch/focus application
 ACTION_SHELL_CMD = 3     # Run shell command (fire and forget)
 ACTION_OPEN_URL = 4      # Open URL in default browser
+ACTION_DISPLAY_SETTINGS = 5  # Toggle config AP mode (display-local)
+ACTION_DISPLAY_CLOCK = 6     # Switch to clock mode (display-local)
+ACTION_DISPLAY_PICTURE = 7   # Switch to picture frame mode (display-local)
 
-VALID_ACTION_TYPES = (ACTION_HOTKEY, ACTION_MEDIA_KEY, ACTION_LAUNCH_APP, ACTION_SHELL_CMD, ACTION_OPEN_URL)
+VALID_ACTION_TYPES = (
+    ACTION_HOTKEY, ACTION_MEDIA_KEY, ACTION_LAUNCH_APP, ACTION_SHELL_CMD, ACTION_OPEN_URL,
+    ACTION_DISPLAY_SETTINGS, ACTION_DISPLAY_CLOCK, ACTION_DISPLAY_PICTURE,
+)
 
 # Widget type constants (must match display/config.h WidgetType enum)
 WIDGET_HOTKEY_BUTTON = 0
@@ -149,6 +155,9 @@ def make_default_widget(widget_type: int, x: int = 0, y: int = 0) -> Dict[str, A
             "color": 0xE0E0E0,
             "bg_color": 0x16213e,
             "show_wifi": True,
+            "show_pc": True,
+            "show_settings": True,
+            "show_brightness": True,
             "show_battery": True,
             "show_time": True,
         })

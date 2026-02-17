@@ -273,6 +273,9 @@ static void widget_to_json(JsonObject obj, const WidgetConfig& w) {
             break;
         case WIDGET_STATUS_BAR:
             obj["show_wifi"] = w.show_wifi;
+            obj["show_pc"] = w.show_pc;
+            obj["show_settings"] = w.show_settings;
+            obj["show_brightness"] = w.show_brightness;
             obj["show_battery"] = w.show_battery;
             obj["show_time"] = w.show_time;
             break;
@@ -338,6 +341,9 @@ static void json_to_widget(JsonObject obj, WidgetConfig& w) {
             break;
         case WIDGET_STATUS_BAR:
             w.show_wifi = obj["show_wifi"] | true;
+            w.show_pc = obj["show_pc"] | true;
+            w.show_settings = obj["show_settings"] | true;
+            w.show_brightness = obj["show_brightness"] | true;
             w.show_battery = obj["show_battery"] | true;
             w.show_time = obj["show_time"] | true;
             break;

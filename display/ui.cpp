@@ -199,10 +199,11 @@ static const char *get_stat_placeholder(uint8_t type) {
 //  Widget Renderers — one per widget type
 // ============================================================
 
-// --- Button Event Data (identity-based: page + widget index) ---
+// --- Button Event Data (identity-based: page + widget index + action type) ---
 struct ButtonEventData {
     uint8_t page_idx;
     uint8_t widget_idx;
+    uint8_t action_type;
 };
 static ButtonEventData btn_event_data[CONFIG_MAX_WIDGETS];
 static int btn_event_count = 0;
@@ -213,6 +214,30 @@ static void btn_event_cb(lv_event_t *e) {
     if (code == LV_EVENT_CLICKED) {
         const ButtonEventData *bed = (const ButtonEventData *)lv_event_get_user_data(e);
         if (!bed) return;
+
+        // Display-local actions are handled here without sending to bridge
+        switch (bed->action_type) {
+            case ACTION_DISPLAY_SETTINGS:
+                Serial.println("Button: toggle config AP mode");
+                if (!config_server_active()) {
+                    if (config_server_start()) show_config_screen();
+                } else {
+                    config_server_stop();
+                    hide_config_screen();
+                }
+                return;
+            case ACTION_DISPLAY_CLOCK:
+                Serial.println("Button: switch to clock mode");
+                display_set_mode(MODE_CLOCK);
+                return;
+            case ACTION_DISPLAY_PICTURE:
+                Serial.println("Button: switch to picture frame mode");
+                display_set_mode(MODE_PICTURE_FRAME);
+                return;
+            default:
+                break;
+        }
+
         send_button_press_to_bridge(bed->page_idx, bed->widget_idx);
         Serial.printf("Button press: page=%d widget=%d\n", bed->page_idx, bed->widget_idx);
     }
@@ -225,7 +250,7 @@ static void render_hotkey_button(lv_obj_t *parent, const WidgetConfig *cfg, uint
     // Store button identity in static pool for event callback
     ButtonEventData *bed = nullptr;
     if (btn_event_count < CONFIG_MAX_WIDGETS) {
-        btn_event_data[btn_event_count] = {page_idx, widget_idx};
+        btn_event_data[btn_event_count] = {page_idx, widget_idx, (uint8_t)cfg->action_type};
         bed = &btn_event_data[btn_event_count++];
     }
     lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, (void *)bed);
@@ -370,41 +395,56 @@ static void render_status_bar(lv_obj_t *parent, const WidgetConfig *cfg) {
     lv_obj_set_style_text_color(title, lv_color_hex(cfg->color), LV_PART_MAIN);
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 15, 0);
 
-    // WiFi indicator
+    // Dynamic right-to-left icon packing
     StatusBarRef ref = {};
+    int x_offset = -10;  // start 10px from right edge
+    const int ICON_GAP = 2;
+    const int ICON_W = 22;
+
+    // WiFi indicator
     if (cfg->show_wifi) {
         ref.rssi_label = lv_label_create(bar);
         lv_label_set_text(ref.rssi_label, LV_SYMBOL_WIFI);
         lv_obj_set_style_text_font(ref.rssi_label, &lv_font_montserrat_18, LV_PART_MAIN);
         lv_obj_set_style_text_color(ref.rssi_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
-        lv_obj_align(ref.rssi_label, LV_ALIGN_RIGHT_MID, -15, 0);
+        lv_obj_align(ref.rssi_label, LV_ALIGN_RIGHT_MID, x_offset, 0);
+        x_offset -= (ICON_W + ICON_GAP);
     }
 
     // PC connection indicator (USB icon)
-    ref.pc_label = lv_label_create(bar);
-    lv_label_set_text(ref.pc_label, LV_SYMBOL_USB);
-    lv_obj_set_style_text_font(ref.pc_label, &lv_font_montserrat_18, LV_PART_MAIN);
-    lv_obj_set_style_text_color(ref.pc_label, lv_color_hex(CLR_RED), LV_PART_MAIN);
-    lv_obj_align(ref.pc_label, LV_ALIGN_RIGHT_MID, -40, 0);
+    if (cfg->show_pc) {
+        ref.pc_label = lv_label_create(bar);
+        lv_label_set_text(ref.pc_label, LV_SYMBOL_USB);
+        lv_obj_set_style_text_font(ref.pc_label, &lv_font_montserrat_18, LV_PART_MAIN);
+        lv_obj_set_style_text_color(ref.pc_label, lv_color_hex(CLR_RED), LV_PART_MAIN);
+        lv_obj_align(ref.pc_label, LV_ALIGN_RIGHT_MID, x_offset, 0);
+        x_offset -= (ICON_W + ICON_GAP);
+    }
 
-    // Config button
-    lv_obj_t *cfg_btn = lv_label_create(bar);
-    lv_label_set_text(cfg_btn, LV_SYMBOL_SETTINGS);
-    lv_obj_set_style_text_font(cfg_btn, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_set_style_text_color(cfg_btn, lv_color_hex(CLR_TEAL), LV_PART_MAIN);
-    lv_obj_align(cfg_btn, LV_ALIGN_RIGHT_MID, -75, 0);
-    lv_obj_add_flag(cfg_btn, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(cfg_btn, config_btn_event_cb, LV_EVENT_CLICKED, nullptr);
+    // Config/settings button
+    if (cfg->show_settings) {
+        lv_obj_t *cfg_btn = lv_label_create(bar);
+        lv_label_set_text(cfg_btn, LV_SYMBOL_SETTINGS);
+        lv_obj_set_style_text_font(cfg_btn, &lv_font_montserrat_16, LV_PART_MAIN);
+        lv_obj_set_style_text_color(cfg_btn, lv_color_hex(CLR_TEAL), LV_PART_MAIN);
+        lv_obj_align(cfg_btn, LV_ALIGN_RIGHT_MID, x_offset, 0);
+        lv_obj_add_flag(cfg_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(cfg_btn, config_btn_event_cb, LV_EVENT_CLICKED, nullptr);
+        x_offset -= (ICON_W + ICON_GAP);
+    }
 
     // Brightness button
-    lv_obj_t *bright = lv_label_create(bar);
-    lv_label_set_text(bright, LV_SYMBOL_IMAGE);
-    lv_obj_set_style_text_font(bright, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_set_style_text_color(bright, lv_color_hex(CLR_YELLOW), LV_PART_MAIN);
-    lv_obj_align(bright, LV_ALIGN_RIGHT_MID, -115, 0);
-    lv_obj_add_flag(bright, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(bright, brightness_event_cb, LV_EVENT_CLICKED, nullptr);
-    lv_obj_add_event_cb(bright, brightness_long_press_cb, LV_EVENT_LONG_PRESSED, nullptr);
+    if (cfg->show_brightness) {
+        lv_obj_t *bright = lv_label_create(bar);
+        lv_label_set_text(bright, LV_SYMBOL_IMAGE);
+        lv_obj_set_style_text_font(bright, &lv_font_montserrat_16, LV_PART_MAIN);
+        lv_obj_set_style_text_color(bright, lv_color_hex(CLR_YELLOW), LV_PART_MAIN);
+        lv_obj_align(bright, LV_ALIGN_RIGHT_MID, x_offset, 0);
+        lv_obj_add_flag(bright, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(bright, brightness_event_cb, LV_EVENT_CLICKED, nullptr);
+        lv_obj_add_event_cb(bright, brightness_long_press_cb, LV_EVENT_LONG_PRESSED, nullptr);
+        x_offset -= (ICON_W + ICON_GAP);
+    }
 
     // Time label (if enabled)
     if (cfg->show_time) {
