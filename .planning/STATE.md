@@ -9,10 +9,11 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 
 ## Current Position
 
-Phase: 10 (Companion Action Execution)
-Plan: 3 of 3 in current phase (COMPLETE)
-Status: Phase Complete
-Last activity: 2026-02-16 -- Completed 10-03 Editor UI Overhaul
+**Phase:** 10 (Companion Action Execution)
+**Current Plan:** 3
+**Total Plans in Phase:** 3
+**Status:** Phase complete — ready for verification
+**Last Activity:** 2026-02-16
 
 Progress: [####################] 100% (10-01, 10-02, 10-03 complete)
 
@@ -95,10 +96,12 @@ Recent decisions affecting current work:
 
 1. **Execute image support plan from Claude plans** (ui) -- add custom image icons to hotkey buttons via BMP on SD card, Pillow optimizer, HTTP upload endpoint
 2. **Companion executes button actions instead of blind keyboard shortcuts** (companion) -- bridge forwards MSG_HOTKEY to vendor HID, companion intercepts and launches apps/commands directly
+3. **Add physical buttons rotary encoder and display function settings** (companion) -- map hardware buttons/encoder to actions, add clock/slideshow settings in companion editor
 
 ### Roadmap Evolution
 
 - Phase 10 added: Companion Action Execution
+- Phase 11 added: Hardware Buttons + System Actions
 
 ### Blockers/Concerns
 
