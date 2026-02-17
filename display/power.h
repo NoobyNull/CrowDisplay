@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <vector>
 
 enum PowerState : uint8_t {
     POWER_ACTIVE,   // Full brightness, normal operation
@@ -29,3 +30,6 @@ void power_cycle_brightness();  // Cycle through brightness presets (only in ACT
 // Display mode switching (orthogonal to power state)
 void display_set_mode(DisplayMode mode);   // Switch to new display mode
 DisplayMode display_get_mode();            // Get current display mode
+
+// Mode cycling through user-configured enabled modes list
+void mode_cycle_next(const std::vector<uint8_t>& enabled_modes);

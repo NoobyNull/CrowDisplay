@@ -70,6 +70,12 @@ enum ActionType : uint8_t {
     ACTION_DISPLAY_SETTINGS = 5,  // Toggle config AP mode (display-local)
     ACTION_DISPLAY_CLOCK = 6,     // Switch to clock mode (display-local)
     ACTION_DISPLAY_PICTURE = 7,   // Switch to picture frame mode (display-local)
+    ACTION_PAGE_NEXT = 8,         // Navigate to next page (display-local)
+    ACTION_PAGE_PREV = 9,         // Navigate to previous page (display-local)
+    ACTION_PAGE_GOTO = 10,        // Go to specific page (uses keycode as page number)
+    ACTION_MODE_CYCLE = 11,       // Cycle through configured display modes
+    ACTION_BRIGHTNESS = 12,       // Cycle brightness presets
+    ACTION_CONFIG_MODE = 13,      // Enter SoftAP config mode
 };
 
 // ============================================================
@@ -175,6 +181,51 @@ struct ProfileConfig {
 };
 
 // ============================================================
+// Hardware Button Configuration
+// ============================================================
+
+struct HwButtonConfig {
+    ActionType action_type;
+    std::string label;
+    uint8_t keycode;        // For PAGE_GOTO (page number), or HOTKEY keycode
+    uint16_t consumer_code; // For MEDIA_KEY
+    uint8_t modifiers;      // For HOTKEY modifiers
+    HwButtonConfig() : action_type(ACTION_PAGE_NEXT), label(""), keycode(0),
+                       consumer_code(0), modifiers(0) {}
+};
+
+struct EncoderConfig {
+    ActionType push_action;
+    std::string push_label;
+    uint8_t push_keycode;
+    uint16_t push_consumer_code;
+    uint8_t push_modifiers;
+    uint8_t encoder_mode;    // 0=page_nav, 1=volume, 2=brightness, 3=app_select, 4=mode_cycle
+    EncoderConfig() : push_action(ACTION_BRIGHTNESS), push_label("Brightness"),
+                      push_keycode(0), push_consumer_code(0), push_modifiers(0),
+                      encoder_mode(0) {}
+};
+
+struct ModeCycleConfig {
+    std::vector<uint8_t> enabled_modes; // DisplayMode values in rotation order
+    ModeCycleConfig() : enabled_modes({0, 1, 2, 3}) {} // All modes by default
+};
+
+struct DisplaySettings {
+    uint16_t dim_timeout_sec;
+    uint16_t sleep_timeout_sec;
+    bool wake_on_touch;
+    bool clock_24h;
+    uint32_t clock_color_theme;
+    uint16_t slideshow_interval_sec;
+    std::string slideshow_transition;   // "fade", "slide", "none"
+    DisplaySettings() : dim_timeout_sec(60), sleep_timeout_sec(300),
+                        wake_on_touch(true), clock_24h(true),
+                        clock_color_theme(0xFFFFFF), slideshow_interval_sec(30),
+                        slideshow_transition("fade") {}
+};
+
+// ============================================================
 // Application Configuration
 // ============================================================
 
@@ -192,8 +243,15 @@ struct AppConfig {
     // Stats header configuration (for stat monitor widgets without explicit config)
     std::vector<StatConfig> stats_header; // User-selected stats (default 8, max CONFIG_MAX_STATS)
 
+    // Hardware input configuration
+    HwButtonConfig hw_buttons[4];
+    EncoderConfig encoder;
+    ModeCycleConfig mode_cycle;
+    DisplaySettings display_settings;
+
     AppConfig() : version(CONFIG_VERSION), active_profile_name(""), profiles(), brightness_level(100),
-                  default_mode(0), slideshow_interval_sec(30), clock_analog(false), stats_header() {}
+                  default_mode(0), slideshow_interval_sec(30), clock_analog(false), stats_header(),
+                  hw_buttons(), encoder(), mode_cycle(), display_settings() {}
 
     // Helper: Get currently active profile
     ProfileConfig* get_active_profile() {
