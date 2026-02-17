@@ -2286,6 +2286,399 @@ class PropertiesPanel(QScrollArea):
 
 
 # ============================================================
+# Settings Tab (replaces canvas when Settings page is active)
+# ============================================================
+
+class SettingsTab(QScrollArea):
+    """Comprehensive display settings panel shown instead of canvas when Settings is active."""
+
+    settings_changed = Signal()
+
+    def __init__(self, config_manager, parent=None):
+        super().__init__(parent)
+        self.config_manager = config_manager
+        self._updating = False
+        self._http_client = None
+
+        self.setWidgetResizable(True)
+        self.setStyleSheet("background: #0d1117; border: none;")
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        title = QLabel("Display Settings")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #FFD700; margin-bottom: 8px;")
+        layout.addWidget(title)
+
+        # 1. Clock Settings
+        clock_group = QGroupBox("Clock")
+        clock_layout = QVBoxLayout()
+
+        fmt_row = QHBoxLayout()
+        fmt_row.addWidget(QLabel("Time Format:"))
+        self.clock_24h_check = QCheckBox("24-hour")
+        self.clock_24h_check.stateChanged.connect(self._on_setting_changed)
+        fmt_row.addWidget(self.clock_24h_check)
+        fmt_row.addStretch()
+        clock_layout.addLayout(fmt_row)
+
+        color_row = QHBoxLayout()
+        color_row.addWidget(QLabel("Clock Color:"))
+        self.clock_color_btn = QPushButton()
+        self.clock_color_btn.setFixedSize(40, 24)
+        self.clock_color_btn.clicked.connect(self._on_clock_color_clicked)
+        color_row.addWidget(self.clock_color_btn)
+        color_row.addStretch()
+        clock_layout.addLayout(color_row)
+
+        clock_group.setLayout(clock_layout)
+        layout.addWidget(clock_group)
+
+        # 2. Slideshow Settings
+        slideshow_group = QGroupBox("Slideshow")
+        ss_layout = QVBoxLayout()
+
+        interval_row = QHBoxLayout()
+        interval_row.addWidget(QLabel("Interval (sec):"))
+        self.slideshow_interval_spin = QSpinBox()
+        self.slideshow_interval_spin.setRange(5, 300)
+        self.slideshow_interval_spin.setValue(30)
+        self.slideshow_interval_spin.setFocusPolicy(Qt.StrongFocus)
+        self.slideshow_interval_spin.valueChanged.connect(self._on_setting_changed)
+        interval_row.addWidget(self.slideshow_interval_spin)
+        interval_row.addStretch()
+        ss_layout.addLayout(interval_row)
+
+        trans_row = QHBoxLayout()
+        trans_row.addWidget(QLabel("Transition:"))
+        self.transition_combo = NoScrollComboBox()
+        self.transition_combo.addItem("Fade", "fade")
+        self.transition_combo.addItem("Slide", "slide")
+        self.transition_combo.addItem("None", "none")
+        self.transition_combo.currentIndexChanged.connect(self._on_setting_changed)
+        trans_row.addWidget(self.transition_combo)
+        trans_row.addStretch()
+        ss_layout.addLayout(trans_row)
+
+        info = QLabel("Images must be placed in /slideshow/ folder on SD card")
+        info.setStyleSheet("color: #888; font-size: 10px; font-style: italic;")
+        info.setWordWrap(True)
+        ss_layout.addWidget(info)
+
+        slideshow_group.setLayout(ss_layout)
+        layout.addWidget(slideshow_group)
+
+        # 3. Power Settings
+        power_group = QGroupBox("Power Management")
+        power_layout = QVBoxLayout()
+
+        dim_row = QHBoxLayout()
+        dim_row.addWidget(QLabel("Dim Timeout (sec):"))
+        self.dim_timeout_spin = QSpinBox()
+        self.dim_timeout_spin.setRange(0, 600)
+        self.dim_timeout_spin.setValue(60)
+        self.dim_timeout_spin.setFocusPolicy(Qt.StrongFocus)
+        self.dim_timeout_spin.setSpecialValueText("Never")
+        self.dim_timeout_spin.valueChanged.connect(self._on_setting_changed)
+        dim_row.addWidget(self.dim_timeout_spin)
+        dim_row.addStretch()
+        power_layout.addLayout(dim_row)
+
+        sleep_row = QHBoxLayout()
+        sleep_row.addWidget(QLabel("Sleep Timeout (sec):"))
+        self.sleep_timeout_spin = QSpinBox()
+        self.sleep_timeout_spin.setRange(0, 3600)
+        self.sleep_timeout_spin.setValue(300)
+        self.sleep_timeout_spin.setFocusPolicy(Qt.StrongFocus)
+        self.sleep_timeout_spin.setSpecialValueText("Never")
+        self.sleep_timeout_spin.valueChanged.connect(self._on_setting_changed)
+        sleep_row.addWidget(self.sleep_timeout_spin)
+        sleep_row.addStretch()
+        power_layout.addLayout(sleep_row)
+
+        self.wake_on_touch_check = QCheckBox("Wake on touch")
+        self.wake_on_touch_check.stateChanged.connect(self._on_setting_changed)
+        power_layout.addWidget(self.wake_on_touch_check)
+
+        power_group.setLayout(power_layout)
+        layout.addWidget(power_group)
+
+        # 4. Mode Cycle Settings
+        mode_group = QGroupBox("Display Mode Rotation")
+        mode_layout = QVBoxLayout()
+
+        mode_names = ["Hotkeys", "Clock", "Slideshow", "Standby"]
+        self.mode_checks = []
+        checks_row = QHBoxLayout()
+        for i, name in enumerate(mode_names):
+            cb = QCheckBox(name)
+            cb.setProperty("mode_id", i)
+            cb.stateChanged.connect(self._on_mode_cycle_changed)
+            checks_row.addWidget(cb)
+            self.mode_checks.append(cb)
+        mode_layout.addLayout(checks_row)
+
+        mode_layout.addWidget(QLabel("Rotation Order:"))
+        self.mode_order_list = QListWidget()
+        self.mode_order_list.setMaximumHeight(100)
+        self.mode_order_list.setDragDropMode(QAbstractItemView.InternalMove)
+        mode_layout.addWidget(self.mode_order_list)
+
+        order_btns = QHBoxLayout()
+        self.mode_up_btn = QPushButton("Move Up")
+        self.mode_up_btn.clicked.connect(self._on_mode_up)
+        order_btns.addWidget(self.mode_up_btn)
+        self.mode_down_btn = QPushButton("Move Down")
+        self.mode_down_btn.clicked.connect(self._on_mode_down)
+        order_btns.addWidget(self.mode_down_btn)
+        order_btns.addStretch()
+        mode_layout.addLayout(order_btns)
+
+        mode_group.setLayout(mode_layout)
+        layout.addWidget(mode_group)
+
+        # 5. SD Card Management
+        sd_group = QGroupBox("SD Card")
+        sd_layout = QVBoxLayout()
+
+        self.sd_status_label = QLabel("Connect to device first")
+        self.sd_status_label.setStyleSheet("color: #888; font-size: 11px;")
+        sd_layout.addWidget(self.sd_status_label)
+
+        sd_btn_row = QHBoxLayout()
+        self.sd_refresh_btn = QPushButton("Refresh")
+        self.sd_refresh_btn.clicked.connect(self._on_sd_refresh)
+        sd_btn_row.addWidget(self.sd_refresh_btn)
+        self.sd_delete_btn = QPushButton("Delete Selected")
+        self.sd_delete_btn.clicked.connect(self._on_sd_delete)
+        self.sd_delete_btn.setEnabled(False)
+        sd_btn_row.addWidget(self.sd_delete_btn)
+        sd_btn_row.addStretch()
+        sd_layout.addLayout(sd_btn_row)
+
+        from PySide6.QtWidgets import QProgressBar
+        self.sd_usage_bar = QProgressBar()
+        self.sd_usage_bar.setFormat("%v MB / %m MB")
+        self.sd_usage_bar.setMaximumHeight(20)
+        self.sd_usage_bar.setValue(0)
+        self.sd_usage_bar.setMaximum(1)
+        sd_layout.addWidget(self.sd_usage_bar)
+
+        from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
+        self.sd_tree = QTreeWidget()
+        self.sd_tree.setHeaderLabels(["Name", "Size", "Type"])
+        self.sd_tree.setMaximumHeight(200)
+        self.sd_tree.setColumnWidth(0, 200)
+        self.sd_tree.setColumnWidth(1, 80)
+        self.sd_tree.itemSelectionChanged.connect(self._on_sd_selection_changed)
+        sd_layout.addWidget(self.sd_tree)
+
+        sd_group.setLayout(sd_layout)
+        layout.addWidget(sd_group)
+
+        layout.addStretch()
+        self.setWidget(container)
+
+    def load_from_config(self):
+        """Populate settings from config dict."""
+        self._updating = True
+        ds = self.config_manager.config.get("display_settings", {})
+
+        self.clock_24h_check.setChecked(ds.get("clock_24h", True))
+        clock_color = ds.get("clock_color_theme", 0xFFFFFF)
+        self._set_color_btn(self.clock_color_btn, clock_color)
+
+        self.slideshow_interval_spin.setValue(ds.get("slideshow_interval_sec", 30))
+        transition = ds.get("slideshow_transition", "fade")
+        for i in range(self.transition_combo.count()):
+            if self.transition_combo.itemData(i) == transition:
+                self.transition_combo.setCurrentIndex(i)
+                break
+
+        self.dim_timeout_spin.setValue(ds.get("dim_timeout_sec", 60))
+        self.sleep_timeout_spin.setValue(ds.get("sleep_timeout_sec", 300))
+        self.wake_on_touch_check.setChecked(ds.get("wake_on_touch", True))
+
+        # Mode cycle
+        mode_cycle = self.config_manager.config.get("mode_cycle", [0, 1, 2, 3])
+        for cb in self.mode_checks:
+            cb.setChecked(cb.property("mode_id") in mode_cycle)
+        self._rebuild_mode_order_list(mode_cycle)
+
+        self._updating = False
+
+    def _on_setting_changed(self, *args):
+        if self._updating:
+            return
+        self._save_to_config()
+        self.settings_changed.emit()
+
+    def _on_clock_color_clicked(self):
+        current = self.clock_color_btn.property("color_value") or 0xFFFFFF
+        qc = _int_to_qcolor(current)
+        new_color = QColorDialog.getColor(qc, self, "Clock Color")
+        if new_color.isValid():
+            self._set_color_btn(self.clock_color_btn, _qcolor_to_int(new_color))
+            if not self._updating:
+                self._save_to_config()
+                self.settings_changed.emit()
+
+    def _set_color_btn(self, btn, color_val):
+        qc = _int_to_qcolor(color_val)
+        btn.setStyleSheet(f"background-color: {qc.name()}; border: 1px solid #555;")
+        btn.setProperty("color_value", color_val)
+
+    def _on_mode_cycle_changed(self, *args):
+        if self._updating:
+            return
+        # Rebuild mode order list from checked modes
+        checked = [cb.property("mode_id") for cb in self.mode_checks if cb.isChecked()]
+        # Preserve existing order for modes that are still checked
+        current_order = self._get_mode_order()
+        new_order = [m for m in current_order if m in checked]
+        # Add newly checked modes at the end
+        for m in checked:
+            if m not in new_order:
+                new_order.append(m)
+        self._rebuild_mode_order_list(new_order)
+        self._save_to_config()
+        self.settings_changed.emit()
+
+    def _rebuild_mode_order_list(self, mode_cycle):
+        mode_names = {0: "Hotkeys", 1: "Clock", 2: "Slideshow", 3: "Standby"}
+        self.mode_order_list.clear()
+        for m in mode_cycle:
+            item = QListWidgetItem(mode_names.get(m, f"Mode {m}"))
+            item.setData(Qt.UserRole, m)
+            self.mode_order_list.addItem(item)
+
+    def _get_mode_order(self):
+        order = []
+        for i in range(self.mode_order_list.count()):
+            item = self.mode_order_list.item(i)
+            order.append(item.data(Qt.UserRole))
+        return order
+
+    def _on_mode_up(self):
+        row = self.mode_order_list.currentRow()
+        if row > 0:
+            item = self.mode_order_list.takeItem(row)
+            self.mode_order_list.insertItem(row - 1, item)
+            self.mode_order_list.setCurrentRow(row - 1)
+            self._save_to_config()
+            self.settings_changed.emit()
+
+    def _on_mode_down(self):
+        row = self.mode_order_list.currentRow()
+        if row >= 0 and row < self.mode_order_list.count() - 1:
+            item = self.mode_order_list.takeItem(row)
+            self.mode_order_list.insertItem(row + 1, item)
+            self.mode_order_list.setCurrentRow(row + 1)
+            self._save_to_config()
+            self.settings_changed.emit()
+
+    def _save_to_config(self):
+        ds = self.config_manager.config.setdefault("display_settings", {})
+        ds["clock_24h"] = self.clock_24h_check.isChecked()
+        ds["clock_color_theme"] = self.clock_color_btn.property("color_value") or 0xFFFFFF
+        ds["slideshow_interval_sec"] = self.slideshow_interval_spin.value()
+        ds["slideshow_transition"] = self.transition_combo.currentData() or "fade"
+        ds["dim_timeout_sec"] = self.dim_timeout_spin.value()
+        ds["sleep_timeout_sec"] = self.sleep_timeout_spin.value()
+        ds["wake_on_touch"] = self.wake_on_touch_check.isChecked()
+        self.config_manager.config["mode_cycle"] = self._get_mode_order()
+
+    # -- SD Card Management --
+
+    def set_http_client(self, client):
+        """Set the HTTP client for SD card operations."""
+        self._http_client = client
+        if client:
+            self.sd_status_label.setText(f"Connected to {client.device_ip}")
+            self.sd_status_label.setStyleSheet("color: #2ECC71; font-size: 11px;")
+        else:
+            self.sd_status_label.setText("Connect to device first")
+            self.sd_status_label.setStyleSheet("color: #888; font-size: 11px;")
+
+    def _on_sd_refresh(self):
+        if not self._http_client:
+            self.sd_status_label.setText("Not connected -- deploy config to connect")
+            self.sd_status_label.setStyleSheet("color: #E74C3C; font-size: 11px;")
+            return
+
+        try:
+            # Get usage
+            usage = self._http_client.sd_usage()
+            total = usage.get("total_mb", 0)
+            used = usage.get("used_mb", 0)
+            self.sd_usage_bar.setMaximum(max(total, 1))
+            self.sd_usage_bar.setValue(used)
+            self.sd_usage_bar.setFormat(f"{used} MB / {total} MB")
+
+            # Get file listing
+            listing = self._http_client.sd_list("/")
+            self.sd_tree.clear()
+            from PySide6.QtWidgets import QTreeWidgetItem
+            for f in listing.get("files", []):
+                name = f.get("name", "?")
+                size = f.get("size", 0)
+                is_dir = f.get("dir", False)
+                size_str = self._format_size(size) if not is_dir else ""
+                type_str = "DIR" if is_dir else "FILE"
+                item = QTreeWidgetItem([name, size_str, type_str])
+                item.setData(0, Qt.UserRole, f"/{name}")
+                self.sd_tree.addTopLevelItem(item)
+
+            self.sd_status_label.setText(f"Connected to {self._http_client.device_ip}")
+            self.sd_status_label.setStyleSheet("color: #2ECC71; font-size: 11px;")
+
+        except Exception as e:
+            self.sd_status_label.setText(f"Error: {e}")
+            self.sd_status_label.setStyleSheet("color: #E74C3C; font-size: 11px;")
+
+    def _on_sd_selection_changed(self):
+        items = self.sd_tree.selectedItems()
+        self.sd_delete_btn.setEnabled(bool(items))
+
+    def _on_sd_delete(self):
+        items = self.sd_tree.selectedItems()
+        if not items:
+            return
+        item = items[0]
+        path = item.data(0, Qt.UserRole)
+        if not path:
+            return
+
+        reply = QMessageBox.question(
+            self, "Delete File",
+            f"Delete {path} from SD card?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        if not self._http_client:
+            return
+
+        try:
+            self._http_client.sd_delete(path)
+            self._on_sd_refresh()  # Refresh listing
+        except Exception as e:
+            QMessageBox.warning(self, "Delete Failed", str(e))
+
+    @staticmethod
+    def _format_size(size_bytes):
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        else:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+# ============================================================
 # Hardware Input Section
 # ============================================================
 
@@ -2429,7 +2822,19 @@ class EditorMainWindow(QMainWindow):
 
         self.canvas_scene = CanvasScene()
         self.canvas_view = CanvasView(self.canvas_scene)
-        center_layout.addWidget(self.canvas_view, stretch=1)
+
+        # Settings tab (shown instead of canvas when Settings mode is active)
+        self.settings_tab = SettingsTab(self.config_manager)
+        self.settings_tab.settings_changed.connect(self._on_settings_tab_changed)
+
+        # Stacked widget to swap between canvas and settings
+        from PySide6.QtWidgets import QStackedWidget
+        self.center_stack = QStackedWidget()
+        self.center_stack.addWidget(self.canvas_view)    # index 0: canvas
+        self.center_stack.addWidget(self.settings_tab)   # index 1: settings
+        self.center_stack.setCurrentIndex(0)
+        self._settings_mode = False
+        center_layout.addWidget(self.center_stack, stretch=1)
 
         # Page toolbar
         page_toolbar = QWidget()
@@ -2455,6 +2860,17 @@ class EditorMainWindow(QMainWindow):
         page_layout.addWidget(self.add_page_btn)
         page_layout.addWidget(self.remove_page_btn)
         page_layout.addWidget(self.rename_page_btn)
+
+        # Settings toggle button
+        self.settings_btn = QPushButton("Settings")
+        self.settings_btn.setStyleSheet(
+            "QPushButton { background: #333; color: #aaa; font-weight: bold; padding: 4px 12px; "
+            "border: 1px solid #555; border-radius: 3px; }"
+            "QPushButton:checked { background: #FFD700; color: #000; }"
+        )
+        self.settings_btn.setCheckable(True)
+        self.settings_btn.clicked.connect(self._on_settings_toggled)
+        page_layout.addWidget(self.settings_btn)
 
         # Test Action button
         self.test_action_btn = QPushButton("Test Action")
@@ -2561,6 +2977,7 @@ class EditorMainWindow(QMainWindow):
         self._load_display_mode_settings()
         self.stats_panel.load_from_config()
         self.notifications_panel.load_from_config()
+        self.settings_tab.load_from_config()
         self.hardware_section.update_labels()
         self._rebuild_canvas()
         self._update_page_display()
@@ -2929,6 +3346,7 @@ class EditorMainWindow(QMainWindow):
             self._load_display_mode_settings()
             self.stats_panel.load_from_config()
             self.notifications_panel.load_from_config()
+            self.settings_tab.load_from_config()
             self.hardware_section.update_labels()
             self.statusBar().showMessage("Created new config")
 
@@ -2947,6 +3365,7 @@ class EditorMainWindow(QMainWindow):
                 self._load_display_mode_settings()
                 self.stats_panel.load_from_config()
                 self.notifications_panel.load_from_config()
+                self.settings_tab.load_from_config()
                 self.hardware_section.update_labels()
                 self.statusBar().showMessage(f"Loaded: {file_path}")
             else:
@@ -3001,6 +3420,34 @@ class EditorMainWindow(QMainWindow):
 
     def _on_notifications_changed(self):
         self.statusBar().showMessage("Notification settings updated")
+
+    def _on_settings_toggled(self, checked):
+        """Toggle between canvas view and settings view."""
+        self._settings_mode = checked
+        if checked:
+            self.center_stack.setCurrentIndex(1)  # Show settings tab
+            self.settings_tab.load_from_config()
+            self.properties_panel.clear_selection()
+            self.hardware_section.deselect()
+            self.hardware_section.setVisible(False)
+            self.page_label.setText("Settings")
+            self.prev_page_btn.setEnabled(False)
+            self.next_page_btn.setEnabled(False)
+            self.add_page_btn.setEnabled(False)
+            self.remove_page_btn.setEnabled(False)
+            self.rename_page_btn.setEnabled(False)
+            self.statusBar().showMessage("Settings mode")
+        else:
+            self.center_stack.setCurrentIndex(0)  # Show canvas
+            self.hardware_section.setVisible(True)
+            self._rebuild_canvas()
+            self._update_page_display()
+            self.add_page_btn.setEnabled(True)
+            self.rename_page_btn.setEnabled(True)
+            self.statusBar().showMessage("Ready")
+
+    def _on_settings_tab_changed(self):
+        self.statusBar().showMessage("Display settings updated")
 
     # -- Hardware input handlers --
 
