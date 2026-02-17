@@ -182,7 +182,10 @@ Plans:
 
 **Goal:** PCF8575 button/encoder reading, quadrature decoder, system action types (page nav, mode change, sleep, brightness, config), configurable hardware inputs with same action system as touchscreen buttons, editor UI
 **Depends on:** Phase 10
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 11 to break down)
+- [ ] 11-01-PLAN.md -- Firmware config model + system action types (ActionType enum, config structs, JSON ser/deser, action dispatch)
+- [ ] 11-02-PLAN.md -- Firmware PCF8575 driver + main loop integration + SD card HTTP API (hw_input module, quadrature decoder, replace rotary_encoder)
+- [ ] 11-03-PLAN.md -- Companion config model + hardware editor section (action types, hardware buttons/encoder below canvas)
+- [ ] 11-04-PLAN.md -- Companion settings tab + SD card management (clock/slideshow/power/mode settings, SD file manager)
