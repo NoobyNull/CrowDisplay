@@ -47,11 +47,11 @@ void setup() {
     Serial.printf("Heap: %d bytes (free %d)\n", ESP.getHeapSize(), ESP.getFreeHeap());
 
     Wire.begin(19, 20);  // I2C SDA=19, SCL=20
-    hw_input_init();   // Initialize PCF8575 hardware buttons + encoder (non-fatal if absent)
 
-    touch_init();      // Create I2C mutex
+    touch_init();      // Create I2C mutex (must be before hw_input_init)
     display_init();    // PCA9557 touch reset + LCD init
     gt911_discover();  // Discover GT911 (after PCA9557 reset)
+    hw_input_init();   // Initialize PCF8575 hardware buttons + encoder (non-fatal if absent)
     lvgl_init();       // LVGL buffers + drivers
 
     espnow_link_init();  // ESP-NOW to bridge
