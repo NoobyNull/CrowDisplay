@@ -189,3 +189,79 @@ class HTTPClient:
             raise HTTPClientError("Cannot reach device for image upload")
         except Exception as e:
             raise HTTPClientError(f"Image upload failed: {str(e)}")
+
+    def sd_usage(self) -> Dict[str, Any]:
+        """
+        Get SD card usage stats.
+
+        Returns:
+            Dict with "total_mb", "used_mb", "free_mb" keys
+
+        Raises:
+            HTTPClientError: On connection failure
+        """
+        url = f"{self.base_url}/api/sd/usage"
+        try:
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            return response.json()
+        except requests.Timeout:
+            raise HTTPClientError("SD usage request timeout")
+        except requests.ConnectionError:
+            raise HTTPClientError("Cannot reach device")
+        except Exception as e:
+            raise HTTPClientError(f"SD usage failed: {str(e)}")
+
+    def sd_list(self, path: str = "/") -> Dict[str, Any]:
+        """
+        List files in SD card directory.
+
+        Args:
+            path: Directory path on SD card (default: root)
+
+        Returns:
+            Dict with "path" and "files" keys
+
+        Raises:
+            HTTPClientError: On connection failure
+        """
+        url = f"{self.base_url}/api/sd/list"
+        try:
+            response = requests.get(url, params={"path": path}, timeout=5)
+            response.raise_for_status()
+            return response.json()
+        except requests.Timeout:
+            raise HTTPClientError("SD list request timeout")
+        except requests.ConnectionError:
+            raise HTTPClientError("Cannot reach device")
+        except Exception as e:
+            raise HTTPClientError(f"SD list failed: {str(e)}")
+
+    def sd_delete(self, path: str) -> Dict[str, Any]:
+        """
+        Delete a file from SD card.
+
+        Args:
+            path: File path on SD card to delete
+
+        Returns:
+            Dict with "success" key
+
+        Raises:
+            HTTPClientError: On connection failure or 403 (protected file)
+        """
+        url = f"{self.base_url}/api/sd/delete"
+        try:
+            response = requests.post(url, json={"path": path}, timeout=5)
+            response.raise_for_status()
+            return response.json()
+        except requests.Timeout:
+            raise HTTPClientError("SD delete request timeout")
+        except requests.ConnectionError:
+            raise HTTPClientError("Cannot reach device")
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 403:
+                raise HTTPClientError("Cannot delete protected file (config.json)")
+            raise HTTPClientError(f"SD delete failed: {str(e)}")
+        except Exception as e:
+            raise HTTPClientError(f"SD delete failed: {str(e)}")
