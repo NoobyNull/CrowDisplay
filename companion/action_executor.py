@@ -25,6 +25,7 @@ from companion.config_manager import (
     ACTION_DISPLAY_SETTINGS,
     ACTION_DISPLAY_CLOCK,
     ACTION_DISPLAY_PICTURE,
+    DISPLAY_LOCAL_ACTIONS,
     MOD_CTRL,
     MOD_SHIFT,
     MOD_ALT,
@@ -108,6 +109,11 @@ def execute_action(config_manager, page_idx: int, widget_idx: int):
         return
 
     action_type = widget.get("action_type", ACTION_HOTKEY)
+
+    # Skip display-local actions (handled on device, not on PC)
+    if action_type in DISPLAY_LOCAL_ACTIONS:
+        logging.debug("Skipping display-local action type %d", action_type)
+        return
 
     if action_type == ACTION_LAUNCH_APP:
         _exec_launch_app(widget)

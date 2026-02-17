@@ -25,11 +25,53 @@ ACTION_OPEN_URL = 4      # Open URL in default browser
 ACTION_DISPLAY_SETTINGS = 5  # Toggle config AP mode (display-local)
 ACTION_DISPLAY_CLOCK = 6     # Switch to clock mode (display-local)
 ACTION_DISPLAY_PICTURE = 7   # Switch to picture frame mode (display-local)
+ACTION_PAGE_NEXT = 8         # Navigate to next page (display-local)
+ACTION_PAGE_PREV = 9         # Navigate to previous page (display-local)
+ACTION_PAGE_GOTO = 10        # Go to specific page N (display-local)
+ACTION_MODE_CYCLE = 11       # Cycle through configured display modes (display-local)
+ACTION_BRIGHTNESS = 12       # Cycle brightness presets (display-local)
+ACTION_CONFIG_MODE = 13      # Enter SoftAP config mode (display-local)
 
 VALID_ACTION_TYPES = (
     ACTION_HOTKEY, ACTION_MEDIA_KEY, ACTION_LAUNCH_APP, ACTION_SHELL_CMD, ACTION_OPEN_URL,
     ACTION_DISPLAY_SETTINGS, ACTION_DISPLAY_CLOCK, ACTION_DISPLAY_PICTURE,
+    ACTION_PAGE_NEXT, ACTION_PAGE_PREV, ACTION_PAGE_GOTO,
+    ACTION_MODE_CYCLE, ACTION_BRIGHTNESS, ACTION_CONFIG_MODE,
 )
+
+# Display-local actions that the companion should NOT try to execute
+DISPLAY_LOCAL_ACTIONS = {
+    ACTION_DISPLAY_SETTINGS, ACTION_DISPLAY_CLOCK, ACTION_DISPLAY_PICTURE,
+    ACTION_PAGE_NEXT, ACTION_PAGE_PREV, ACTION_PAGE_GOTO,
+    ACTION_MODE_CYCLE, ACTION_BRIGHTNESS, ACTION_CONFIG_MODE,
+}
+
+# Human-readable names for action type dropdowns
+ACTION_TYPE_NAMES = {
+    ACTION_HOTKEY: "Keyboard Shortcut",
+    ACTION_MEDIA_KEY: "Media Key",
+    ACTION_LAUNCH_APP: "Launch App",
+    ACTION_SHELL_CMD: "Shell Command",
+    ACTION_OPEN_URL: "Open URL",
+    ACTION_DISPLAY_SETTINGS: "Config Mode",
+    ACTION_DISPLAY_CLOCK: "Clock Mode",
+    ACTION_DISPLAY_PICTURE: "Picture Frame",
+    ACTION_PAGE_NEXT: "Next Page",
+    ACTION_PAGE_PREV: "Previous Page",
+    ACTION_PAGE_GOTO: "Go to Page",
+    ACTION_MODE_CYCLE: "Cycle Mode",
+    ACTION_BRIGHTNESS: "Brightness",
+    ACTION_CONFIG_MODE: "Config Mode (SoftAP)",
+}
+
+# Encoder rotation mode names
+ENCODER_MODE_NAMES = {
+    0: "Page Navigation",
+    1: "Volume Control",
+    2: "Brightness",
+    3: "App Select",
+    4: "Mode Cycle",
+}
 
 # Widget type constants (must match display/config.h WidgetType enum)
 WIDGET_HOTKEY_BUTTON = 0
@@ -109,6 +151,40 @@ DEFAULT_COLORS = {
     "GREY": 0x95A5A6,
     "DARK_GREY": 0x34495E,
 }
+
+
+def get_default_hardware_buttons():
+    """Default hardware button configuration (4 buttons)."""
+    return [
+        {"action_type": ACTION_PAGE_NEXT, "label": "Next Page", "keycode": 0, "consumer_code": 0, "modifiers": 0},
+        {"action_type": ACTION_PAGE_PREV, "label": "Prev Page", "keycode": 0, "consumer_code": 0, "modifiers": 0},
+        {"action_type": ACTION_MODE_CYCLE, "label": "Mode", "keycode": 0, "consumer_code": 0, "modifiers": 0},
+        {"action_type": ACTION_CONFIG_MODE, "label": "Config", "keycode": 0, "consumer_code": 0, "modifiers": 0},
+    ]
+
+
+def get_default_encoder():
+    """Default rotary encoder configuration."""
+    return {
+        "push_action": ACTION_BRIGHTNESS, "push_label": "Brightness",
+        "push_keycode": 0, "push_consumer_code": 0, "push_modifiers": 0,
+        "encoder_mode": 0,
+    }
+
+
+def get_default_mode_cycle():
+    """Default mode cycle order (all modes enabled)."""
+    return [0, 1, 2, 3]
+
+
+def get_default_display_settings():
+    """Default display settings."""
+    return {
+        "dim_timeout_sec": 60, "sleep_timeout_sec": 300,
+        "wake_on_touch": True, "clock_24h": True,
+        "clock_color_theme": 0xFFFFFF, "slideshow_interval_sec": 30,
+        "slideshow_transition": "fade",
+    }
 
 
 def make_default_widget(widget_type: int, x: int = 0, y: int = 0) -> Dict[str, Any]:
@@ -329,6 +405,10 @@ class ConfigManager:
                     ],
                 }
             ],
+            "hardware_buttons": get_default_hardware_buttons(),
+            "encoder": get_default_encoder(),
+            "mode_cycle": get_default_mode_cycle(),
+            "display_settings": get_default_display_settings(),
         }
         ensure_widget_ids(self.config)
         self._emit_changed()
@@ -347,6 +427,15 @@ class ConfigManager:
                 data = _migrate_v1_config(data)
 
             self.config = data
+            # Ensure hardware config sections exist with defaults
+            if "hardware_buttons" not in self.config:
+                self.config["hardware_buttons"] = get_default_hardware_buttons()
+            if "encoder" not in self.config:
+                self.config["encoder"] = get_default_encoder()
+            if "mode_cycle" not in self.config:
+                self.config["mode_cycle"] = get_default_mode_cycle()
+            if "display_settings" not in self.config:
+                self.config["display_settings"] = get_default_display_settings()
             ensure_widget_ids(self.config)
             self._emit_changed()
             return True
