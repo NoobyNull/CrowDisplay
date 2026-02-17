@@ -251,12 +251,14 @@ static void widget_to_json(JsonObject obj, const WidgetConfig& w) {
     obj["width"] = w.width;
     obj["height"] = w.height;
     obj["label"] = w.label.c_str();
+    obj["show_label"] = w.show_label;
     obj["color"] = w.color;
     obj["bg_color"] = w.bg_color;
 
     switch (w.widget_type) {
         case WIDGET_HOTKEY_BUTTON:
             obj["description"] = w.description.c_str();
+            obj["show_description"] = w.show_description;
             obj["icon"] = w.icon.c_str();
             if (!w.icon_path.empty()) obj["icon_path"] = w.icon_path.c_str();
             obj["action_type"] = (int)w.action_type;
@@ -267,6 +269,7 @@ static void widget_to_json(JsonObject obj, const WidgetConfig& w) {
             break;
         case WIDGET_STAT_MONITOR:
             obj["stat_type"] = w.stat_type;
+            if (w.value_position != 0) obj["value_position"] = w.value_position;
             break;
         case WIDGET_CLOCK:
             obj["clock_analog"] = w.clock_analog;
@@ -278,6 +281,7 @@ static void widget_to_json(JsonObject obj, const WidgetConfig& w) {
             obj["show_brightness"] = w.show_brightness;
             obj["show_battery"] = w.show_battery;
             obj["show_time"] = w.show_time;
+            obj["icon_spacing"] = w.icon_spacing;
             break;
         case WIDGET_TEXT_LABEL:
             obj["font_size"] = w.font_size;
@@ -301,6 +305,7 @@ static void json_to_widget(JsonObject obj, WidgetConfig& w) {
     w.height = obj["height"] | (int16_t)100;
 
     if (!obj["label"].isNull()) w.label = obj["label"].as<const char*>();
+    w.show_label = obj["show_label"] | true;
     w.color = obj["color"] | (uint32_t)0xFFFFFF;
     w.bg_color = obj["bg_color"] | (uint32_t)0;
 
@@ -321,6 +326,7 @@ static void json_to_widget(JsonObject obj, WidgetConfig& w) {
     switch (w.widget_type) {
         case WIDGET_HOTKEY_BUTTON:
             if (!obj["description"].isNull()) w.description = obj["description"].as<const char*>();
+            w.show_description = obj["show_description"] | true;
             if (!obj["icon"].isNull()) w.icon = obj["icon"].as<const char*>();
             if (!obj["icon_path"].isNull()) w.icon_path = obj["icon_path"].as<const char*>();
             w.action_type = (ActionType)(obj["action_type"] | (int)ACTION_HOTKEY);
@@ -335,6 +341,8 @@ static void json_to_widget(JsonObject obj, WidgetConfig& w) {
                 Serial.printf("CONFIG: WARNING - stat_type %d invalid\n", w.stat_type);
                 w.stat_type = STAT_CPU_PERCENT;
             }
+            w.value_position = obj["value_position"] | (uint8_t)0;
+            if (w.value_position > 2) w.value_position = 0;
             break;
         case WIDGET_CLOCK:
             w.clock_analog = obj["clock_analog"] | false;
@@ -346,6 +354,9 @@ static void json_to_widget(JsonObject obj, WidgetConfig& w) {
             w.show_brightness = obj["show_brightness"] | true;
             w.show_battery = obj["show_battery"] | true;
             w.show_time = obj["show_time"] | true;
+            w.icon_spacing = obj["icon_spacing"] | (uint8_t)8;
+            if (w.icon_spacing < 2) w.icon_spacing = 2;
+            if (w.icon_spacing > 20) w.icon_spacing = 20;
             break;
         case WIDGET_TEXT_LABEL:
             w.font_size = obj["font_size"] | (uint8_t)16;

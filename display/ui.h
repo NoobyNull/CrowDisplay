@@ -23,6 +23,12 @@ void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_l
 // Update clock display (call in clock mode from main loop)
 void update_clock_time();
 
+// Update clock widgets on pages (call periodically from main loop)
+void update_page_clocks();
+
+// Update display uptime widgets (local millis-based, no companion data needed)
+void update_display_uptime();
+
 // Enter config mode screen (shows SSID, password, IP, upload URLs)
 void show_config_screen();
 

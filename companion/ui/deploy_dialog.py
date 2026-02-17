@@ -52,6 +52,7 @@ class DeployWorker(QThread):
     step_started = Signal(str)   # step key
     step_done = Signal(str)      # step key
     deploy_success = Signal()
+    deploy_warning = Signal(str) # non-fatal warning message
     deploy_failed = Signal(str)  # error message
 
     def __init__(self, json_str: str, pending_images: dict = None):
@@ -94,16 +95,17 @@ class DeployWorker(QThread):
                 raise HTTPClientError("Device not responding after WiFi connect")
             self.step_done.emit("health")
 
-            # 6. Upload images
+            # 6. Upload images (non-fatal: warn but continue if upload fails)
             self.step_started.emit("images")
+            image_warnings = []
             if self.pending_images:
-                total = len(self.pending_images)
                 for i, (widget_idx, (filename, data)) in enumerate(self.pending_images.items()):
-                    result = client.upload_image(filename, data)
-                    if not result.get("success"):
-                        raise HTTPClientError(
-                            result.get("error", f"Failed to upload {filename}")
-                        )
+                    try:
+                        result = client.upload_image(filename, data)
+                        if not result.get("success"):
+                            image_warnings.append(f"{filename}: {result.get('error', 'unknown')}")
+                    except Exception as e:
+                        image_warnings.append(f"{filename}: {e}")
             self.step_done.emit("images")
 
             # 7. Upload config
@@ -126,6 +128,9 @@ class DeployWorker(QThread):
             self.step_done.emit("wifi_restore")
 
             self.deploy_success.emit()
+            if image_warnings:
+                warn_msg = "Some icons failed to upload:\n" + "\n".join(image_warnings)
+                self.deploy_warning.emit(warn_msg)
 
         except (BridgeDeviceError, WiFiManagerError, HTTPClientError) as e:
             self._cleanup()
@@ -271,6 +276,7 @@ class DeployDialog(QDialog):
         self.deploy_worker.step_started.connect(self._on_step_started)
         self.deploy_worker.step_done.connect(self._on_step_done)
         self.deploy_worker.deploy_success.connect(self._on_success)
+        self.deploy_worker.deploy_warning.connect(self._on_warning)
         self.deploy_worker.deploy_failed.connect(self._on_failed)
         self.deploy_worker.start()
 
@@ -296,6 +302,14 @@ class DeployDialog(QDialog):
             "Config deployed to device.\nThe display will rebuild its UI.",
         )
         self.accept()
+
+    def _on_warning(self, warn_msg: str):
+        """Deploy succeeded but with warnings."""
+        self.status_label.setText(f"Warning: {warn_msg}")
+        self.status_label.setStyleSheet("color: #F39C12;")
+        # Mark image step as warning (use DONE style, not error)
+        if "images" in self.step_labels:
+            self.step_labels["images"].set_state(StepLabel.DONE)
 
     def _on_failed(self, error_msg: str):
         """Deploy failed."""

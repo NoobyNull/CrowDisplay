@@ -9,6 +9,7 @@ refresh config, toggle autostart, and quit.
 import logging
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -133,8 +134,9 @@ class CrowPanelTray(QApplication):
         self._tray.setContextMenu(self._menu)
         self._tray.show()
 
-        # Editor window (created on demand)
+        # Editor window (in-process) or subprocess handle
         self._editor = None
+        self._editor_proc = None
 
         # Start companion service
         self._service.start()
@@ -159,18 +161,48 @@ class CrowPanelTray(QApplication):
         self._tray.setToolTip(f"CrowPanel — {text}")
 
     def _on_edit(self):
-        """Open or bring to front the editor window."""
-        if self._editor is None:
-            from companion.ui.editor_main import EditorMainWindow
-            self._editor = EditorMainWindow(self._config_mgr)
-            self._editor.setAttribute(Qt.WA_DeleteOnClose, False)
-            self._editor._tray_mode = True
-            # Set the app icon on the editor window too
-            if APP_ICON_PATH.is_file():
-                self._editor.setWindowIcon(QIcon(str(APP_ICON_PATH)))
-        self._editor.show()
-        self._editor.raise_()
-        self._editor.activateWindow()
+        """Open or bring to front the editor window.
+
+        Tries in-process import first (development mode). If editor_main was
+        excluded from the build (Nuitka --nofollow-import-to), falls back to
+        launching crowpanel-editor or crowpanel_editor.py as a subprocess.
+        """
+        # In-process path (works when running from source)
+        try:
+            if self._editor is None:
+                from companion.ui.editor_main import EditorMainWindow
+                self._editor = EditorMainWindow(self._config_mgr)
+                self._editor.setAttribute(Qt.WA_DeleteOnClose, False)
+                self._editor._tray_mode = True
+                if APP_ICON_PATH.is_file():
+                    self._editor.setWindowIcon(QIcon(str(APP_ICON_PATH)))
+            self._editor.show()
+            self._editor.raise_()
+            self._editor.activateWindow()
+            return
+        except ImportError:
+            pass
+
+        # Subprocess path (Nuitka onefile build)
+        if self._editor_proc is not None and self._editor_proc.poll() is None:
+            logging.info("Editor already running (PID %d)", self._editor_proc.pid)
+            return
+
+        # Try crowpanel-editor on PATH, then script next to this file
+        editor_script = shutil.which("crowpanel-editor")
+        if editor_script is None:
+            candidate = Path(__file__).parent / "crowpanel_editor.py"
+            if candidate.is_file():
+                editor_script = str(candidate)
+        if editor_script is None:
+            logging.error("Cannot find crowpanel-editor or crowpanel_editor.py")
+            return
+
+        logging.info("Launching editor: %s", editor_script)
+        self._editor_proc = subprocess.Popen(
+            [sys.executable, editor_script] if editor_script.endswith(".py")
+            else [editor_script]
+        )
 
     def _on_refresh(self):
         self._service.reload_config()
@@ -178,26 +210,26 @@ class CrowPanelTray(QApplication):
             self._editor._auto_load_config()
 
     def _on_toggle_autostart(self, checked):
-        desktop_src = DATA_DIR / DESKTOP_FILE_NAME
         desktop_dst = AUTOSTART_DIR / DESKTOP_FILE_NAME
 
         if checked:
             AUTOSTART_DIR.mkdir(parents=True, exist_ok=True)
-            if desktop_src.is_file():
-                shutil.copy2(str(desktop_src), str(desktop_dst))
-            else:
-                # Generate a minimal desktop file if the template doesn't exist
-                tray_script = Path(__file__).parent / "crowpanel_tray.py"
-                desktop_dst.write_text(
-                    f"[Desktop Entry]\n"
-                    f"Type=Application\n"
-                    f"Name=CrowPanel Companion\n"
-                    f"Exec=python3 {tray_script}\n"
-                    f"Icon=crowpanel\n"
-                    f"Categories=Utility;System;\n"
-                    f"StartupNotify=false\n"
-                    f"X-GNOME-Autostart-enabled=true\n"
-                )
+            # Always generate with absolute paths so autostart works
+            tray_script = Path(__file__).resolve().parent / "crowpanel_tray.py"
+            project_root = tray_script.parent.parent
+            icon_path = (DATA_DIR / "app-icon-256.png").resolve()
+            desktop_dst.write_text(
+                f"[Desktop Entry]\n"
+                f"Type=Application\n"
+                f"Name=CrowPanel Companion\n"
+                f"Comment=System stats streamer and hotkey bridge for CrowPanel displays\n"
+                f"Exec=env PYTHONPATH={project_root} python3 {tray_script}\n"
+                f"Path={project_root}\n"
+                f"Icon={icon_path}\n"
+                f"Categories=Utility;System;\n"
+                f"StartupNotify=false\n"
+                f"X-GNOME-Autostart-enabled=true\n"
+            )
             logging.info("Autostart enabled: %s", desktop_dst)
         else:
             if desktop_dst.is_file():
@@ -213,5 +245,7 @@ class CrowPanelTray(QApplication):
         if self._editor is not None:
             self._editor._tray_mode = False
             self._editor.close()
+        if self._editor_proc is not None and self._editor_proc.poll() is None:
+            self._editor_proc.terminate()
         self._tray.hide()
         self.quit()

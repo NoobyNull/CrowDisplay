@@ -124,6 +124,9 @@ STAT_TYPE_OPTIONS = [
     ("GPU Power", 0x12),
     ("Disk Read", 0x13),
     ("Disk Write", 0x14),
+    ("Display Uptime", 0x15),
+    ("Proc (User)", 0x16),
+    ("Proc (System)", 0x17),
 ]
 
 # Reverse lookup: stat type ID → display name
@@ -136,6 +139,43 @@ STAT_DEFAULT_COLORS = {
     0x09: 0x3498DB, 0x0A: 0xE67E22, 0x0B: 0x9B59B6, 0x0C: 0x7F8C8D,
     0x0D: 0x2ECC71, 0x0E: 0xE74C3C, 0x0F: 0xE67E22, 0x10: 0x7F8C8D,
     0x11: 0xE67E22, 0x12: 0xE74C3C, 0x13: 0x1ABC9C, 0x14: 0x1ABC9C,
+    0x15: 0x7F8C8D, 0x16: 0x3498DB, 0x17: 0xE74C3C,
+}
+
+# Stat placeholders for canvas preview (matching display get_stat_placeholder)
+STAT_PLACEHOLDERS = {
+    0x01: "CPU --%", 0x02: "RAM --%", 0x03: "GPU --%",
+    0x04: "CPU --\u00b0C", 0x05: "GPU --\u00b0C", 0x06: "Disk --%",
+    0x07: "\u2191 -- KB/s", 0x08: "\u2193 -- KB/s",
+    0x09: "CPU -- MHz", 0x0A: "GPU -- MHz", 0x0B: "Swap --%",
+    0x0C: "Up --h", 0x0D: "Bat --%", 0x0E: "Fan --",
+    0x0F: "Load --", 0x10: "Proc --", 0x11: "VRAM --%",
+    0x12: "GPU --W", 0x13: "\u2193 R -- KB/s", 0x14: "\u2191 W -- KB/s",
+    0x15: "Disp --h", 0x16: "User --", 0x17: "Sys --",
+}
+
+# Value-only placeholders for split-label mode
+STAT_VALUE_PLACEHOLDERS = {
+    0x01: "--%", 0x02: "--%", 0x03: "--%",
+    0x04: "--\u00b0C", 0x05: "--\u00b0C", 0x06: "--%",
+    0x07: "-- KB/s", 0x08: "-- KB/s",
+    0x09: "-- MHz", 0x0A: "-- MHz", 0x0B: "--%",
+    0x0C: "--h", 0x0D: "--%", 0x0E: "--",
+    0x0F: "--", 0x10: "--", 0x11: "--%",
+    0x12: "--W", 0x13: "-- KB/s", 0x14: "-- KB/s",
+    0x15: "--h", 0x16: "--", 0x17: "--",
+}
+
+# Stat name labels for split-label mode
+STAT_NAME_LABELS = {
+    0x01: "CPU", 0x02: "RAM", 0x03: "GPU",
+    0x04: "CPU", 0x05: "GPU", 0x06: "Disk",
+    0x07: "\u2191", 0x08: "\u2193",
+    0x09: "CPU", 0x0A: "GPU", 0x0B: "Swap",
+    0x0C: "Up", 0x0D: "Bat", 0x0E: "Fan",
+    0x0F: "Load", 0x10: "Proc", 0x11: "VRAM",
+    0x12: "GPU", 0x13: "\u2193 R", 0x14: "\u2191 W",
+    0x15: "Disp", 0x16: "User", 0x17: "Sys",
 }
 
 # Default stats_header (matches device defaults)
@@ -737,37 +777,63 @@ class CanvasWidgetItem(QGraphicsRectItem):
             painter.drawText(rect, Qt.AlignCenter, icon_display)
 
     def _paint_stat_monitor(self, painter, rect, qcolor):
-        label = self.widget_dict.get("label", "Stat")
+        stat_type = self.widget_dict.get("stat_type", 0x01)
+        value_pos = self.widget_dict.get("value_position", 0)
         painter.setPen(qcolor)
-        painter.setFont(QFont("Arial", 8))
-        painter.drawText(rect.adjusted(4, 2, -4, -rect.height() / 2), Qt.AlignLeft | Qt.AlignVCenter, label)
-        painter.setFont(QFont("Arial", 10, QFont.Bold))
-        painter.drawText(rect.adjusted(4, rect.height() / 2, -4, -2), Qt.AlignLeft | Qt.AlignVCenter, "--%")
+
+        if value_pos == 0:
+            # Inline: single centered text matching display placeholder
+            placeholder = STAT_PLACEHOLDERS.get(stat_type, "--%")
+            painter.setFont(QFont("Arial", 10, QFont.Bold))
+            painter.drawText(rect, Qt.AlignCenter, placeholder)
+        else:
+            name = STAT_NAME_LABELS.get(stat_type, "?")
+            value = STAT_VALUE_PLACEHOLDERS.get(stat_type, "--")
+            half = rect.height() / 2
+            if value_pos == 1:
+                # Value on top, name on bottom
+                painter.setFont(QFont("Arial", 11, QFont.Bold))
+                painter.drawText(rect.adjusted(4, 2, -4, -half), Qt.AlignCenter, value)
+                painter.setFont(QFont("Arial", 8))
+                painter.drawText(rect.adjusted(4, half, -4, -2), Qt.AlignCenter, name)
+            else:
+                # Name on top, value on bottom
+                painter.setFont(QFont("Arial", 8))
+                painter.drawText(rect.adjusted(4, 2, -4, -half), Qt.AlignCenter, name)
+                painter.setFont(QFont("Arial", 11, QFont.Bold))
+                painter.drawText(rect.adjusted(4, half, -4, -2), Qt.AlignCenter, value)
 
     def _paint_status_bar(self, painter, rect, qcolor):
+        from datetime import datetime
         painter.setPen(qcolor)
         painter.setFont(QFont("Arial", 9))
         left_x = rect.left() + 8
-        # Left side: page label
+        # Left side: keyboard icon + page label (matches display)
         label = self.widget_dict.get("label", "Hotkeys")
-        painter.drawText(QRectF(left_x, rect.top(), 120, rect.height()),
-                         Qt.AlignLeft | Qt.AlignVCenter, label)
-        # Right side: status items (right-aligned)
+        painter.drawText(QRectF(left_x, rect.top(), 160, rect.height()),
+                         Qt.AlignLeft | Qt.AlignVCenter, "\u2328  " + label)
+        # Center: time (matches display placement)
+        if self.widget_dict.get("show_time", True):
+            now = datetime.now()
+            time_str = now.strftime("%H:%M")
+            painter.save()
+            painter.setPen(QColor(0x2E, 0xCC, 0x71))  # CLR_GREEN
+            painter.drawText(rect, Qt.AlignCenter, time_str)
+            painter.restore()
+        # Right side: icons packed right-to-left (matches display order)
         right_parts = []
         if self.widget_dict.get("show_wifi", True):
-            right_parts.append("WiFi")
+            right_parts.append("\U0001F4F6")   # WiFi
         if self.widget_dict.get("show_pc", True):
-            right_parts.append("USB")
+            right_parts.append("\U0001F50C")   # USB
         if self.widget_dict.get("show_settings", True):
-            right_parts.append("Gear")
+            right_parts.append("\u2699")       # Settings gear
         if self.widget_dict.get("show_brightness", True):
-            right_parts.append("Brt")
-        if self.widget_dict.get("show_battery", True):
-            right_parts.append("BAT")
-        if self.widget_dict.get("show_time", True):
-            right_parts.append("00:00")
+            right_parts.append("\u2600")       # Brightness
         if right_parts:
-            status_text = "  |  ".join(right_parts)
+            spacing = self.widget_dict.get("icon_spacing", 8)
+            gap = " " * max(1, spacing // 4)
+            status_text = gap.join(right_parts)
             painter.drawText(rect.adjusted(0, 0, -8, 0),
                              Qt.AlignRight | Qt.AlignVCenter, status_text)
 
@@ -1333,7 +1399,14 @@ class PropertiesPanel(QScrollArea):
         common_group = self.common_group
         common_layout = QVBoxLayout()
 
-        common_layout.addWidget(QLabel("Label:"))
+        label_row = QHBoxLayout()
+        label_row.addWidget(QLabel("Label:"))
+        self.show_label_cb = QCheckBox("Show")
+        self.show_label_cb.setChecked(True)
+        self.show_label_cb.stateChanged.connect(self._on_property_changed)
+        label_row.addStretch()
+        label_row.addWidget(self.show_label_cb)
+        common_layout.addLayout(label_row)
         self.label_input = QLineEdit()
         self.label_input.setMaxLength(32)
         self.label_input.textChanged.connect(self._on_property_changed)
@@ -1369,7 +1442,14 @@ class PropertiesPanel(QScrollArea):
         self.from_app_btn.clicked.connect(self._on_from_app_clicked)
         hotkey_layout.addWidget(self.from_app_btn)
 
-        hotkey_layout.addWidget(QLabel("Description:"))
+        desc_row = QHBoxLayout()
+        desc_row.addWidget(QLabel("Description:"))
+        self.show_description_cb = QCheckBox("Show")
+        self.show_description_cb.setChecked(True)
+        self.show_description_cb.stateChanged.connect(self._on_property_changed)
+        desc_row.addStretch()
+        desc_row.addWidget(self.show_description_cb)
+        hotkey_layout.addLayout(desc_row)
         self.description_input = QLineEdit()
         self.description_input.setMaxLength(32)
         self.description_input.textChanged.connect(self._on_property_changed)
@@ -1519,30 +1599,45 @@ class PropertiesPanel(QScrollArea):
             self.stat_type_combo.addItem(name, tid)
         self.stat_type_combo.currentIndexChanged.connect(self._on_stat_type_changed)
         stat_layout.addWidget(self.stat_type_combo)
+        vpos_row = QHBoxLayout()
+        vpos_row.addWidget(QLabel("Value Position:"))
+        self.value_position_combo = NoScrollComboBox()
+        self.value_position_combo.addItem("Inline", 0)
+        self.value_position_combo.addItem("Value Top", 1)
+        self.value_position_combo.addItem("Value Bottom", 2)
+        self.value_position_combo.currentIndexChanged.connect(self._on_property_changed)
+        vpos_row.addWidget(self.value_position_combo)
+        stat_layout.addLayout(vpos_row)
         self.stat_group.setLayout(stat_layout)
         self.main_layout.addWidget(self.stat_group)
 
         # Status Bar group
         self.status_bar_group = QGroupBox("Status Bar")
         sb_layout = QVBoxLayout()
-        self.show_wifi_check = QCheckBox("Show WiFi")
-        self.show_wifi_check.stateChanged.connect(self._on_property_changed)
-        sb_layout.addWidget(self.show_wifi_check)
-        self.show_pc_check = QCheckBox("Show PC Status")
-        self.show_pc_check.stateChanged.connect(self._on_property_changed)
-        sb_layout.addWidget(self.show_pc_check)
-        self.show_settings_check = QCheckBox("Show Settings")
-        self.show_settings_check.stateChanged.connect(self._on_property_changed)
-        sb_layout.addWidget(self.show_settings_check)
-        self.show_brightness_check = QCheckBox("Show Brightness")
-        self.show_brightness_check.stateChanged.connect(self._on_property_changed)
-        sb_layout.addWidget(self.show_brightness_check)
-        self.show_battery_check = QCheckBox("Show Battery")
-        self.show_battery_check.stateChanged.connect(self._on_property_changed)
-        sb_layout.addWidget(self.show_battery_check)
         self.show_time_check = QCheckBox("Show Time")
         self.show_time_check.stateChanged.connect(self._on_property_changed)
         sb_layout.addWidget(self.show_time_check)
+        self.show_brightness_check = QCheckBox("Show Brightness")
+        self.show_brightness_check.stateChanged.connect(self._on_property_changed)
+        sb_layout.addWidget(self.show_brightness_check)
+        self.show_settings_check = QCheckBox("Show Settings")
+        self.show_settings_check.stateChanged.connect(self._on_property_changed)
+        sb_layout.addWidget(self.show_settings_check)
+        self.show_pc_check = QCheckBox("Show PC Status")
+        self.show_pc_check.stateChanged.connect(self._on_property_changed)
+        sb_layout.addWidget(self.show_pc_check)
+        self.show_wifi_check = QCheckBox("Show WiFi")
+        self.show_wifi_check.stateChanged.connect(self._on_property_changed)
+        sb_layout.addWidget(self.show_wifi_check)
+        spacing_row = QHBoxLayout()
+        spacing_row.addWidget(QLabel("Icon Spacing:"))
+        self.icon_spacing_spin = QSpinBox()
+        self.icon_spacing_spin.setRange(2, 20)
+        self.icon_spacing_spin.setValue(8)
+        self.icon_spacing_spin.setSuffix("px")
+        self.icon_spacing_spin.valueChanged.connect(self._on_property_changed)
+        spacing_row.addWidget(self.icon_spacing_spin)
+        sb_layout.addLayout(spacing_row)
         self.status_bar_group.setLayout(sb_layout)
         self.main_layout.addWidget(self.status_bar_group)
 
@@ -1688,6 +1783,7 @@ class PropertiesPanel(QScrollArea):
 
         # Common
         self.label_input.setText(widget_dict.get("label", ""))
+        self.show_label_cb.setChecked(widget_dict.get("show_label", True))
         self._set_color_btn(self.color_btn, widget_dict.get("color", 0xFFFFFF))
         bg_val = widget_dict.get("bg_color", 0)
         self._set_color_btn(self.bg_color_btn, bg_val)
@@ -1702,6 +1798,7 @@ class PropertiesPanel(QScrollArea):
         if wtype == WIDGET_HOTKEY_BUTTON:
             self.hotkey_group.setVisible(True)
             self.description_input.setText(widget_dict.get("description", ""))
+            self.show_description_cb.setChecked(widget_dict.get("show_description", True))
             self.icon_picker.set_symbol(widget_dict.get("icon", ""))
 
             # Restore image picker state
@@ -1765,6 +1862,8 @@ class PropertiesPanel(QScrollArea):
                 if self.stat_type_combo.itemData(i) == st:
                     self.stat_type_combo.setCurrentIndex(i)
                     break
+            vp = widget_dict.get("value_position", 0)
+            self.value_position_combo.setCurrentIndex(min(vp, 2))
 
         elif wtype == WIDGET_STATUS_BAR:
             self.status_bar_group.setVisible(True)
@@ -1772,8 +1871,8 @@ class PropertiesPanel(QScrollArea):
             self.show_pc_check.setChecked(widget_dict.get("show_pc", True))
             self.show_settings_check.setChecked(widget_dict.get("show_settings", True))
             self.show_brightness_check.setChecked(widget_dict.get("show_brightness", True))
-            self.show_battery_check.setChecked(widget_dict.get("show_battery", True))
             self.show_time_check.setChecked(widget_dict.get("show_time", True))
+            self.icon_spacing_spin.setValue(widget_dict.get("icon_spacing", 8))
 
         elif wtype == WIDGET_CLOCK:
             self.clock_group.setVisible(True)
@@ -1944,6 +2043,7 @@ class PropertiesPanel(QScrollArea):
         d["width"] = self.w_spin.value()
         d["height"] = self.h_spin.value()
         d["label"] = self.label_input.text()
+        d["show_label"] = self.show_label_cb.isChecked()
         d["color"] = self.color_btn.property("color_value") or 0xFFFFFF
         d["bg_color"] = 0 if self.bg_transparent_cb.isChecked() else (self.bg_color_btn.property("color_value") or 0)
 
@@ -1951,6 +2051,7 @@ class PropertiesPanel(QScrollArea):
 
         if wtype == WIDGET_HOTKEY_BUTTON:
             d["description"] = self.description_input.text()
+            d["show_description"] = self.show_description_cb.isChecked()
             d["icon"] = self.icon_picker.get_symbol()
             # Set icon_path if an image is pending for this widget
             if self._widget_id in self._pending_icon_image_data:
@@ -1986,14 +2087,15 @@ class PropertiesPanel(QScrollArea):
 
         elif wtype == WIDGET_STAT_MONITOR:
             d["stat_type"] = self.stat_type_combo.currentData() or 0x01
+            d["value_position"] = self.value_position_combo.currentData() or 0
 
         elif wtype == WIDGET_STATUS_BAR:
             d["show_wifi"] = self.show_wifi_check.isChecked()
             d["show_pc"] = self.show_pc_check.isChecked()
             d["show_settings"] = self.show_settings_check.isChecked()
             d["show_brightness"] = self.show_brightness_check.isChecked()
-            d["show_battery"] = self.show_battery_check.isChecked()
             d["show_time"] = self.show_time_check.isChecked()
+            d["icon_spacing"] = self.icon_spacing_spin.value()
 
         elif wtype == WIDGET_CLOCK:
             d["clock_analog"] = self.clock_analog_check.isChecked()
@@ -2123,10 +2225,9 @@ class PropertiesPanel(QScrollArea):
         name = app.name[:20]
         self.label_input.setText(name)
 
-        # Set description from exec command (clean up %u, %U, etc.)
-        import re
-        clean_exec = re.sub(r'\s*%[a-zA-Z]', '', app.exec_cmd).strip()
-        self.description_input.setText(clean_exec[:32])
+        # Set description from .desktop Comment field
+        desc = app.comment[:32] if app.comment else ""
+        self.description_input.setText(desc)
 
         self._updating = False
 
@@ -2138,10 +2239,12 @@ class PropertiesPanel(QScrollArea):
                 h = self.h_spin.value()
                 png_data = optimize_for_widget(app.icon_path, w, h)
 
-                # Sanitize filename
+                # Sanitize filename: use basename to strip path prefix
+                import os
+                base = os.path.splitext(os.path.basename(app.icon_name))[0] or app.icon_name
                 safe_name = "".join(
                     c if c.isalnum() or c in "-_" else "_"
-                    for c in app.icon_name
+                    for c in base
                 )
                 filename = f"{safe_name}.png"
 
@@ -2445,6 +2548,73 @@ class SettingsTab(QScrollArea):
         power_group.setLayout(power_layout)
         layout.addWidget(power_group)
 
+        # 3.5 System Monitor Settings
+        sysmon_group = QGroupBox("System Monitor")
+        sysmon_layout = QVBoxLayout()
+
+        # Network interface selector
+        net_row = QHBoxLayout()
+        net_row.addWidget(QLabel("Network Interface:"))
+        self.net_interface_combo = NoScrollComboBox()
+        self.net_interface_combo.addItem("All (aggregate)", "")
+        try:
+            import psutil
+            for nic in sorted(psutil.net_if_addrs().keys()):
+                self.net_interface_combo.addItem(nic, nic)
+        except Exception:
+            pass
+        self.net_interface_combo.currentIndexChanged.connect(self._on_setting_changed)
+        net_row.addWidget(self.net_interface_combo)
+        sysmon_layout.addLayout(net_row)
+
+        # Disk usage mount point selector
+        disk_mount_row = QHBoxLayout()
+        disk_mount_row.addWidget(QLabel("Disk (Usage):"))
+        self.disk_mount_combo = NoScrollComboBox()
+        try:
+            import psutil
+            mounts = set()
+            for part in psutil.disk_partitions():
+                mounts.add(part.mountpoint)
+            for mp in sorted(mounts):
+                self.disk_mount_combo.addItem(mp, mp)
+        except Exception:
+            self.disk_mount_combo.addItem("/", "/")
+        self.disk_mount_combo.currentIndexChanged.connect(self._on_setting_changed)
+        disk_mount_row.addWidget(self.disk_mount_combo)
+        sysmon_layout.addLayout(disk_mount_row)
+
+        # Disk I/O device selector
+        disk_dev_row = QHBoxLayout()
+        disk_dev_row.addWidget(QLabel("Disk (I/O):"))
+        self.disk_device_combo = NoScrollComboBox()
+        self.disk_device_combo.addItem("All (aggregate)", "")
+        try:
+            import psutil
+            for dev in sorted(psutil.disk_io_counters(perdisk=True).keys()):
+                self.disk_device_combo.addItem(dev, dev)
+        except Exception:
+            pass
+        self.disk_device_combo.currentIndexChanged.connect(self._on_setting_changed)
+        disk_dev_row.addWidget(self.disk_device_combo)
+        sysmon_layout.addLayout(disk_dev_row)
+
+        # Process update interval
+        proc_row = QHBoxLayout()
+        proc_row.addWidget(QLabel("Process Update:"))
+        self.proc_interval_spin = QSpinBox()
+        self.proc_interval_spin.setRange(1, 60)
+        self.proc_interval_spin.setValue(30)
+        self.proc_interval_spin.setSuffix(" sec")
+        self.proc_interval_spin.setFocusPolicy(Qt.StrongFocus)
+        self.proc_interval_spin.valueChanged.connect(self._on_setting_changed)
+        proc_row.addWidget(self.proc_interval_spin)
+        proc_row.addStretch()
+        sysmon_layout.addLayout(proc_row)
+
+        sysmon_group.setLayout(sysmon_layout)
+        layout.addWidget(sysmon_group)
+
         # 4. Mode Cycle Settings
         mode_group = QGroupBox("Display Mode Rotation")
         mode_layout = QVBoxLayout()
@@ -2549,6 +2719,30 @@ class SettingsTab(QScrollArea):
         self.sleep_timeout_spin.setValue(ds.get("sleep_timeout_sec", 300))
         self.wake_on_touch_check.setChecked(ds.get("wake_on_touch", True))
 
+        # System Monitor settings (stored at config root level)
+        net_iface = self.config_manager.config.get("net_interface", "") or ""
+        idx = self.net_interface_combo.findData(net_iface)
+        if idx >= 0:
+            self.net_interface_combo.setCurrentIndex(idx)
+        else:
+            self.net_interface_combo.setCurrentIndex(0)
+
+        disk_mount = self.config_manager.config.get("disk_mount", "/") or "/"
+        idx = self.disk_mount_combo.findData(disk_mount)
+        if idx >= 0:
+            self.disk_mount_combo.setCurrentIndex(idx)
+        else:
+            self.disk_mount_combo.setCurrentIndex(0)
+
+        disk_dev = self.config_manager.config.get("disk_device", "") or ""
+        idx = self.disk_device_combo.findData(disk_dev)
+        if idx >= 0:
+            self.disk_device_combo.setCurrentIndex(idx)
+        else:
+            self.disk_device_combo.setCurrentIndex(0)
+
+        self.proc_interval_spin.setValue(self.config_manager.config.get("proc_update_interval", 30))
+
         # Mode cycle
         mode_cycle = self.config_manager.config.get("mode_cycle", [0, 1, 2, 3])
         for cb in self.mode_checks:
@@ -2637,6 +2831,11 @@ class SettingsTab(QScrollArea):
         ds["sleep_timeout_sec"] = self.sleep_timeout_spin.value()
         ds["wake_on_touch"] = self.wake_on_touch_check.isChecked()
         self.config_manager.config["mode_cycle"] = self._get_mode_order()
+        # System Monitor settings (config root level)
+        self.config_manager.config["net_interface"] = self.net_interface_combo.currentData() or ""
+        self.config_manager.config["disk_mount"] = self.disk_mount_combo.currentData() or "/"
+        self.config_manager.config["disk_device"] = self.disk_device_combo.currentData() or ""
+        self.config_manager.config["proc_update_interval"] = self.proc_interval_spin.value()
 
     # -- SD Card Management --
 

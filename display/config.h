@@ -92,11 +92,13 @@ struct WidgetConfig {
     // --- Common properties ---
     WidgetType widget_type;   // Which widget type this is
     std::string label;        // Display label (used by most widget types)
+    bool show_label;          // Whether to render label on device
     uint32_t color;           // Primary color (0xRRGGBB)
     uint32_t bg_color;        // Background color (0xRRGGBB, 0 = transparent/default)
 
     // --- Hotkey Button properties (widget_type == WIDGET_HOTKEY_BUTTON) ---
     std::string description;  // Tooltip description (e.g., "Super+1")
+    bool show_description;    // Whether to render description on device
     std::string icon;         // LVGL symbol string (e.g., LV_SYMBOL_HOME)
     std::string icon_path;    // SD card image path (e.g., "/icons/calc.png") — overrides icon symbol
     ActionType action_type;   // HOTKEY or MEDIA_KEY
@@ -106,7 +108,8 @@ struct WidgetConfig {
     uint32_t pressed_color;   // 0x000000 = auto-darken, else explicit color
 
     // --- Stat Monitor properties (widget_type == WIDGET_STAT_MONITOR) ---
-    uint8_t stat_type;        // StatType enum value (1-20)
+    uint8_t stat_type;        // StatType enum value (1-23)
+    uint8_t value_position;   // 0=inline (default), 1=value top/label bottom, 2=label top/value bottom
 
     // --- Clock properties (widget_type == WIDGET_CLOCK) ---
     bool clock_analog;        // true = analog, false = digital
@@ -118,6 +121,7 @@ struct WidgetConfig {
     bool show_brightness;     // Show brightness icon
     bool show_battery;        // Show battery percentage
     bool show_time;           // Show current time
+    uint8_t icon_spacing;     // Spacing between status bar icons in pixels (2-20)
 
     // --- Text Label properties (widget_type == WIDGET_TEXT_LABEL) ---
     uint8_t font_size;        // Font size (12, 14, 16, 20, 22, 28, 40)
@@ -131,14 +135,14 @@ struct WidgetConfig {
     WidgetConfig()
         : x(0), y(0), width(180), height(100),
           widget_type(WIDGET_HOTKEY_BUTTON),
-          label(""), color(0xFFFFFF), bg_color(0),
-          description(""), icon(""), icon_path(""),
+          label(""), show_label(true), color(0xFFFFFF), bg_color(0),
+          description(""), show_description(true), icon(""), icon_path(""),
           action_type(ACTION_HOTKEY), modifiers(0), keycode(0),
           consumer_code(0), pressed_color(0x000000),
-          stat_type(0),
+          stat_type(0), value_position(0),
           clock_analog(false),
           show_wifi(true), show_pc(true), show_settings(true), show_brightness(true),
-          show_battery(true), show_time(true),
+          show_battery(true), show_time(true), icon_spacing(8),
           font_size(16), text_align(1),
           separator_vertical(false), thickness(2) {}
 };

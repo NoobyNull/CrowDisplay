@@ -33,43 +33,75 @@ from companion.config_manager import (
 )
 
 # ---------------------------------------------------------------------------
-# HID keycode to key name mapping (USB HID Usage Tables)
+# Keycode to key name mapping
 # ---------------------------------------------------------------------------
+#
+# The config stores Arduino keyboard codes:
+# - ASCII printable chars: 0x20-0x7E (space, letters, digits, symbols)
+# - Arduino special keys: 0x80+ (Enter=0xB0, arrows=0xD7-0xDA, etc.)
+#
+# We also keep HID scan code mappings for backward compatibility.
 
-_HID_KEY_NAMES = {}
+_KEY_NAMES = {}
 
+# --- Arduino ASCII keycodes (primary: what config.json actually stores) ---
+# Printable ASCII: map to their character name for ydotool/xdotool
+for _i in range(ord('a'), ord('z') + 1):
+    _KEY_NAMES[_i] = chr(_i)
+for _i in range(ord('A'), ord('Z') + 1):
+    _KEY_NAMES[_i] = chr(_i).lower()  # ydotool uses lowercase
+for _i in range(ord('0'), ord('9') + 1):
+    _KEY_NAMES[_i] = chr(_i)
+_KEY_NAMES[ord(' ')] = 'space'
+
+# Arduino special key constants (from Arduino USBHIDKeyboard)
+_KEY_NAMES.update({
+    0xB0: 'enter',       # KEY_RETURN
+    0xB1: 'esc',         # KEY_ESC
+    0xB2: 'backspace',   # KEY_BACKSPACE
+    0xB3: 'tab',         # KEY_TAB
+    0xD7: 'right',       # KEY_RIGHT_ARROW
+    0xD8: 'left',        # KEY_LEFT_ARROW
+    0xD9: 'down',        # KEY_DOWN_ARROW
+    0xDA: 'up',          # KEY_UP_ARROW
+    0xD1: 'home',        # KEY_HOME
+    0xD2: 'insert',      # KEY_INSERT
+    0xD4: 'end',         # KEY_END
+    0xD5: 'pageup',      # KEY_PAGE_UP
+    0xD6: 'pagedown',    # KEY_PAGE_DOWN
+    0xD3: 'delete',      # KEY_DELETE
+    0xCE: 'print',       # KEY_PRINT_SCREEN (sysrq for ydotool)
+    0xCF: 'scrolllock',  # KEY_SCROLL_LOCK
+    0xD0: 'pause',       # KEY_PAUSE
+    0xC1: 'capslock',    # KEY_CAPS_LOCK
+})
+
+# Arduino function keys: 0xC2 (F1) through 0xCD (F12)
+for _i in range(0xC2, 0xCE):
+    _KEY_NAMES[_i] = f'f{_i - 0xC2 + 1}'
+
+# --- HID scan codes (fallback for any code not matched above) ---
 # Letters: 0x04 ('a') through 0x1D ('z')
 for _i in range(0x04, 0x1E):
-    _HID_KEY_NAMES[_i] = chr(ord('a') + (_i - 0x04))
+    _KEY_NAMES.setdefault(_i, chr(ord('a') + (_i - 0x04)))
 
 # Digits: 0x1E ('1') through 0x26 ('9'), 0x27 ('0')
 for _i in range(0x1E, 0x27):
-    _HID_KEY_NAMES[_i] = str(_i - 0x1E + 1)
-_HID_KEY_NAMES[0x27] = '0'
+    _KEY_NAMES.setdefault(_i, str(_i - 0x1E + 1))
+_KEY_NAMES.setdefault(0x27, '0')
 
-# Special keys
-_HID_KEY_NAMES.update({
-    0x28: 'enter',
-    0x29: 'esc',
-    0x2A: 'backspace',
-    0x2B: 'tab',
-    0x2C: 'space',
-    0x39: 'capslock',
-    0x4F: 'right',
-    0x50: 'left',
-    0x51: 'down',
-    0x52: 'up',
-    0x4A: 'home',
-    0x4D: 'end',
-    0x4B: 'pageup',
-    0x4E: 'pagedown',
-    0x4C: 'delete',
-    0x49: 'insert',
-})
+# HID special keys (fallback)
+for _code, _name in {
+    0x28: 'enter', 0x29: 'esc', 0x2A: 'backspace', 0x2B: 'tab',
+    0x2C: 'space', 0x39: 'capslock', 0x4F: 'right', 0x50: 'left',
+    0x51: 'down', 0x52: 'up', 0x4A: 'home', 0x4D: 'end',
+    0x4B: 'pageup', 0x4E: 'pagedown', 0x4C: 'delete', 0x49: 'insert',
+}.items():
+    _KEY_NAMES.setdefault(_code, _name)
 
-# Function keys: 0x3A ('f1') through 0x45 ('f12')
+# HID function keys: 0x3A ('f1') through 0x45 ('f12')
 for _i in range(0x3A, 0x46):
-    _HID_KEY_NAMES[_i] = f'f{_i - 0x3A + 1}'
+    _KEY_NAMES.setdefault(_i, f'f{_i - 0x3A + 1}')
 
 # ---------------------------------------------------------------------------
 # Consumer code to key name mapping
@@ -202,10 +234,10 @@ def _exec_keyboard_shortcut(widget):
         logging.warning("Keyboard shortcut: no keycode set")
         return
 
-    # Build key name from HID keycode
-    key_name = _HID_KEY_NAMES.get(keycode)
+    # Build key name from keycode (supports Arduino ASCII + HID scan codes)
+    key_name = _KEY_NAMES.get(keycode)
     if key_name is None:
-        logging.warning("Unknown HID keycode: 0x%02X", keycode)
+        logging.warning("Unknown keycode: 0x%02X", keycode)
         return
 
     # Build modifier+key combo string

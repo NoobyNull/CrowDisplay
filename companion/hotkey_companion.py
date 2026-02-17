@@ -56,6 +56,7 @@ STAT_TYPES = {
     'battery_pct':    0x0D, 'fan_rpm':        0x0E, 'load_avg':       0x0F,
     'proc_count':     0x10, 'gpu_mem_pct':    0x11, 'gpu_power_w':    0x12,
     'disk_read_kbs':  0x13, 'disk_write_kbs': 0x14,
+    'display_uptime': 0x15, 'proc_user':      0x16, 'proc_system':    0x17,
 }
 
 # Reverse lookup: type_id -> name
@@ -604,12 +605,33 @@ class GPUCollector:
             name = pynvml.nvmlDeviceGetName(self._nvml_handle)
             if isinstance(name, bytes):
                 name = name.decode()
-            logging.info("NVIDIA GPU detected: %s", name)
+            logging.info("NVIDIA GPU detected (pynvml): %s", name)
             self.gpu_type = "nvidia"
         except ImportError:
-            logging.debug("pynvml not installed, skipping NVIDIA")
+            logging.debug("pynvml not installed, trying nvidia-smi fallback")
+            self._init_nvidia_smi()
         except Exception as exc:
-            logging.debug("NVIDIA init failed: %s", exc)
+            logging.debug("NVIDIA pynvml init failed: %s, trying nvidia-smi", exc)
+            self._init_nvidia_smi()
+
+    def _init_nvidia_smi(self):
+        """Fallback: detect NVIDIA GPU via nvidia-smi subprocess."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                name = result.stdout.strip().split('\n')[0]
+                logging.info("NVIDIA GPU detected (nvidia-smi): %s", name)
+                self.gpu_type = "nvidia-smi"
+            else:
+                logging.debug("nvidia-smi returned no GPU")
+        except FileNotFoundError:
+            logging.debug("nvidia-smi not found")
+        except Exception as exc:
+            logging.debug("nvidia-smi init failed: %s", exc)
 
     def _init_amd(self):
         gpu_busy = "/sys/class/drm/card0/device/gpu_busy_percent"
@@ -630,6 +652,8 @@ class GPUCollector:
         """Return (gpu_percent, gpu_temp) as ints. 0xFF if unavailable."""
         if self.gpu_type == "nvidia":
             return self._collect_nvidia()
+        elif self.gpu_type == "nvidia-smi":
+            return self._collect_nvidia_smi()
         elif self.gpu_type == "amd":
             return self._collect_amd()
         return (0xFF, 0xFF)
@@ -645,6 +669,24 @@ class GPUCollector:
         except Exception as exc:
             logging.debug("NVIDIA read failed: %s", exc)
             return (0xFF, 0xFF)
+
+    def _collect_nvidia_smi(self):
+        """Collect GPU stats via nvidia-smi subprocess."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=utilization.gpu,temperature.gpu",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                parts = result.stdout.strip().split(',')
+                gpu_pct = min(int(parts[0].strip()), 100)
+                gpu_temp = min(int(parts[1].strip()), 254)
+                return (gpu_pct, gpu_temp)
+        except Exception as exc:
+            logging.debug("nvidia-smi collect failed: %s", exc)
+        return (0xFF, 0xFF)
 
     def _collect_amd(self):
         gpu_percent = 0xFF
@@ -668,6 +710,8 @@ class GPUCollector:
 
         Returns (0xFF, 0, 0) if not NVIDIA or on error.
         """
+        if self.gpu_type == "nvidia-smi":
+            return self._collect_extended_nvidia_smi()
         if self.gpu_type != "nvidia":
             return (0xFF, 0, 0)
         try:
@@ -691,6 +735,34 @@ class GPUCollector:
         except Exception as exc:
             logging.debug("NVIDIA extended stats failed: %s", exc)
             return (0xFF, 0, 0)
+
+    def _collect_extended_nvidia_smi(self):
+        """Collect extended GPU stats via nvidia-smi subprocess."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["nvidia-smi",
+                 "--query-gpu=memory.used,memory.total,power.draw,clocks.gr",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                parts = result.stdout.strip().split(',')
+                mem_used = float(parts[0].strip())
+                mem_total = float(parts[1].strip())
+                gpu_mem_pct = min(int(mem_used * 100 / mem_total), 100) if mem_total > 0 else 0xFF
+                try:
+                    gpu_power_w = min(int(float(parts[2].strip())), 0xFFFF)
+                except (ValueError, IndexError):
+                    gpu_power_w = 0
+                try:
+                    gpu_freq_mhz = min(int(float(parts[3].strip())), 0xFFFF)
+                except (ValueError, IndexError):
+                    gpu_freq_mhz = 0
+                return (gpu_mem_pct, gpu_power_w, gpu_freq_mhz)
+        except Exception as exc:
+            logging.debug("nvidia-smi extended stats failed: %s", exc)
+        return (0xFF, 0, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -791,14 +863,16 @@ def encode_stats_tlv(stats_list):
 def load_stats_config(config_path=None):
     """Load stats_header config from config.json file.
 
-    Returns (stat_type_ids, net_interface, disk_device, disk_mount).
+    Returns (stat_type_ids, net_interface, disk_device, disk_mount, proc_update_interval).
     - net_interface: NIC name (e.g. "enp6s0") or None for aggregate
     - disk_device:   device name for I/O (e.g. "nvme0n1") or None for aggregate
     - disk_mount:    mount path for usage % (e.g. "/home") or "/" default
+    - proc_update_interval: seconds between proc stat updates (default 30)
     """
     net_interface = None
     disk_device = None
     disk_mount = "/"
+    proc_update_interval = 30
 
     if config_path and os.path.isfile(config_path):
         try:
@@ -807,20 +881,21 @@ def load_stats_config(config_path=None):
             net_interface = data.get("net_interface") or None
             disk_device = data.get("disk_device") or None
             disk_mount = data.get("disk_mount") or "/"
+            proc_update_interval = max(1, min(60, int(data.get("proc_update_interval", 30))))
             stats_header = data.get("stats_header")
             if stats_header and isinstance(stats_header, list):
                 type_ids = [s.get("type", 0) for s in stats_header if isinstance(s, dict)]
-                type_ids = [t for t in type_ids if 1 <= t <= 0x14]
+                type_ids = [t for t in type_ids if 1 <= t <= 0x17]
                 if type_ids:
                     logging.info("Loaded %d stat types from config: %s",
                                  len(type_ids),
                                  [STAT_ID_TO_NAME.get(t, f"0x{t:02X}") for t in type_ids])
-                    return (type_ids, net_interface, disk_device, disk_mount)
+                    return (type_ids, net_interface, disk_device, disk_mount, proc_update_interval)
         except (json.JSONDecodeError, IOError, KeyError) as exc:
             logging.warning("Failed to load stats config: %s", exc)
 
     # Default: original 8 stats
-    return ([s["type"] for s in DEFAULT_STATS_CONFIG], net_interface, disk_device, disk_mount)
+    return ([s["type"] for s in DEFAULT_STATS_CONFIG], net_interface, disk_device, disk_mount, proc_update_interval)
 
 
 # ---------------------------------------------------------------------------
@@ -897,6 +972,27 @@ def get_proc_count():
         return 0
 
 
+def get_proc_user_count():
+    """Return number of processes owned by the current user."""
+    try:
+        username = os.getenv('USER') or os.getenv('USERNAME', '')
+        count = sum(1 for p in psutil.process_iter(['username'])
+                    if p.info.get('username') == username)
+        return min(count, 0xFFFF)
+    except Exception:
+        return 0
+
+
+def get_proc_system_count():
+    """Return number of processes owned by root/SYSTEM."""
+    try:
+        count = sum(1 for p in psutil.process_iter(['username'])
+                    if p.info.get('username') == 'root')
+        return min(count, 0xFFFF)
+    except Exception:
+        return 0
+
+
 def get_disk_io(prev_disk_io, dt, disk_device=None):
     """Return (read_kbs, write_kbs, current_counters).
 
@@ -927,7 +1023,8 @@ def get_disk_io(prev_disk_io, dt, disk_device=None):
 # ---------------------------------------------------------------------------
 
 def collect_stats_tlv(gpu_collector, enabled_types, prev_net, prev_time, prev_disk_io,
-                      net_interface=None, disk_device=None, disk_mount="/"):
+                      net_interface=None, disk_device=None, disk_mount="/",
+                      proc_update_interval=30, proc_state=None):
     """Collect system metrics based on enabled types and return TLV-encoded bytes.
 
     Returns (tlv_bytes, current_net_counters, current_time, current_disk_io).
@@ -936,6 +1033,8 @@ def collect_stats_tlv(gpu_collector, enabled_types, prev_net, prev_time, prev_di
     net_interface: NIC name for per-interface network stats, or None for aggregate.
     disk_device:   device name for per-disk I/O stats, or None for aggregate.
     disk_mount:    mount path for disk usage %, defaults to "/".
+    proc_update_interval: seconds between proc stat collection (default 30).
+    proc_state: dict with 'last_time', 'count', 'user', 'system' for throttling.
     """
     now = time.time()
     dt = now - prev_time
@@ -975,8 +1074,8 @@ def collect_stats_tlv(gpu_collector, enabled_types, prev_net, prev_time, prev_di
             stats_list.append((STAT_TYPES['gpu_percent'], gpu_pct))
         if STAT_TYPES['gpu_temp'] in enabled_set:
             stats_list.append((STAT_TYPES['gpu_temp'], gpu_temp))
-        # Extended GPU stats (NVIDIA only)
-        if gpu_collector.gpu_type == "nvidia":
+        # Extended GPU stats (NVIDIA only — pynvml or nvidia-smi)
+        if gpu_collector.gpu_type in ("nvidia", "nvidia-smi"):
             gpu_mem, gpu_power, gpu_freq = gpu_collector.collect_extended()
             if STAT_TYPES['gpu_mem_pct'] in enabled_set:
                 stats_list.append((STAT_TYPES['gpu_mem_pct'], gpu_mem))
@@ -1053,9 +1152,26 @@ def collect_stats_tlv(gpu_collector, enabled_types, prev_net, prev_time, prev_di
     if STAT_TYPES['load_avg'] in enabled_set:
         stats_list.append((STAT_TYPES['load_avg'], get_load_avg_x100()))
 
-    # Process count
-    if STAT_TYPES['proc_count'] in enabled_set:
-        stats_list.append((STAT_TYPES['proc_count'], get_proc_count()))
+    # Process stats (throttled by proc_update_interval)
+    proc_types = {STAT_TYPES['proc_count'], STAT_TYPES['proc_user'], STAT_TYPES['proc_system']}
+    need_proc = bool(proc_types & enabled_set)
+    if need_proc:
+        if proc_state is None:
+            proc_state = {'last_time': 0, 'count': 0, 'user': 0, 'system': 0}
+        if now - proc_state['last_time'] >= proc_update_interval:
+            proc_state['last_time'] = now
+            if STAT_TYPES['proc_count'] in enabled_set:
+                proc_state['count'] = get_proc_count()
+            if STAT_TYPES['proc_user'] in enabled_set:
+                proc_state['user'] = get_proc_user_count()
+            if STAT_TYPES['proc_system'] in enabled_set:
+                proc_state['system'] = get_proc_system_count()
+        if STAT_TYPES['proc_count'] in enabled_set:
+            stats_list.append((STAT_TYPES['proc_count'], proc_state['count']))
+        if STAT_TYPES['proc_user'] in enabled_set:
+            stats_list.append((STAT_TYPES['proc_user'], proc_state['user']))
+        if STAT_TYPES['proc_system'] in enabled_set:
+            stats_list.append((STAT_TYPES['proc_system'], proc_state['system']))
 
     # Disk I/O (per-device or aggregate)
     if STAT_TYPES['disk_read_kbs'] in enabled_set or STAT_TYPES['disk_write_kbs'] in enabled_set:
@@ -1096,6 +1212,8 @@ class CompanionService:
         self._net_interface = None
         self._disk_device = None
         self._disk_mount = "/"
+        self._proc_update_interval = 30
+        self._proc_state = {'last_time': 0, 'count': 0, 'user': 0, 'system': 0}
 
         # Status callbacks
         self.on_bridge_connected = None
@@ -1178,7 +1296,8 @@ class CompanionService:
     def _load_device_config(self):
         """Load stat types and device selection from config."""
         (self._enabled_stat_types, self._net_interface,
-         self._disk_device, self._disk_mount) = load_stats_config(self._config_path)
+         self._disk_device, self._disk_mount,
+         self._proc_update_interval) = load_stats_config(self._config_path)
         if self._net_interface:
             logging.info("Network interface: %s", self._net_interface)
         if self._disk_device:
@@ -1303,6 +1422,8 @@ class CompanionService:
                      1.0 / UPDATE_INTERVAL, len(self._enabled_stat_types))
 
         pc_locked = False
+        TIME_SYNC_INTERVAL = 12 * 3600  # Sync time every 12 hours
+        last_time_sync = 0  # Force immediate sync on first loop
 
         while self._running:
             if shutdown_event.is_set():
@@ -1333,7 +1454,8 @@ class CompanionService:
 
             packed, prev_net, prev_time, prev_disk_io = collect_stats_tlv(
                 self._gpu, self._enabled_stat_types, prev_net, prev_time, prev_disk_io,
-                self._net_interface, self._disk_device, self._disk_mount
+                self._net_interface, self._disk_device, self._disk_mount,
+                self._proc_update_interval, self._proc_state
             )
 
             try:
@@ -1364,7 +1486,10 @@ class CompanionService:
                 continue
 
             if self._device is not None:
-                send_time_sync(self._device, self._hid_lock)
+                now = time.time()
+                if now - last_time_sync >= TIME_SYNC_INTERVAL:
+                    send_time_sync(self._device, self._hid_lock)
+                    last_time_sync = now
 
         # Clean up
         if self._device is not None:

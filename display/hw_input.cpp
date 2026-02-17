@@ -11,7 +11,7 @@
 // ============================================================
 // TCA9548A I2C Mux + PCF8575 Addresses
 // ============================================================
-#define TCA9548A_ADDR   0x70
+#define TCA9548A_ADDR   0x77
 #define PCF8575_MUX_CH  0      // Channel 0 on mux
 
 // PCF8575 pin assignments (active LOW)
@@ -79,6 +79,16 @@ bool hw_input_init() {
         Serial.println("[hw_input] I2C mutex timeout at init");
         return false;
     }
+
+    // I2C bus scan for debugging
+    Serial.print("[hw_input] I2C scan:");
+    for (uint8_t addr = 0x08; addr < 0x78; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() == 0) {
+            Serial.printf(" 0x%02X", addr);
+        }
+    }
+    Serial.println();
 
     // Select mux channel
     if (!tca_select_channel(PCF8575_MUX_CH)) {
@@ -262,6 +272,13 @@ void hw_input_poll() {
     uint16_t pins = pcf8575_read();
     tca_deselect();
     i2c_give();
+
+    // Debug: log raw pin state every 2 seconds
+    static uint32_t dbg_timer = 0;
+    if (millis() - dbg_timer >= 2000) {
+        dbg_timer = millis();
+        Serial.printf("[hw_input] raw pins=0x%04X\n", pins);
+    }
 
     if (pins == 0xFFFF && prev_pin_state == 0xFFFF) return; // No change, all high
 

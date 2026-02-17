@@ -132,7 +132,7 @@ DEFAULT_ICONS_DIR = DEFAULT_CONFIG_DIR / "icons"
 
 # Stat type range (must match shared/protocol.h StatType enum)
 STAT_TYPE_MIN = 1
-STAT_TYPE_MAX = 20  # 0x14
+STAT_TYPE_MAX = 23  # 0x17
 
 # Legacy grid dimensions (for v1 migration)
 GRID_COLS = 4
@@ -224,6 +224,7 @@ def make_default_widget(widget_type: int, x: int = 0, y: int = 0) -> Dict[str, A
             "label": "CPU",
             "stat_type": 0x01,
             "color": DEFAULT_COLORS["BLUE"],
+            "value_position": 0,
         })
     elif widget_type == WIDGET_STATUS_BAR:
         widget.update({
@@ -234,8 +235,8 @@ def make_default_widget(widget_type: int, x: int = 0, y: int = 0) -> Dict[str, A
             "show_pc": True,
             "show_settings": True,
             "show_brightness": True,
-            "show_battery": True,
             "show_time": True,
+            "icon_spacing": 8,
         })
     elif widget_type == WIDGET_CLOCK:
         widget.update({

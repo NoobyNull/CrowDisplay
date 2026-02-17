@@ -77,8 +77,10 @@ static bool sd_fs_registered = false;
 
 // Stat monitor tracking: widget pointer + stat type for live updates
 struct StatWidgetRef {
-    lv_obj_t *label;
+    lv_obj_t *label;         // Value label (or combined label when inline)
+    lv_obj_t *name_label;    // Separate name label (when value_position != 0), or nullptr
     uint8_t stat_type;
+    uint8_t value_position;  // 0=inline, 1=value top, 2=value bottom
 };
 static std::vector<StatWidgetRef> stat_widget_refs;
 
@@ -92,6 +94,9 @@ static std::vector<StatusBarRef> status_bar_refs;
 
 // Page nav widget references
 static std::vector<lv_obj_t *> page_nav_refs;
+
+// Clock widget labels on pages (for periodic time updates)
+static std::vector<lv_obj_t *> clock_widget_labels;
 
 // Forward declarations
 void update_clock_time();
@@ -130,6 +135,9 @@ static const char *get_stat_name(uint8_t type) {
         case STAT_GPU_POWER_W:    return "GPU";
         case STAT_DISK_READ_KBS:  return LV_SYMBOL_DOWNLOAD " R";
         case STAT_DISK_WRITE_KBS: return LV_SYMBOL_UPLOAD " W";
+        case STAT_DISPLAY_UPTIME: return "Disp";
+        case STAT_PROC_USER:      return "User";
+        case STAT_PROC_SYSTEM:    return "Sys";
         default:                  return "?";
     }
 }
@@ -153,9 +161,10 @@ static void format_stat_value(lv_obj_t *lbl, uint8_t type, uint16_t value) {
             break;
         case STAT_CPU_FREQ: case STAT_GPU_FREQ:
             lv_label_set_text_fmt(lbl, "%s %d MHz", name, value); break;
-        case STAT_UPTIME_HOURS:
+        case STAT_UPTIME_HOURS: case STAT_DISPLAY_UPTIME:
             lv_label_set_text_fmt(lbl, "%s %dh", name, value); break;
         case STAT_FAN_RPM: case STAT_PROC_COUNT:
+        case STAT_PROC_USER: case STAT_PROC_SYSTEM:
             lv_label_set_text_fmt(lbl, "%s %d", name, value); break;
         case STAT_LOAD_AVG:
             lv_label_set_text_fmt(lbl, "%s %.2f", name, value / 100.0f); break;
@@ -192,6 +201,9 @@ static const char *get_stat_placeholder(uint8_t type) {
         case STAT_GPU_POWER_W:    return "GPU --W";
         case STAT_DISK_READ_KBS:  return LV_SYMBOL_DOWNLOAD " R -- KB/s";
         case STAT_DISK_WRITE_KBS: return LV_SYMBOL_UPLOAD " W -- KB/s";
+        case STAT_DISPLAY_UPTIME: return "Disp --h";
+        case STAT_PROC_USER:      return "User --";
+        case STAT_PROC_SYSTEM:    return "Sys --";
         default:                  return "---";
     }
 }
@@ -200,14 +212,16 @@ static const char *get_stat_placeholder(uint8_t type) {
 //  Widget Renderers — one per widget type
 // ============================================================
 
-// --- Button Event Data (identity-based: page + widget index + action type) ---
+// --- Button Event Data (identity-based: page + widget index + action data) ---
 struct ButtonEventData {
     uint8_t page_idx;
     uint8_t widget_idx;
     uint8_t action_type;
-    uint8_t keycode;       // For PAGE_GOTO target page
+    uint8_t keycode;       // For PAGE_GOTO target page, or HOTKEY keycode
+    uint8_t modifiers;     // For ACTION_HOTKEY modifier mask
+    uint16_t consumer_code; // For ACTION_MEDIA_KEY consumer control code
 };
-static ButtonEventData btn_event_data[CONFIG_MAX_WIDGETS];
+static ButtonEventData btn_event_data[CONFIG_MAX_WIDGETS * CONFIG_MAX_PAGES];
 static int btn_event_count = 0;
 
 // --- Hotkey Button ---
@@ -269,8 +283,25 @@ static void btn_event_cb(lv_event_t *e) {
                 break;
         }
 
-        send_button_press_to_bridge(bed->page_idx, bed->widget_idx);
-        Serial.printf("Button press: page=%d widget=%d\n", bed->page_idx, bed->widget_idx);
+        // Route based on action type:
+        // - HID actions (hotkey, media key) go directly through bridge USB HID
+        // - Companion actions (launch app, shell cmd, open URL) go via button identity
+        switch (bed->action_type) {
+            case ACTION_HOTKEY:
+                send_hotkey_to_bridge(bed->modifiers, bed->keycode);
+                Serial.printf("Hotkey: mod=0x%02X key=0x%02X\n", bed->modifiers, bed->keycode);
+                break;
+            case ACTION_MEDIA_KEY:
+                send_media_key_to_bridge(bed->consumer_code);
+                Serial.printf("Media key: 0x%04X\n", bed->consumer_code);
+                break;
+            default:
+                // Companion-handled actions: send button identity for lookup
+                send_button_press_to_bridge(bed->page_idx, bed->widget_idx);
+                Serial.printf("Button press: page=%d widget=%d action=%d\n",
+                              bed->page_idx, bed->widget_idx, bed->action_type);
+                break;
+        }
     }
 }
 
@@ -278,10 +309,13 @@ static void render_hotkey_button(lv_obj_t *parent, const WidgetConfig *cfg, uint
     lv_obj_t *btn = lv_btn_create(parent);
     lv_obj_set_pos(btn, cfg->x, cfg->y);
     lv_obj_set_size(btn, cfg->width, cfg->height);
-    // Store button identity in static pool for event callback
+    // Store button identity + action data in static pool for event callback
     ButtonEventData *bed = nullptr;
-    if (btn_event_count < CONFIG_MAX_WIDGETS) {
-        btn_event_data[btn_event_count] = {page_idx, widget_idx, (uint8_t)cfg->action_type, cfg->keycode};
+    if (btn_event_count < CONFIG_MAX_WIDGETS * CONFIG_MAX_PAGES) {
+        btn_event_data[btn_event_count] = {
+            page_idx, widget_idx, (uint8_t)cfg->action_type,
+            cfg->keycode, cfg->modifiers, cfg->consumer_code
+        };
         bed = &btn_event_data[btn_event_count++];
     }
     lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, (void *)bed);
@@ -349,17 +383,71 @@ static void render_hotkey_button(lv_obj_t *parent, const WidgetConfig *cfg, uint
     }
 
     // Label
-    lv_obj_t *label = lv_label_create(btn);
-    lv_label_set_text(label, cfg->label.c_str());
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label, lv_color_hex(cfg->color), LV_PART_MAIN);
+    if (cfg->show_label && !cfg->label.empty()) {
+        lv_obj_t *label = lv_label_create(btn);
+        lv_label_set_text(label, cfg->label.c_str());
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_16, LV_PART_MAIN);
+        lv_obj_set_style_text_color(label, lv_color_hex(cfg->color), LV_PART_MAIN);
+    }
 
     // Description
-    if (!cfg->description.empty()) {
+    if (cfg->show_description && !cfg->description.empty()) {
         lv_obj_t *sub = lv_label_create(btn);
         lv_label_set_text(sub, cfg->description.c_str());
         lv_obj_set_style_text_font(sub, &lv_font_montserrat_12, LV_PART_MAIN);
         lv_obj_set_style_text_color(sub, lv_color_hex(cfg->color), LV_PART_MAIN);
+    }
+}
+
+// Format just the value part (no name prefix) for split-label mode
+static void format_stat_value_only(lv_obj_t *lbl, uint8_t type, uint16_t value) {
+    switch (type) {
+        case STAT_CPU_PERCENT: case STAT_RAM_PERCENT: case STAT_GPU_PERCENT:
+        case STAT_DISK_PERCENT: case STAT_SWAP_PERCENT: case STAT_BATTERY_PCT:
+        case STAT_GPU_MEM_PCT:
+            if ((value & 0xFF) == 0xFF) lv_label_set_text(lbl, "N/A");
+            else lv_label_set_text_fmt(lbl, "%d%%", value & 0xFF);
+            break;
+        case STAT_CPU_TEMP: case STAT_GPU_TEMP:
+            if ((value & 0xFF) == 0xFF) lv_label_set_text(lbl, "N/A");
+            else lv_label_set_text_fmt(lbl, "%d\xC2\xB0""C", value & 0xFF);
+            break;
+        case STAT_NET_UP: case STAT_NET_DOWN:
+        case STAT_DISK_READ_KBS: case STAT_DISK_WRITE_KBS:
+            if (value >= 1024) lv_label_set_text_fmt(lbl, "%.1f MB/s", value / 1024.0f);
+            else lv_label_set_text_fmt(lbl, "%d KB/s", value);
+            break;
+        case STAT_CPU_FREQ: case STAT_GPU_FREQ:
+            lv_label_set_text_fmt(lbl, "%d MHz", value); break;
+        case STAT_UPTIME_HOURS: case STAT_DISPLAY_UPTIME:
+            lv_label_set_text_fmt(lbl, "%dh", value); break;
+        case STAT_FAN_RPM: case STAT_PROC_COUNT:
+        case STAT_PROC_USER: case STAT_PROC_SYSTEM:
+            lv_label_set_text_fmt(lbl, "%d", value); break;
+        case STAT_LOAD_AVG:
+            lv_label_set_text_fmt(lbl, "%.2f", value / 100.0f); break;
+        case STAT_GPU_POWER_W:
+            lv_label_set_text_fmt(lbl, "%dW", value); break;
+        default:
+            lv_label_set_text_fmt(lbl, "%d", value); break;
+    }
+}
+
+static const char *get_stat_value_placeholder(uint8_t type) {
+    switch (type) {
+        case STAT_CPU_PERCENT: case STAT_RAM_PERCENT: case STAT_GPU_PERCENT:
+        case STAT_DISK_PERCENT: case STAT_SWAP_PERCENT: case STAT_BATTERY_PCT:
+        case STAT_GPU_MEM_PCT: return "--%";
+        case STAT_CPU_TEMP: case STAT_GPU_TEMP: return "--\xC2\xB0""C";
+        case STAT_NET_UP: case STAT_NET_DOWN:
+        case STAT_DISK_READ_KBS: case STAT_DISK_WRITE_KBS: return "-- KB/s";
+        case STAT_CPU_FREQ: case STAT_GPU_FREQ: return "-- MHz";
+        case STAT_UPTIME_HOURS: case STAT_DISPLAY_UPTIME: return "--h";
+        case STAT_FAN_RPM: case STAT_PROC_COUNT:
+        case STAT_PROC_USER: case STAT_PROC_SYSTEM: return "--";
+        case STAT_LOAD_AVG: return "--";
+        case STAT_GPU_POWER_W: return "--W";
+        default: return "--";
     }
 }
 
@@ -374,14 +462,56 @@ static void render_stat_monitor(lv_obj_t *parent, const WidgetConfig *cfg) {
     lv_obj_set_style_radius(container, 6, LV_PART_MAIN);
     lv_obj_clear_flag(container, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *lbl = lv_label_create(container);
-    lv_label_set_text(lbl, get_stat_placeholder(cfg->stat_type));
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_style_text_color(lbl, lv_color_hex(cfg->color), LV_PART_MAIN);
-    lv_obj_center(lbl);
+    if (cfg->value_position == 0) {
+        // Inline mode: single centered label with "Name Value"
+        lv_obj_t *lbl = lv_label_create(container);
+        lv_label_set_text(lbl, get_stat_placeholder(cfg->stat_type));
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, LV_PART_MAIN);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(cfg->color), LV_PART_MAIN);
+        lv_obj_center(lbl);
+        stat_widget_refs.push_back({lbl, nullptr, cfg->stat_type, 0});
+    } else {
+        // Split mode: two labels stacked vertically
+        lv_obj_set_flex_flow(container, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_flex_align(container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_all(container, 2, LV_PART_MAIN);
 
-    // Register for live updates
-    stat_widget_refs.push_back({lbl, cfg->stat_type});
+        lv_obj_t *top_lbl = lv_label_create(container);
+        lv_obj_t *bot_lbl = lv_label_create(container);
+
+        lv_obj_t *value_lbl, *name_lbl;
+        if (cfg->value_position == 1) {
+            // Value on top, name on bottom
+            value_lbl = top_lbl;
+            name_lbl = bot_lbl;
+        } else {
+            // Name on top, value on bottom
+            name_lbl = top_lbl;
+            value_lbl = bot_lbl;
+        }
+
+        lv_label_set_text(name_lbl, get_stat_name(cfg->stat_type));
+        lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_12, LV_PART_MAIN);
+        lv_obj_set_style_text_color(name_lbl, lv_color_hex(cfg->color), LV_PART_MAIN);
+
+        lv_label_set_text(value_lbl, get_stat_value_placeholder(cfg->stat_type));
+        lv_obj_set_style_text_font(value_lbl, &lv_font_montserrat_16, LV_PART_MAIN);
+        lv_obj_set_style_text_color(value_lbl, lv_color_hex(cfg->color), LV_PART_MAIN);
+
+        stat_widget_refs.push_back({value_lbl, name_lbl, cfg->stat_type, cfg->value_position});
+    }
+
+    // Display uptime: initialize with current millis-based hours
+    if (cfg->stat_type == STAT_DISPLAY_UPTIME) {
+        uint16_t hours = (uint16_t)(millis() / 3600000UL);
+        if (cfg->value_position == 0) {
+            auto &ref = stat_widget_refs.back();
+            lv_label_set_text_fmt(ref.label, "Disp %dh", hours);
+        } else {
+            auto &ref = stat_widget_refs.back();
+            lv_label_set_text_fmt(ref.label, "%dh", hours);
+        }
+    }
 }
 
 // --- Status Bar ---
@@ -429,7 +559,7 @@ static void render_status_bar(lv_obj_t *parent, const WidgetConfig *cfg) {
     // Dynamic right-to-left icon packing
     StatusBarRef ref = {};
     int x_offset = -10;  // start 10px from right edge
-    const int ICON_GAP = 2;
+    const int ICON_GAP = cfg->icon_spacing;
     const int ICON_W = 22;
 
     // WiFi indicator
@@ -512,13 +642,31 @@ static void render_clock(lv_obj_t *parent, const WidgetConfig *cfg) {
         lv_obj_remove_style(face, NULL, LV_PART_INDICATOR);
         lv_obj_set_style_arc_width(face, 3, LV_PART_MAIN);
         lv_obj_set_style_arc_color(face, lv_color_hex(0x888888), LV_PART_MAIN);
+        // TODO: analog clock widget hands not yet wired to periodic update
     } else {
         // Digital clock
         lv_obj_t *lbl = lv_label_create(container);
-        lv_label_set_text(lbl, "00:00");
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_40, LV_PART_MAIN);
         lv_obj_set_style_text_color(lbl, lv_color_hex(cfg->color), LV_PART_MAIN);
         lv_obj_center(lbl);
+
+        // Set initial time and track for periodic updates
+        time_t now = time(nullptr);
+        struct tm *tm_info = localtime(&now);
+        bool use_24h = g_active_config ? g_active_config->display_settings.clock_24h : true;
+        if (tm_info && now > 1000000000) {
+            if (use_24h) {
+                lv_label_set_text_fmt(lbl, "%02d:%02d", tm_info->tm_hour, tm_info->tm_min);
+            } else {
+                int hour12 = tm_info->tm_hour % 12;
+                if (hour12 == 0) hour12 = 12;
+                lv_label_set_text_fmt(lbl, "%d:%02d%s", hour12, tm_info->tm_min,
+                                      tm_info->tm_hour >= 12 ? "p" : "a");
+            }
+        } else {
+            lv_label_set_text(lbl, "--:--");
+        }
+        clock_widget_labels.push_back(lbl);
     }
 }
 
@@ -684,6 +832,7 @@ static void create_pages(lv_obj_t *screen, const AppConfig *cfg) {
     stat_widget_refs.clear();
     status_bar_refs.clear();
     page_nav_refs.clear();
+    clock_widget_labels.clear();
     page_containers.clear();
     btn_event_count = 0;
 
@@ -733,7 +882,11 @@ static void create_pages(lv_obj_t *screen, const AppConfig *cfg) {
 static void update_stat_widget(uint8_t type, uint16_t value) {
     for (auto &ref : stat_widget_refs) {
         if (ref.stat_type == type && ref.label) {
-            format_stat_value(ref.label, type, value);
+            if (ref.value_position == 0) {
+                format_stat_value(ref.label, type, value);
+            } else {
+                format_stat_value_only(ref.label, type, value);
+            }
         }
     }
 }
@@ -778,6 +931,21 @@ void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_l
         if (ref.pc_label) {
             lv_obj_set_style_text_color(ref.pc_label,
                 lv_color_hex(stats_active ? CLR_GREEN : CLR_RED), LV_PART_MAIN);
+        }
+        if (ref.time_label) {
+            time_t now = time(nullptr);
+            struct tm *tm_info = localtime(&now);
+            if (tm_info && now > 1000000000) { // Only show if time has been synced (post-2001)
+                bool use_24h = g_active_config ? g_active_config->display_settings.clock_24h : true;
+                if (use_24h) {
+                    lv_label_set_text_fmt(ref.time_label, "%02d:%02d", tm_info->tm_hour, tm_info->tm_min);
+                } else {
+                    int hour12 = tm_info->tm_hour % 12;
+                    if (hour12 == 0) hour12 = 12;
+                    lv_label_set_text_fmt(ref.time_label, "%d:%02d%s", hour12, tm_info->tm_min,
+                                          tm_info->tm_hour >= 12 ? "p" : "a");
+                }
+            }
         }
     }
     (void)brightness_level;
@@ -918,6 +1086,44 @@ void update_clock_time() {
         lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_RED), LV_PART_MAIN);
     else
         lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
+}
+
+// ============================================================
+//  Page Clock Widget Updates
+// ============================================================
+void update_page_clocks() {
+    if (clock_widget_labels.empty()) return;
+    time_t now = time(nullptr);
+    struct tm *tm_info = localtime(&now);
+    if (!tm_info || now <= 1000000000) return;
+    bool use_24h = g_active_config ? g_active_config->display_settings.clock_24h : true;
+    for (lv_obj_t *lbl : clock_widget_labels) {
+        if (!lbl) continue;
+        if (use_24h) {
+            lv_label_set_text_fmt(lbl, "%02d:%02d", tm_info->tm_hour, tm_info->tm_min);
+        } else {
+            int hour12 = tm_info->tm_hour % 12;
+            if (hour12 == 0) hour12 = 12;
+            lv_label_set_text_fmt(lbl, "%d:%02d%s", hour12, tm_info->tm_min,
+                                  tm_info->tm_hour >= 12 ? "p" : "a");
+        }
+    }
+}
+
+// ============================================================
+//  Display Uptime Self-Update
+// ============================================================
+void update_display_uptime() {
+    uint16_t hours = (uint16_t)(millis() / 3600000UL);
+    for (auto &ref : stat_widget_refs) {
+        if (ref.stat_type == STAT_DISPLAY_UPTIME && ref.label) {
+            if (ref.value_position == 0) {
+                lv_label_set_text_fmt(ref.label, "Disp %dh", hours);
+            } else {
+                lv_label_set_text_fmt(ref.label, "%dh", hours);
+            }
+        }
+    }
 }
 
 // ============================================================
@@ -1224,6 +1430,7 @@ void rebuild_ui(const AppConfig* cfg) {
     stat_widget_refs.clear();
     status_bar_refs.clear();
     page_nav_refs.clear();
+    clock_widget_labels.clear();
 
     g_active_config = cfg;
 

@@ -69,6 +69,7 @@ class BridgeDevice:
             self._device = hid.Device(path=chosen)
             logger.info("Bridge opened: %s", chosen)
         except Exception as e:
+            self._device = None
             raise BridgeDeviceError(f"Failed to open bridge: {e}")
 
     def close(self) -> None:

@@ -426,9 +426,10 @@ static void handle_image_upload() {
             return;
         }
 
-        // Validate filename: reject path traversal and unsafe chars
-        if (g_image_filename.indexOf("..") >= 0 || g_image_filename.indexOf("/") >= 0 ||
-            g_image_filename.indexOf('\0') >= 0) {
+        // Validate filename: reject path traversal, empty, and unsafe chars
+        Serial.printf("Image: validating filename '%s' (len=%d)\n", g_image_filename.c_str(), g_image_filename.length());
+        if (g_image_filename.length() == 0 || g_image_filename.indexOf("..") >= 0 || g_image_filename.indexOf("/") >= 0) {
+            Serial.printf("Image: REJECTED filename '%s'\n", g_image_filename.c_str());
             g_image_upload_error = "Invalid filename";
             free(g_image_buffer);
             g_image_buffer = nullptr;

@@ -51,7 +51,8 @@ void setup() {
     touch_init();      // Create I2C mutex (must be before hw_input_init)
     display_init();    // PCA9557 touch reset + LCD init
     gt911_discover();  // Discover GT911 (after PCA9557 reset)
-    hw_input_init();   // Initialize PCF8575 hardware buttons + encoder (non-fatal if absent)
+    bool hw_ok = hw_input_init();
+    Serial.printf("[main] hw_input_init: %s\n", hw_ok ? "PCF8575 FOUND" : "NOT FOUND (hw buttons disabled)");
     lvgl_init();       // LVGL buffers + drivers
 
     espnow_link_init();  // ESP-NOW to bridge
@@ -142,10 +143,21 @@ void loop() {
                 }
             }
         }
-        else if (msg_type == MSG_TIME_SYNC && msg_len >= sizeof(TimeSyncMsg)) {
+        else if (msg_type == MSG_TIME_SYNC && msg_len >= 4) {
             TimeSyncMsg *ts = (TimeSyncMsg *)msg_payload;
             struct timeval tv = { .tv_sec = (time_t)ts->epoch_seconds, .tv_usec = 0 };
             settimeofday(&tv, nullptr);
+            // Set timezone if offset provided (msg_len >= 6 means new format with tz_offset)
+            if (msg_len >= sizeof(TimeSyncMsg)) {
+                int16_t offset_min = ts->tz_offset_min;
+                // POSIX TZ uses inverted sign: UTC+5 = "UTC-5"
+                int hours = -(offset_min / 60);
+                int mins = abs(offset_min % 60);
+                char tz_buf[16];
+                snprintf(tz_buf, sizeof(tz_buf), "UTC%+d:%02d", hours, mins);
+                setenv("TZ", tz_buf, 1);
+                tzset();
+            }
             Serial.printf("Time synced: %lu\n", (unsigned long)ts->epoch_seconds);
         }
         else if (msg_type == MSG_NOTIFICATION && msg_len >= sizeof(NotificationMsg)) {
@@ -193,10 +205,14 @@ void loop() {
         update_device_status(espnow_get_rssi(), link_ok, get_backlight(), stats_active);
     }
 
-    // Clock mode: update time display every 30 seconds
-    if (power_get_state() == POWER_CLOCK && (millis() - clock_update_timer >= 30000)) {
+    // Clock updates every 30 seconds (clock mode screen + page clock widgets + display uptime)
+    if (millis() - clock_update_timer >= 30000) {
         clock_update_timer = millis();
-        update_clock_time();
+        if (power_get_state() == POWER_CLOCK) {
+            update_clock_time();
+        }
+        update_page_clocks();
+        update_display_uptime();
     }
 
     delay(5);

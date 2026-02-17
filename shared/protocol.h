@@ -53,9 +53,12 @@ enum StatType : uint8_t {
     STAT_GPU_POWER_W    = 0x12,  // GPU power in watts
     STAT_DISK_READ_KBS  = 0x13,  // Disk read KB/s, uint16
     STAT_DISK_WRITE_KBS = 0x14,  // Disk write KB/s, uint16
+    STAT_DISPLAY_UPTIME = 0x15,  // Display uptime hours (local, no companion data)
+    STAT_PROC_USER      = 0x16,  // User process count, uint16
+    STAT_PROC_SYSTEM    = 0x17,  // System/root process count, uint16
 };
 
-#define STAT_TYPE_MAX 0x14
+#define STAT_TYPE_MAX 0x17
 
 // --- TLV Stats Decoding Helper ---------------------------------------
 //
@@ -121,6 +124,7 @@ struct __attribute__((packed)) PowerStateMsg {
 
 struct __attribute__((packed)) TimeSyncMsg {
     uint32_t epoch_seconds;   // Unix timestamp from companion (little-endian)
+    int16_t  tz_offset_min;   // Local timezone offset from UTC in minutes (e.g., -300 for EST)
 };
 
 struct __attribute__((packed)) ButtonPressMsg {
