@@ -2885,12 +2885,14 @@ class EditorMainWindow(QMainWindow):
         self.deploy_btn.clicked.connect(self._on_deploy_clicked)
         page_layout.addWidget(self.deploy_btn)
 
-        center_layout.addWidget(page_toolbar)
-
-        # Hardware input section below canvas
+        # Hardware input section between canvas and page toolbar
         self.hardware_section = HardwareSection(self.config_manager)
         self.hardware_section.hw_input_selected.connect(self._on_hw_input_selected)
+        self.hardware_section.setMinimumHeight(80)
+        self.hardware_section.setMaximumHeight(100)
         center_layout.addWidget(self.hardware_section)
+
+        center_layout.addWidget(page_toolbar)
 
         main_layout.addWidget(center_widget, stretch=1)
 
