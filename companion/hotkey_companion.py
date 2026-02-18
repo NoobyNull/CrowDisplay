@@ -32,7 +32,7 @@ import os
 import threading
 import asyncio
 
-from companion.action_executor import execute_action
+from companion.action_executor import execute_action, execute_ddc_direct
 from companion.config_manager import get_config_manager, DEFAULT_CONFIG_DIR, DEFAULT_CONFIG_PATH
 
 # ---------------------------------------------------------------------------
@@ -80,6 +80,7 @@ MSG_POWER_STATE  = 0x05
 MSG_TIME_SYNC    = 0x06
 MSG_NOTIFICATION = 0x08
 MSG_BUTTON_PRESS = 0x0B
+MSG_DDC_CMD      = 0x0C
 
 # Power state values
 POWER_SHUTDOWN = 0
@@ -485,6 +486,18 @@ def _vendor_read_thread(device, hid_lock, config_mgr):
                         args=(config_mgr, page_idx, widget_idx),
                         daemon=True
                     ).start()
+                elif msg_type == MSG_DDC_CMD and len(data) >= 8:
+                    vcp_code = data[2]
+                    value = struct.unpack_from('<H', bytes(data), 3)[0]
+                    adjustment = struct.unpack_from('<h', bytes(data), 5)[0]
+                    display_num = data[7]
+                    logging.info("DDC cmd: vcp=0x%02X val=%d adj=%d disp=%d",
+                                 vcp_code, value, adjustment, display_num)
+                    threading.Thread(
+                        target=execute_ddc_direct,
+                        args=(vcp_code, value, adjustment, display_num),
+                        daemon=True
+                    ).start()
         except (IOError, OSError):
             logging.warning("Vendor HID read error, device may have disconnected")
             break
@@ -861,7 +874,15 @@ def encode_stats_tlv(stats_list):
 # ---------------------------------------------------------------------------
 
 def load_stats_config(config_path=None):
-    """Load stats_header config from config.json file.
+    """Load stats config from config.json file.
+
+    Merges stat types from two sources:
+    1. stats_header (legacy stats bar configuration)
+    2. stat_monitor widgets placed on any page (widget_type == 1)
+
+    This ensures the companion collects and sends ALL stat types that
+    the display needs, whether configured via stats_header or via
+    stat_monitor widgets on pages.
 
     Returns (stat_type_ids, net_interface, disk_device, disk_mount, proc_update_interval).
     - net_interface: NIC name (e.g. "enp6s0") or None for aggregate
@@ -882,15 +903,38 @@ def load_stats_config(config_path=None):
             disk_device = data.get("disk_device") or None
             disk_mount = data.get("disk_mount") or "/"
             proc_update_interval = max(1, min(60, int(data.get("proc_update_interval", 30))))
+
+            # Collect stat types from stats_header
+            type_set = set()
             stats_header = data.get("stats_header")
             if stats_header and isinstance(stats_header, list):
-                type_ids = [s.get("type", 0) for s in stats_header if isinstance(s, dict)]
-                type_ids = [t for t in type_ids if 1 <= t <= 0x17]
-                if type_ids:
-                    logging.info("Loaded %d stat types from config: %s",
-                                 len(type_ids),
-                                 [STAT_ID_TO_NAME.get(t, f"0x{t:02X}") for t in type_ids])
-                    return (type_ids, net_interface, disk_device, disk_mount, proc_update_interval)
+                for s in stats_header:
+                    if isinstance(s, dict):
+                        t = s.get("type", 0)
+                        if 1 <= t <= 0x17:
+                            type_set.add(t)
+
+            # Also scan all widget pages for stat_monitor widgets (widget_type == 1)
+            # to ensure the companion sends data for any stat type used on the display
+            WIDGET_STAT_MONITOR = 1
+            STAT_DISPLAY_UPTIME = 0x15  # Display-local, no companion data needed
+            active_name = data.get("active_profile_name", "")
+            for profile in data.get("profiles", []):
+                if profile.get("name") != active_name:
+                    continue
+                for page in profile.get("pages", []):
+                    for widget in page.get("widgets", []):
+                        if widget.get("widget_type") == WIDGET_STAT_MONITOR:
+                            st = widget.get("stat_type", 0)
+                            if 1 <= st <= 0x17 and st != STAT_DISPLAY_UPTIME:
+                                type_set.add(st)
+
+            if type_set:
+                type_ids = sorted(type_set)
+                logging.info("Loaded %d stat types from config: %s",
+                             len(type_ids),
+                             [STAT_ID_TO_NAME.get(t, f"0x{t:02X}") for t in type_ids])
+                return (type_ids, net_interface, disk_device, disk_mount, proc_update_interval)
         except (json.JSONDecodeError, IOError, KeyError) as exc:
             logging.warning("Failed to load stats config: %s", exc)
 
@@ -1364,6 +1408,18 @@ class CompanionService:
                         threading.Thread(
                             target=execute_action,
                             args=(self._config_mgr, page_idx, widget_idx),
+                            daemon=True
+                        ).start()
+                    elif msg_type == MSG_DDC_CMD and len(data) >= 8:
+                        vcp_code = data[2]
+                        value = struct.unpack_from('<H', bytes(data), 3)[0]
+                        adjustment = struct.unpack_from('<h', bytes(data), 5)[0]
+                        display_num = data[7]
+                        logging.info("DDC cmd: vcp=0x%02X val=%d adj=%d disp=%d",
+                                     vcp_code, value, adjustment, display_num)
+                        threading.Thread(
+                            target=execute_ddc_direct,
+                            args=(vcp_code, value, adjustment, display_num),
                             daemon=True
                         ).start()
             except (IOError, OSError):
