@@ -2,8 +2,15 @@
 #include "protocol.h"
 #include "usb_hid.h"
 #include "espnow_link.h"
+#include "status_led.h"
+
+static uint32_t last_espnow_rx_ms = 0;
+static bool in_config_mode = false;
+static bool pc_asleep = false;
 
 void setup() {
+    status_led_init();  // Yellow during init
+
     Serial.begin(115200);  // Debug output on UART0 (GPIO 43/44)
     Serial.println("=== Bridge Unit Starting ===");
 
@@ -14,6 +21,7 @@ void setup() {
     Serial.println("ESP-NOW link initialized");
 
     Serial.println("Bridge ready - waiting for commands");
+    status_led_set_state(LED_DISCONNECTED);  // Red until ESP-NOW traffic arrives
 }
 
 void loop() {
@@ -38,6 +46,10 @@ void loop() {
                 case MSG_POWER_STATE:
                     if (payload_len >= sizeof(PowerStateMsg)) {
                         espnow_send(MSG_POWER_STATE, payload, sizeof(PowerStateMsg));
+                        pc_asleep = (payload[0] != POWER_WAKE);
+                        if (pc_asleep) {
+                            status_led_set_state(LED_SLEEP);
+                        }
                         Serial.printf("POWER: relayed state=%d\n", payload[0]);
                     }
                     break;
@@ -55,10 +67,13 @@ void loop() {
                     break;
                 case MSG_CONFIG_MODE:
                     espnow_send(MSG_CONFIG_MODE, nullptr, 0);
+                    in_config_mode = true;
+                    status_led_set_state(LED_CONFIG_MODE);
                     Serial.println("CONFIG_MODE: relayed to display");
                     break;
                 case MSG_CONFIG_DONE:
                     espnow_send(MSG_CONFIG_DONE, nullptr, 0);
+                    in_config_mode = false;
                     Serial.println("CONFIG_DONE: relayed to display");
                     break;
                 default:
@@ -74,6 +89,8 @@ void loop() {
     uint8_t payload_len;
 
     if (espnow_poll(msg_type, payload, payload_len)) {
+        last_espnow_rx_ms = millis();
+
         switch (msg_type) {
             case MSG_HOTKEY: {
                 if (payload_len >= sizeof(HotkeyMsg)) {
@@ -81,6 +98,7 @@ void loop() {
                     Serial.printf("CMD: hotkey mod=0x%02X key=0x%02X\n",
                                   cmd->modifiers, cmd->keycode);
                     fire_keystroke(cmd->modifiers, cmd->keycode);
+                    status_led_flash();
 
                     // Send ACK
                     HotkeyAckMsg ack = { 0 };  // status = 0 (success)
@@ -97,6 +115,7 @@ void loop() {
                     MediaKeyMsg *cmd = (MediaKeyMsg *)payload;
                     Serial.printf("CMD: media key 0x%04X\n", cmd->consumer_code);
                     fire_media_key(cmd->consumer_code);
+                    status_led_flash();
                 } else {
                     Serial.printf("ERR: media key payload too short (%d)\n", payload_len);
                 }
@@ -126,5 +145,17 @@ void loop() {
         }
     }
 
+    // Update LED state: sleep overrides everything, then config mode, then connection
+    if (pc_asleep) {
+        status_led_set_state(LED_SLEEP);
+    } else if (!in_config_mode) {
+        if (last_espnow_rx_ms > 0 && millis() - last_espnow_rx_ms < 5000) {
+            status_led_set_state(LED_CONNECTED);
+        } else {
+            status_led_set_state(LED_DISCONNECTED);
+        }
+    }
+
+    status_led_update();
     delay(1);  // Yield to other tasks; keep responsive
 }

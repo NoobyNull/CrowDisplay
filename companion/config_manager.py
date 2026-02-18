@@ -165,6 +165,7 @@ WIDGET_MIN_H = 30
 # Default config paths
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "crowpanel"
 DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.json"
+FACTORY_CONFIG_PATH = DEFAULT_CONFIG_DIR / "factory.json"
 DEFAULT_ICONS_DIR = DEFAULT_CONFIG_DIR / "icons"  # Legacy, kept for migration
 
 # Stat type range (must match shared/protocol.h StatType enum)

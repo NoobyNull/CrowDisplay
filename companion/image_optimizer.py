@@ -48,12 +48,52 @@ def optimize_icon(input_path: str, max_width: int, max_height: int) -> bytes:
     return buf.getvalue()
 
 
+def _fit_with_matte(img: Image.Image, width: int, height: int) -> Image.Image:
+    """Fit image to canvas with a blurred zoom-to-fill matte background.
+
+    If the image already fills the canvas exactly, returns it as-is.
+    Otherwise, creates a background by zooming the same image to fill
+    the canvas (crop to cover, no distortion), applies a heavy blur,
+    then composites the fitted image centered on top.
+    """
+    from PIL import ImageFilter
+
+    # Check if image already fills canvas
+    img_ratio = img.width / img.height
+    canvas_ratio = width / height
+    if abs(img_ratio - canvas_ratio) < 0.01:
+        return img.resize((width, height), Image.LANCZOS)
+
+    # Create matte: zoom-to-fill (cover) + blur
+    cover_scale = max(width / img.width, height / img.height)
+    cover_w = int(img.width * cover_scale)
+    cover_h = int(img.height * cover_scale)
+    matte = img.resize((cover_w, cover_h), Image.LANCZOS)
+    # Center-crop to canvas size
+    left = (cover_w - width) // 2
+    top = (cover_h - height) // 2
+    matte = matte.crop((left, top, left + width, top + height))
+    matte = matte.filter(ImageFilter.GaussianBlur(radius=30))
+
+    # Fit foreground: contain (fit within canvas, preserve aspect ratio)
+    fg = img.copy()
+    fg.thumbnail((width, height), Image.LANCZOS)
+    fg_x = (width - fg.width) // 2
+    fg_y = (height - fg.height) // 2
+    matte.paste(fg, (fg_x, fg_y))
+
+    return matte
+
+
 def optimize_for_sjpg(input_path: str, width: int = 800, height: int = 480) -> bytes:
     """
     Convert an image to SJPG (LVGL split-JPEG) format.
 
     SJPG decodes in 16-pixel-tall strips without loading the full image
     into RAM, which is ideal for ESP32 devices.
+
+    Images that don't match the canvas aspect ratio get a blurred
+    zoom-to-fill matte behind the centered image (no black bars).
 
     Args:
         input_path: Path to source image
@@ -77,7 +117,7 @@ def optimize_for_sjpg(input_path: str, width: int = 800, height: int = 480) -> b
     if img.mode != "RGB":
         img = img.convert("RGB")
 
-    img.thumbnail((width, height), Image.LANCZOS)
+    img = _fit_with_matte(img, width, height)
     w, h = img.size
 
     # Slice into 16px-tall horizontal strips

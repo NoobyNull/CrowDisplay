@@ -1273,6 +1273,38 @@ class CompanionService:
     def is_bridge_connected(self) -> bool:
         return self._bridge_connected
 
+    def release_bridge(self):
+        """Temporarily close the HID device so another process can use it.
+
+        Call reclaim_bridge() when done.  The stats/vendor loops keep running
+        but will skip I/O until the device is reclaimed.
+        """
+        with self._hid_lock:
+            if self._device is not None:
+                try:
+                    self._device.close()
+                except Exception:
+                    pass
+                self._device = None
+                logging.info("Bridge released for deploy")
+
+    def reclaim_bridge(self):
+        """Re-open the bridge HID device after release_bridge()."""
+        path = find_bridge()
+        if path is None:
+            logging.warning("Cannot reclaim bridge: device not found")
+            return
+        try:
+            if hasattr(hid, 'Device'):
+                self._device = hid.Device(path=path)
+            else:
+                self._device = hid.device()
+                self._device.open_path(path)
+            logging.info("Bridge reclaimed after deploy")
+        except Exception as exc:
+            logging.error("Failed to reclaim bridge: %s", exc)
+            self._device = None
+
     @property
     def status_text(self) -> str:
         if self._bridge_connected:

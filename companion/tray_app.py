@@ -126,6 +126,9 @@ class CrowPanelTray(QApplication):
         self._autostart_action.setChecked(self._is_autostart_enabled())
         self._autostart_action.triggered.connect(self._on_toggle_autostart)
 
+        restart_action = self._menu.addAction("Restart Service")
+        restart_action.triggered.connect(self._on_restart_service)
+
         self._menu.addSeparator()
 
         quit_action = self._menu.addAction("Quit")
@@ -176,7 +179,7 @@ class CrowPanelTray(QApplication):
         try:
             if self._editor is None:
                 from companion.ui.editor_main import EditorMainWindow
-                self._editor = EditorMainWindow(self._config_mgr)
+                self._editor = EditorMainWindow(self._config_mgr, companion_service=self._service)
                 self._editor.setAttribute(Qt.WA_DeleteOnClose, False)
                 self._editor._tray_mode = True
                 if APP_ICON_PATH.is_file():
@@ -243,6 +246,15 @@ class CrowPanelTray(QApplication):
 
     def _is_autostart_enabled(self):
         return (AUTOSTART_DIR / DESKTOP_FILE_NAME).is_file()
+
+    def _on_restart_service(self):
+        """Stop and restart the companion service."""
+        logging.info("Restarting companion service...")
+        self._service.stop()
+        self._tray.setIcon(_tint_icon(TRAY_ICON_PATH, COLOR_DISCONNECTED))
+        self._status_action.setText("Restarting...")
+        self._service.start()
+        logging.info("Companion service restarted")
 
     def _on_quit(self):
         """Clean shutdown."""

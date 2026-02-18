@@ -390,7 +390,7 @@ static void handle_image_upload() {
         last_activity_time = millis();
         if (g_image_buffer) {
             if (g_image_size + upload.currentSize > MAX_IMAGE_SIZE) {
-                g_image_upload_error = "Image too large (max 100KB)";
+                g_image_upload_error = "Image too large (max 4MB)";
                 free(g_image_buffer);
                 g_image_buffer = nullptr;
                 g_image_size = 0;
@@ -419,8 +419,8 @@ static void handle_image_upload() {
         }
 
         // Validate folder: allowlist only
-        if (g_image_folder != "icons" && g_image_folder != "pictures") {
-            g_image_upload_error = "Invalid folder (allowed: icons, pictures)";
+        if (g_image_folder != "icons" && g_image_folder != "pictures" && g_image_folder != "bkgnds") {
+            g_image_upload_error = "Invalid folder (allowed: icons, pictures, bkgnds)";
             free(g_image_buffer);
             g_image_buffer = nullptr;
             return;
@@ -440,8 +440,9 @@ static void handle_image_upload() {
         String lower_name = g_image_filename;
         lower_name.toLowerCase();
         if (!lower_name.endsWith(".jpg") && !lower_name.endsWith(".jpeg") &&
-            !lower_name.endsWith(".png") && !lower_name.endsWith(".bmp")) {
-            g_image_upload_error = "Invalid file type (allowed: jpg, jpeg, png, bmp)";
+            !lower_name.endsWith(".png") && !lower_name.endsWith(".bmp") &&
+            !lower_name.endsWith(".sjpg")) {
+            g_image_upload_error = "Invalid file type (allowed: jpg, jpeg, png, bmp, sjpg)";
             free(g_image_buffer);
             g_image_buffer = nullptr;
             return;

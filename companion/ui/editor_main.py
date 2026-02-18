@@ -98,6 +98,7 @@ from companion.config_manager import (
     WIDGET_MIN_H,
     DEFAULT_CONFIG_DIR,
     DEFAULT_CONFIG_PATH,
+    FACTORY_CONFIG_PATH,
     make_default_widget,
     get_default_hardware_buttons,
     get_default_encoder,
@@ -105,6 +106,7 @@ from companion.config_manager import (
 from companion.ui.icon_picker import IconPicker
 from companion.ui.keyboard_recorder import KeyboardRecorder
 from companion.ui.deploy_dialog import DeployDialog
+from companion.ui.slideshow_upload_dialog import SlideshowUploadDialog
 from companion.ui.no_scroll_combo import NoScrollComboBox
 from companion.lvgl_symbols import SYMBOL_BY_UTF8
 import os
@@ -304,6 +306,191 @@ _CELL_H = 122
 _GAP = 6
 
 
+# ============================================================
+# Smart Default Config: Query KDE Favorites + Build Auto Config
+# ============================================================
+
+def _get_kde_favorites():
+    """Read KDE Plasma favorites from kactivitymanagerd database.
+
+    Returns a list of desktop file basenames (e.g., ['firefox.desktop', 'discord.desktop']).
+    """
+    import sqlite3
+    db_path = Path.home() / ".local/share/kactivitymanagerd/resources/database"
+    if not db_path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(str(db_path))
+        rows = conn.execute(
+            "SELECT targettedResource FROM ResourceLink "
+            "WHERE initiatingAgent='org.kde.plasma.favorites.applications'"
+        ).fetchall()
+        conn.close()
+        # Extract desktop file names:
+        #   "applications:foo.desktop" → "foo.desktop"
+        #   "org.kde.kontact.desktop" → "org.kde.kontact.desktop"
+        # Skip special entries like "preferred://browser"
+        result = []
+        for (res,) in rows:
+            if not res or "://" in res:
+                continue
+            if ":" in res:
+                res = res.split(":")[-1]
+            if res.endswith(".desktop"):
+                result.append(res)
+        return result
+    except Exception as e:
+        logger.warning("Failed to read KDE favorites: %s", e)
+        return []
+
+
+_APP_CACHE = None  # Cache scanned apps for reuse
+
+
+def _get_all_apps():
+    """Get all installed apps, using cache if available."""
+    global _APP_CACHE
+    if _APP_CACHE is None:
+        try:
+            from companion.app_scanner import scan_applications
+            _APP_CACHE = scan_applications()
+        except Exception as e:
+            logger.warning("Failed to scan applications: %s", e)
+            _APP_CACHE = []
+    return _APP_CACHE
+
+
+def _resolve_app_from_desktop(desktop_file):
+    """Try to resolve a .desktop file to an app entry.
+
+    Matches by desktop_file basename (e.g., "firefox.desktop" or just "firefox").
+
+    Returns a dict with keys: name, exec_cmd, icon_name, wm_class
+    or None if not found.
+    """
+    all_apps = _get_all_apps()
+    # Normalize the lookup: remove .desktop extension if present
+    lookup_name = desktop_file.replace(".desktop", "").lower()
+
+    for app in all_apps:
+        if not app.desktop_file:
+            continue
+        # Extract basename without extension from app.desktop_file
+        # (app.desktop_file might be full path like "/usr/share/applications/firefox.desktop")
+        basename = os.path.basename(app.desktop_file).replace(".desktop", "").lower()
+        if basename == lookup_name:
+            return {
+                "name": app.name,
+                "exec_cmd": app.exec_cmd,
+                "icon_name": app.icon_name,
+                "wm_class": app.wm_class,
+            }
+
+    logger.debug("App not found for desktop file: %s", desktop_file)
+    return None
+
+
+def _build_app_launcher_page(apps):
+    """Build a 4x3 grid of app launcher buttons from a list of app dicts.
+
+    Each app dict should have: name, exec_cmd, icon_name (optional), wm_class (optional).
+    Returns a list of widgets.
+    """
+    widgets = [_tpl_status_bar()]
+    for i, app in enumerate(apps[:12]):  # Limit to 12 (4x3 grid)
+        col, row = i % 4, i // 4
+        x = _GRID_X0 + col * (_CELL_W + _GAP)
+        y = _GRID_Y0 + row * (_CELL_H + _GAP)
+        btn = _tpl_btn(
+            app.get("name", f"App {i+1}"), x, y, _CELL_W, _CELL_H,
+            action_type=ACTION_LAUNCH_APP, icon="\uf015", color=0x3498DB,
+            launch_command=app.get("exec_cmd", ""),
+        )
+        wm_class = app.get("wm_class")
+        if wm_class:
+            btn["launch_wm_class"] = wm_class
+            btn["launch_focus_or_launch"] = True
+        icon_name = app.get("icon_name")
+        if icon_name:
+            btn["icon_source"] = icon_name
+            btn["icon_source_type"] = "freedesktop"
+        widgets.append(btn)
+    widgets.append(_tpl_page_nav())
+    return {"name": "Apps", "widgets": widgets}
+
+
+def _generate_smart_default_config():
+    """Generate a smart default config using all templates + KDE favorites.
+
+    Returns a complete config dict with 7 pages:
+    1. App Launcher (from KDE favorites)
+    2. System Dashboard
+    3. Media Controller
+    4. Dev Workbench
+    5. Productivity
+    6. Streaming Deck
+    7. Meeting Controls
+
+    Also includes hardware_buttons and encoder defaults.
+    """
+    # Get KDE favorites and resolve to app entries
+    kde_favorites = _get_kde_favorites()
+    apps = []
+    for desktop_file in kde_favorites:
+        app = _resolve_app_from_desktop(desktop_file)
+        if app:
+            apps.append(app)
+
+    # If we have fewer than 12 apps, pad with placeholder entries
+    # (user can customize later)
+    while len(apps) < 12:
+        apps.append({
+            "name": f"App {len(apps) + 1}",
+            "exec_cmd": "",
+            "icon_name": "",
+            "wm_class": "",
+        })
+
+    # Build pages — add page_nav to templates that don't include one
+    def _ensure_page_nav(widgets):
+        """Append page nav if not already present."""
+        for w in widgets:
+            if w.get("widget_type") == WIDGET_PAGE_NAV:
+                return widgets
+        widgets.append(_tpl_page_nav())
+        return widgets
+
+    pages = [
+        _build_app_launcher_page(apps),
+        {"name": "Dashboard", "widgets": _ensure_page_nav(template_system_dashboard())},
+        {"name": "Media", "widgets": _ensure_page_nav(template_media_controller())},
+        {"name": "Dev", "widgets": _ensure_page_nav(template_dev_workbench())},
+        {"name": "Productivity", "widgets": _ensure_page_nav(template_productivity())},
+        {"name": "Stream", "widgets": _ensure_page_nav(template_streaming_deck())},
+        {"name": "Meeting", "widgets": _ensure_page_nav(template_meeting_controls())},
+    ]
+
+    from companion.config_manager import (
+        CONFIG_VERSION, get_default_mode_cycle, get_default_display_settings,
+        ensure_widget_ids,
+    )
+    config = {
+        "version": CONFIG_VERSION,
+        "active_profile_name": "Default",
+        "brightness_level": 100,
+        "default_mode": 0,
+        "slideshow_interval_sec": 30,
+        "clock_analog": False,
+        "profiles": [{"name": "Default", "pages": pages}],
+        "hardware_buttons": get_default_hardware_buttons(),
+        "encoder": get_default_encoder(),
+        "mode_cycle": get_default_mode_cycle(),
+        "display_settings": get_default_display_settings(),
+    }
+    ensure_widget_ids(config)
+    return config
+
+
 def _tpl_btn(label, x, y, w=None, h=None, *, action_type=ACTION_HOTKEY,
              icon="\uf015", color=0x3498DB, modifiers=MOD_NONE, keycode=0,
              consumer_code=0, launch_command="", shell_command="", url=""):
@@ -453,31 +640,36 @@ def template_dev_workbench():
 
 
 def template_productivity():
-    """8 shell/launch buttons for productivity apps."""
+    """8 utility buttons — KDE apps + shell commands."""
     widgets = [_tpl_status_bar()]
+    # (label, icon, action_type, launch_cmd, wm_class, shell_cmd, icon_source, mods, keycode)
     apps = [
-        ("Screenshot", "\uf03e", "gnome-screenshot"),   # IMAGE
-        ("Files", "\uf07b", "nautilus"),                 # DIRECTORY
-        ("Calculator", "\uf00b", "gnome-calculator"),    # LIST
-        ("Lock", "\uf00d", ""),                          # CLOSE
-        ("Browser", "\uf1eb", "xdg-open http://"),       # WIFI
-        ("Email", "\uf0e0", "xdg-open mailto:"),         # ENVELOPE
-        ("Notes", "\uf304", "gnome-text-editor"),        # EDIT
-        ("Settings", "\uf013", "gnome-control-center"),  # SETTINGS
+        ("Screenshot", "\uf03e", ACTION_LAUNCH_APP, "spectacle", "spectacle", "", "spectacle", MOD_NONE, 0),
+        ("Files", "\uf07b", ACTION_LAUNCH_APP, "dolphin", "dolphin", "", "system-file-manager", MOD_NONE, 0),
+        ("Calculator", "\uf00b", ACTION_LAUNCH_APP, "kcalc", "kcalc", "", "accessories-calculator", MOD_NONE, 0),
+        ("Lock", "\uf00d", ACTION_HOTKEY, "", "", "", "", MOD_GUI, ord('l')),
+        ("Browser", "\uf1eb", ACTION_SHELL_CMD, "", "", "xdg-open http://", "internet-web-browser", MOD_NONE, 0),
+        ("Email", "\uf0e0", ACTION_SHELL_CMD, "", "", "xdg-open mailto:", "internet-mail", MOD_NONE, 0),
+        ("Notes", "\uf304", ACTION_LAUNCH_APP, "kate", "kate", "", "kate", MOD_NONE, 0),
+        ("Settings", "\uf013", ACTION_LAUNCH_APP, "systemsettings", "systemsettings", "", "preferences-system", MOD_NONE, 0),
     ]
-    for i, (label, icon, cmd) in enumerate(apps):
+    for i, (label, icon, at, launch_cmd, wm_class, shell_cmd, icon_src, mods, kc) in enumerate(apps):
         col, row = i % 4, i // 4
         x = _GRID_X0 + col * (_CELL_W + _GAP)
         y = _GRID_Y0 + row * (160 + _GAP)
-        at = ACTION_SHELL_CMD if cmd else ACTION_HOTKEY
-        widgets.append(_tpl_btn(
+        btn = _tpl_btn(
             label, x, y, _CELL_W, 150,
             action_type=at, icon=icon, color=0x2ECC71,
-            shell_command=cmd,
-            # Lock uses Super+L
-            modifiers=MOD_GUI if label == "Lock" else MOD_NONE,
-            keycode=ord('l') if label == "Lock" else 0,
-        ))
+            launch_command=launch_cmd, shell_command=shell_cmd,
+            modifiers=mods, keycode=kc,
+        )
+        if wm_class:
+            btn["launch_wm_class"] = wm_class
+            btn["launch_focus_or_launch"] = True
+        if icon_src:
+            btn["icon_source"] = icon_src
+            btn["icon_source_type"] = "freedesktop"
+        widgets.append(btn)
     widgets.append(_tpl_page_nav())
     return widgets
 
@@ -1909,6 +2101,21 @@ class PropertiesPanel(QScrollArea):
         self.focus_or_launch_check.stateChanged.connect(self._on_property_changed)
         hotkey_layout.addWidget(self.focus_or_launch_check)
 
+        # Steam game toggle
+        self.steam_game_check = QCheckBox("Steam Game")
+        self.steam_game_check.setVisible(False)
+        self.steam_game_check.stateChanged.connect(self._on_steam_game_toggled)
+        hotkey_layout.addWidget(self.steam_game_check)
+
+        self.steam_appid_label = QLabel("Steam App ID:")
+        self.steam_appid_label.setVisible(False)
+        hotkey_layout.addWidget(self.steam_appid_label)
+        self.steam_appid_input = QLineEdit()
+        self.steam_appid_input.setPlaceholderText("e.g., 1808500")
+        self.steam_appid_input.setVisible(False)
+        self.steam_appid_input.textChanged.connect(self._on_steam_appid_changed)
+        hotkey_layout.addWidget(self.steam_appid_input)
+
         # Shell Command section
         self.shell_cmd_label = QLabel("Shell Command:")
         self.shell_cmd_label.setVisible(False)
@@ -2325,9 +2532,16 @@ class PropertiesPanel(QScrollArea):
             self._set_media_key_combo(widget_dict.get("consumer_code", 0))
 
             # Load launch app fields
-            self.launch_cmd_input.setText(widget_dict.get("launch_command", ""))
+            launch_cmd = widget_dict.get("launch_command", "")
+            self.launch_cmd_input.setText(launch_cmd)
             self.launch_wm_class_input.setText(widget_dict.get("launch_wm_class", ""))
             self.focus_or_launch_check.setChecked(widget_dict.get("launch_focus_or_launch", True))
+            # Detect Steam game from launch command
+            is_steam = "steam://rungameid/" in launch_cmd
+            self.steam_game_check.setChecked(is_steam)
+            if is_steam:
+                appid = launch_cmd.split("rungameid/")[-1].strip()
+                self.steam_appid_input.setText(appid)
 
             # Load shell command
             self.shell_cmd_input.setText(widget_dict.get("shell_command", ""))
@@ -2711,6 +2925,10 @@ class PropertiesPanel(QScrollArea):
         self.launch_wm_class_label.setVisible(is_launch)
         self.launch_wm_class_input.setVisible(is_launch)
         self.focus_or_launch_check.setVisible(is_launch)
+        self.steam_game_check.setVisible(is_launch)
+        is_steam = is_launch and self.steam_game_check.isChecked()
+        self.steam_appid_label.setVisible(is_steam)
+        self.steam_appid_input.setVisible(is_steam)
         if is_launch:
             self._ensure_apps_loaded()
 
@@ -2792,6 +3010,57 @@ class PropertiesPanel(QScrollArea):
             else:
                 self.icon_image_preview.setVisible(False)
 
+        self._updating = False
+        self._emit_update()
+
+    def _on_steam_game_toggled(self, state):
+        """Toggle Steam Game mode — show/hide app ID input."""
+        is_steam = bool(state)
+        self.steam_appid_label.setVisible(is_steam)
+        self.steam_appid_input.setVisible(is_steam)
+        if is_steam:
+            # Hide the regular app picker when in Steam mode
+            self.launch_app_label.setVisible(False)
+            self.app_picker_combo.setVisible(False)
+            # Pre-fill app ID from existing launch command if possible
+            cmd = self.launch_cmd_input.text()
+            if "rungameid/" in cmd:
+                appid = cmd.split("rungameid/")[-1].strip()
+                self.steam_appid_input.setText(appid)
+        else:
+            self.launch_app_label.setVisible(True)
+            self.app_picker_combo.setVisible(True)
+
+    def _on_steam_appid_changed(self, text):
+        """Auto-fill launch command and icon from Steam App ID."""
+        if self._updating:
+            return
+        appid = text.strip()
+        if not appid.isdigit():
+            return
+        self._updating = True
+        self.launch_cmd_input.setText(f"steam steam://rungameid/{appid}")
+        self.launch_wm_class_input.setText("steam")
+        # Set Steam icon
+        icon_name = f"steam_icon_{appid}"
+        if self._widget_dict is not None:
+            self.icon_picker.set_symbol("")
+            self._widget_dict["icon_source"] = icon_name
+            self._widget_dict["icon_source_type"] = "freedesktop"
+            self.icon_image_label.setText(icon_name)
+            self.icon_image_clear_btn.setVisible(True)
+            source_path = _resolve_icon_source(self._widget_dict)
+            if source_path:
+                pixmap = _load_icon_pixmap(source_path, 64, 64)
+                if pixmap:
+                    self.icon_image_preview.setPixmap(
+                        pixmap.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    )
+                    self.icon_image_preview.setVisible(True)
+                else:
+                    self.icon_image_preview.setVisible(False)
+            else:
+                self.icon_image_preview.setVisible(False)
         self._updating = False
         self._emit_update()
 
@@ -3012,7 +3281,52 @@ class SettingsTab(QScrollArea):
         trans_row.addStretch()
         ss_layout.addLayout(trans_row)
 
-        info = QLabel("Images are stored in /pictures/ folder on SD card")
+        # Pictures list
+        pics_label = QLabel("Pictures to upload:")
+        pics_label.setStyleSheet("color: #aaa; font-size: 11px; margin-top: 6px;")
+        ss_layout.addWidget(pics_label)
+
+        self.slideshow_pic_list = QListWidget()
+        self.slideshow_pic_list.setMaximumHeight(120)
+        self.slideshow_pic_list.setStyleSheet(
+            "QListWidget { background: #161b22; border: 1px solid #333; color: #ccc; font-size: 11px; }"
+        )
+        self.slideshow_pic_list.setSelectionMode(QListWidget.ExtendedSelection)
+        ss_layout.addWidget(self.slideshow_pic_list)
+
+        pic_btn_row = QHBoxLayout()
+        self.slideshow_add_btn = QPushButton("Add...")
+        self.slideshow_add_btn.setStyleSheet(
+            "QPushButton { background: #238636; color: #fff; border: 1px solid #2ea043; "
+            "border-radius: 4px; padding: 4px 10px; font-size: 12px; }"
+            "QPushButton:hover { background: #2ea043; }"
+        )
+        self.slideshow_add_btn.clicked.connect(self._on_slideshow_add)
+        pic_btn_row.addWidget(self.slideshow_add_btn)
+
+        self.slideshow_remove_btn = QPushButton("Remove")
+        self.slideshow_remove_btn.setEnabled(False)
+        self.slideshow_remove_btn.clicked.connect(self._on_slideshow_remove)
+        pic_btn_row.addWidget(self.slideshow_remove_btn)
+
+        self.slideshow_upload_btn = QPushButton("Upload to Device")
+        self.slideshow_upload_btn.setEnabled(False)
+        self.slideshow_upload_btn.setStyleSheet(
+            "QPushButton { background: #3498DB; color: #fff; border: 1px solid #2980B9; "
+            "border-radius: 4px; padding: 4px 10px; font-size: 12px; }"
+            "QPushButton:hover { background: #2980B9; }"
+            "QPushButton:disabled { background: #555; color: #888; border: 1px solid #444; }"
+        )
+        # Connected by EditorMainWindow after construction
+        pic_btn_row.addWidget(self.slideshow_upload_btn)
+        pic_btn_row.addStretch()
+        ss_layout.addLayout(pic_btn_row)
+
+        self.slideshow_pic_list.itemSelectionChanged.connect(
+            lambda: self.slideshow_remove_btn.setEnabled(len(self.slideshow_pic_list.selectedItems()) > 0)
+        )
+
+        info = QLabel("Add images, then click Upload to send to device via bridge + WiFi.")
         info.setStyleSheet("color: #888; font-size: 10px; font-style: italic;")
         info.setWordWrap(True)
         ss_layout.addWidget(info)
@@ -3422,55 +3736,34 @@ class SettingsTab(QScrollArea):
         except Exception as e:
             QMessageBox.warning(self, "Delete Failed", str(e))
 
-    def _on_sd_upload_slideshow(self):
-        if not self._http_client:
-            self.sd_status_label.setText("Not connected -- deploy config to connect")
-            self.sd_status_label.setStyleSheet("color: #E74C3C; font-size: 11px;")
-            return
-
+    def _on_slideshow_add(self):
+        """Add images to the slideshow upload queue."""
         files, _ = QFileDialog.getOpenFileNames(
             self, "Select Images for Slideshow", "",
             "Images (*.jpg *.jpeg *.png *.gif *.webp *.svg)"
         )
         if not files:
             return
-
-        from companion.image_optimizer import optimize_for_slideshow
         import os
+        for f in files:
+            # Avoid duplicates
+            existing = [self.slideshow_pic_list.item(i).data(Qt.UserRole)
+                        for i in range(self.slideshow_pic_list.count())]
+            if f not in existing:
+                item = QListWidgetItem(os.path.basename(f))
+                item.setData(Qt.UserRole, f)
+                self.slideshow_pic_list.addItem(item)
+        self.slideshow_upload_btn.setEnabled(self.slideshow_pic_list.count() > 0)
 
-        uploaded = 0
-        errors = 0
-        for i, path in enumerate(files):
-            basename = os.path.basename(path)
-            # Force .sjpg extension since we convert to SJPG
-            name_root = os.path.splitext(basename)[0]
-            dest_name = name_root + ".sjpg"
+    def _on_slideshow_remove(self):
+        """Remove selected images from the slideshow upload queue."""
+        for item in self.slideshow_pic_list.selectedItems():
+            self.slideshow_pic_list.takeItem(self.slideshow_pic_list.row(item))
+        self.slideshow_upload_btn.setEnabled(self.slideshow_pic_list.count() > 0)
 
-            self.sd_status_label.setText(f"Uploading {i+1}/{len(files)}: {basename}")
-            self.sd_status_label.setStyleSheet("color: #3498db; font-size: 11px;")
-            # Process events so status label updates
-            from PySide6.QtWidgets import QApplication
-            QApplication.processEvents()
-
-            try:
-                data = optimize_for_slideshow(path)
-                result = self._http_client.sd_upload_image(dest_name, data, folder="pictures")
-                if result.get("success"):
-                    uploaded += 1
-                else:
-                    errors += 1
-                    print(f"Upload failed for {basename}: {result.get('error', 'unknown')}")
-            except Exception as e:
-                errors += 1
-                print(f"Skipping {basename}: {e}")
-
-        # Show summary
-        msg = f"Uploaded {uploaded}/{len(files)} images"
-        if errors:
-            msg += f" ({errors} failed)"
-        self.sd_status_label.setText(msg)
-        color = "#2ECC71" if errors == 0 else "#F39C12"
-        self.sd_status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
+    def _on_sd_upload_slideshow(self):
+        """Rewired: opens the same slideshow upload dialog as File > Upload Pictures."""
+        self._on_upload_pictures()
 
         # Auto-refresh file list
         if uploaded > 0:
@@ -3610,9 +3903,10 @@ class HardwareSection(QWidget):
 class EditorMainWindow(QMainWindow):
     """Main editor window with WYSIWYG canvas, palette, and properties."""
 
-    def __init__(self, config_manager, parent=None):
+    def __init__(self, config_manager, parent=None, companion_service=None):
         super().__init__(parent)
         self.config_manager = config_manager
+        self._companion_service = companion_service  # May be None when editor runs standalone
         self.current_page = 0
         self._current_file_path = None  # Track last saved/loaded file path
         self._tray_mode = False  # Set True by tray app to hide on close instead of quit
@@ -3655,6 +3949,7 @@ class EditorMainWindow(QMainWindow):
         # Settings tab (shown instead of canvas when Settings mode is active)
         self.settings_tab = SettingsTab(self.config_manager)
         self.settings_tab.settings_changed.connect(self._on_settings_tab_changed)
+        self.settings_tab.slideshow_upload_btn.clicked.connect(self._on_upload_pictures)
 
         # Stacked widget to swap between canvas and settings
         from PySide6.QtWidgets import QStackedWidget
@@ -3840,11 +4135,24 @@ class EditorMainWindow(QMainWindow):
         self.resize(ideal_w, ideal_h)
 
     def _auto_load_config(self):
-        """Load config from default path if it exists."""
+        """Load user config, fall back to factory default, then generate smart default."""
         if DEFAULT_CONFIG_PATH.is_file():
             if self.config_manager.load_json_file(str(DEFAULT_CONFIG_PATH)):
                 self._current_file_path = str(DEFAULT_CONFIG_PATH)
                 self.statusBar().showMessage(f"Loaded: {DEFAULT_CONFIG_PATH}")
+                return
+        if FACTORY_CONFIG_PATH.is_file():
+            if self.config_manager.load_json_file(str(FACTORY_CONFIG_PATH)):
+                # Loaded factory — user saves will go to config.json
+                self._current_file_path = str(DEFAULT_CONFIG_PATH)
+                self.statusBar().showMessage("Loaded factory defaults")
+                return
+        # No config at all: generate smart default
+        logger.info("No config found, generating smart default...")
+        smart_config = _generate_smart_default_config()
+        self.config_manager.config = smart_config
+        self._current_file_path = str(DEFAULT_CONFIG_PATH)
+        self.statusBar().showMessage("Generated smart default config from KDE favorites")
 
     def _mark_dirty(self):
         """Push undo snapshot and schedule debounced save to disk."""
@@ -3921,6 +4229,16 @@ class EditorMainWindow(QMainWindow):
         save_as_action = file_menu.addAction("Save As...")
         save_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
         save_as_action.triggered.connect(self._on_file_save_as)
+
+        file_menu.addSeparator()
+
+        upload_pictures_action = file_menu.addAction("Upload Pictures...")
+        upload_pictures_action.triggered.connect(self._on_upload_pictures)
+
+        file_menu.addSeparator()
+
+        factory_action = file_menu.addAction("Reset to Factory Defaults")
+        factory_action.triggered.connect(self._on_factory_reset)
 
         file_menu.addSeparator()
 
@@ -4240,6 +4558,32 @@ class EditorMainWindow(QMainWindow):
 
     # -- File operations --
 
+    def _on_factory_reset(self):
+        """Reset to factory defaults — delete user config and reload factory.json."""
+        if not FACTORY_CONFIG_PATH.is_file():
+            QMessageBox.warning(self, "Factory Reset", "No factory.json found.")
+            return
+        reply = QMessageBox.question(
+            self, "Factory Reset",
+            "Reset to factory defaults? Your current config will be deleted.",
+        )
+        if reply == QMessageBox.Yes:
+            # Remove user config so next save creates a fresh one
+            if DEFAULT_CONFIG_PATH.is_file():
+                DEFAULT_CONFIG_PATH.unlink()
+            self.config_manager.load_json_file(str(FACTORY_CONFIG_PATH))
+            self._current_file_path = str(DEFAULT_CONFIG_PATH)
+            self.current_page = 0
+            self.properties_panel.clear_selection()
+            self._rebuild_canvas()
+            self._update_page_display()
+            self._load_display_mode_settings()
+            self.stats_panel.load_from_config()
+            self.notifications_panel.load_from_config()
+            self.settings_tab.load_from_config()
+            self.hardware_section.update_labels()
+            self.statusBar().showMessage("Reset to factory defaults")
+
     def _on_file_new(self):
         reply = QMessageBox.question(
             self, "New Config", "Create new config? (unsaved changes will be lost)"
@@ -4448,8 +4792,42 @@ class EditorMainWindow(QMainWindow):
         if not is_valid:
             QMessageBox.critical(self, "Validation Error", error_msg)
             return
-        deploy_dialog = DeployDialog(self.config_manager, self)
-        result = deploy_dialog.exec()
-        if result == QDialog.Accepted:
-            self._auto_save_config()
-            self.statusBar().showMessage("Config deployed and saved")
+        # Release the companion service's bridge so deploy can use it exclusively
+        if self._companion_service:
+            self._companion_service.release_bridge()
+        try:
+            deploy_dialog = DeployDialog(self.config_manager, self)
+            result = deploy_dialog.exec()
+            if result == QDialog.Accepted:
+                self._auto_save_config()
+                self.statusBar().showMessage("Config deployed and saved")
+        finally:
+            if self._companion_service:
+                self._companion_service.reclaim_bridge()
+
+    def _on_upload_pictures(self):
+        """Upload pictures via bridge + WiFi. Uses queued list or opens file picker."""
+        pic_list = self.settings_tab.slideshow_pic_list
+        files = []
+        if pic_list.count() > 0:
+            for i in range(pic_list.count()):
+                files.append(pic_list.item(i).data(Qt.UserRole))
+        else:
+            # Fallback: open file picker (from File menu path)
+            files, _ = QFileDialog.getOpenFileNames(
+                self, "Select Images for Slideshow", "",
+                "Images (*.jpg *.jpeg *.png *.gif *.webp *.svg)"
+            )
+        if not files:
+            return
+
+        if self._companion_service:
+            self._companion_service.release_bridge()
+        try:
+            dialog = SlideshowUploadDialog(files, self)
+            if dialog.exec() == QDialog.Accepted:
+                pic_list.clear()
+                self.settings_tab.slideshow_upload_btn.setEnabled(False)
+        finally:
+            if self._companion_service:
+                self._companion_service.reclaim_bridge()
