@@ -32,13 +32,16 @@ ACTION_MODE_CYCLE = 11       # Cycle through configured display modes (display-l
 ACTION_BRIGHTNESS = 12       # Cycle brightness presets (display-local)
 ACTION_CONFIG_MODE = 13      # Enter SoftAP config mode (display-local)
 ACTION_DDC = 14              # DDC/CI monitor control
+ACTION_FOCUS_NEXT = 15       # Focus next button on page (display-local)
+ACTION_FOCUS_PREV = 16       # Focus previous button on page (display-local)
+ACTION_FOCUS_ACTIVATE = 17   # Activate focused button (display-local)
 
 VALID_ACTION_TYPES = (
     ACTION_HOTKEY, ACTION_MEDIA_KEY, ACTION_LAUNCH_APP, ACTION_SHELL_CMD, ACTION_OPEN_URL,
     ACTION_DISPLAY_SETTINGS, ACTION_DISPLAY_CLOCK, ACTION_DISPLAY_PICTURE,
     ACTION_PAGE_NEXT, ACTION_PAGE_PREV, ACTION_PAGE_GOTO,
     ACTION_MODE_CYCLE, ACTION_BRIGHTNESS, ACTION_CONFIG_MODE,
-    ACTION_DDC,
+    ACTION_DDC, ACTION_FOCUS_NEXT, ACTION_FOCUS_PREV, ACTION_FOCUS_ACTIVATE,
 )
 
 # Display-local actions that the companion should NOT try to execute
@@ -46,6 +49,7 @@ DISPLAY_LOCAL_ACTIONS = {
     ACTION_DISPLAY_SETTINGS, ACTION_DISPLAY_CLOCK, ACTION_DISPLAY_PICTURE,
     ACTION_PAGE_NEXT, ACTION_PAGE_PREV, ACTION_PAGE_GOTO,
     ACTION_MODE_CYCLE, ACTION_BRIGHTNESS, ACTION_CONFIG_MODE,
+    ACTION_FOCUS_NEXT, ACTION_FOCUS_PREV, ACTION_FOCUS_ACTIVATE,
 }
 
 # Human-readable names for action type dropdowns
@@ -65,6 +69,9 @@ ACTION_TYPE_NAMES = {
     ACTION_BRIGHTNESS: "Brightness",
     ACTION_CONFIG_MODE: "Config Mode (SoftAP)",
     ACTION_DDC: "DDC Monitor Control",
+    ACTION_FOCUS_NEXT: "Focus Next",
+    ACTION_FOCUS_PREV: "Focus Previous",
+    ACTION_FOCUS_ACTIVATE: "Activate Focus",
 }
 
 # Encoder rotation mode names
@@ -556,6 +563,14 @@ class ConfigManager:
         if not (0 <= widget_idx < len(widgets)):
             return False
         widgets.pop(widget_idx)
+        # Renumber auto-named buttons ("Button N") to reflect new positions
+        btn_num = 1
+        for w in widgets:
+            if w.get("widget_type") == WIDGET_HOTKEY_BUTTON:
+                label = w.get("label", "")
+                if label.startswith("Button ") and label[7:].isdigit():
+                    w["label"] = f"Button {btn_num}"
+                btn_num += 1
         self._emit_changed()
         return True
 
@@ -600,6 +615,11 @@ class ConfigManager:
             return False
 
         pages.pop(index)
+        # Renumber auto-named pages ("Page N") to reflect new positions
+        for i, page in enumerate(pages):
+            name = page.get("name", "")
+            if name.startswith("Page ") and name[5:].isdigit():
+                page["name"] = f"Page {i + 1}"
         self._emit_changed()
         return True
 

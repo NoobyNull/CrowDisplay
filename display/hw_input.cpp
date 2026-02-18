@@ -46,6 +46,7 @@ static uint32_t enc_last_rotation_ms = 0;
 // App-select focus
 static int focused_widget_idx = -1;
 static lv_obj_t *focus_highlight_obj = nullptr;
+static lv_opa_t focus_prev_opa = LV_OPA_TRANSP;  // Restore original opacity on clear
 
 // ============================================================
 // I2C helpers (all PCF8575 access must hold i2c mutex)
@@ -202,6 +203,15 @@ static void dispatch_action(ActionType action, uint8_t keycode, uint16_t consume
                           ddc.vcp_code, ddc.value, ddc.adjustment, ddc.display_num);
             break;
         }
+        case ACTION_FOCUS_NEXT:
+            hw_input_focus_next();
+            break;
+        case ACTION_FOCUS_PREV:
+            hw_input_focus_prev();
+            break;
+        case ACTION_FOCUS_ACTIVATE:
+            hw_input_activate_focus();
+            break;
     }
 }
 
@@ -364,29 +374,32 @@ void hw_input_poll() {
 // ============================================================
 void hw_input_focus_next() {
     int page = ui_get_current_page();
-    int count = ui_get_page_count();
-    if (count <= 0) return;
-
-    // Get widget count for current page from config
     const AppConfig &cfg = get_global_config();
     const ProfileConfig *profile = cfg.get_active_profile();
     if (!profile || page >= (int)profile->pages.size()) return;
 
-    int widget_count = (int)profile->pages[page].widgets.size();
+    const auto &widgets = profile->pages[page].widgets;
+    int widget_count = (int)widgets.size();
     if (widget_count <= 0) return;
 
-    // Clear previous highlight
     hw_input_clear_focus();
 
-    // Advance focus
-    focused_widget_idx = (focused_widget_idx + 1) % widget_count;
-
-    // Apply visual highlight (gold border)
-    lv_obj_t *obj = ui_get_widget_obj(page, focused_widget_idx);
-    if (obj) {
-        lv_obj_set_style_border_color(obj, lv_color_hex(0xFFD700), LV_PART_MAIN);
-        lv_obj_set_style_border_width(obj, 3, LV_PART_MAIN);
-        focus_highlight_obj = obj;
+    // Scan forward for next actionable widget (hotkey button)
+    int start = focused_widget_idx;
+    for (int i = 0; i < widget_count; i++) {
+        int idx = (start + 1 + i) % widget_count;
+        if (widgets[idx].widget_type == WIDGET_HOTKEY_BUTTON) {
+            focused_widget_idx = idx;
+            lv_obj_t *obj = ui_get_widget_obj(page, idx);
+            if (obj) {
+                // Save current opacity, then increase by ~20%
+                focus_prev_opa = lv_obj_get_style_bg_opa(obj, LV_PART_MAIN);
+                lv_opa_t new_opa = (focus_prev_opa <= (LV_OPA_COVER - 50)) ? (focus_prev_opa + 50) : LV_OPA_COVER;
+                lv_obj_set_style_bg_opa(obj, new_opa, LV_PART_MAIN);
+                focus_highlight_obj = obj;
+            }
+            return;
+        }
     }
 }
 
@@ -396,18 +409,27 @@ void hw_input_focus_prev() {
     const ProfileConfig *profile = cfg.get_active_profile();
     if (!profile || page >= (int)profile->pages.size()) return;
 
-    int widget_count = (int)profile->pages[page].widgets.size();
+    const auto &widgets = profile->pages[page].widgets;
+    int widget_count = (int)widgets.size();
     if (widget_count <= 0) return;
 
     hw_input_clear_focus();
 
-    focused_widget_idx = focused_widget_idx <= 0 ? widget_count - 1 : focused_widget_idx - 1;
-
-    lv_obj_t *obj = ui_get_widget_obj(page, focused_widget_idx);
-    if (obj) {
-        lv_obj_set_style_border_color(obj, lv_color_hex(0xFFD700), LV_PART_MAIN);
-        lv_obj_set_style_border_width(obj, 3, LV_PART_MAIN);
-        focus_highlight_obj = obj;
+    // Scan backward for previous actionable widget (hotkey button)
+    int start = focused_widget_idx <= 0 ? widget_count : focused_widget_idx;
+    for (int i = 0; i < widget_count; i++) {
+        int idx = (start - 1 - i + widget_count) % widget_count;
+        if (widgets[idx].widget_type == WIDGET_HOTKEY_BUTTON) {
+            focused_widget_idx = idx;
+            lv_obj_t *obj = ui_get_widget_obj(page, idx);
+            if (obj) {
+                focus_prev_opa = lv_obj_get_style_bg_opa(obj, LV_PART_MAIN);
+                lv_opa_t new_opa = (focus_prev_opa <= (LV_OPA_COVER - 50)) ? (focus_prev_opa + 50) : LV_OPA_COVER;
+                lv_obj_set_style_bg_opa(obj, new_opa, LV_PART_MAIN);
+                focus_highlight_obj = obj;
+            }
+            return;
+        }
     }
 }
 
@@ -432,8 +454,9 @@ void hw_input_activate_focus() {
 
 void hw_input_clear_focus() {
     if (focus_highlight_obj) {
-        lv_obj_set_style_border_width(focus_highlight_obj, 0, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(focus_highlight_obj, focus_prev_opa, LV_PART_MAIN);
         focus_highlight_obj = nullptr;
+        focus_prev_opa = LV_OPA_TRANSP;
     }
     focused_widget_idx = -1;
 }

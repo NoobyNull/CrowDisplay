@@ -386,6 +386,7 @@ static void json_to_widget(JsonObject obj, WidgetConfig& w) {
 // Helper: Serialize page to JSON object (v2)
 static void page_to_json(JsonObject obj, const PageConfig& page) {
     obj["name"] = page.name.c_str();
+    if (!page.bg_image.empty()) obj["bg_image"] = page.bg_image.c_str();
     JsonArray widgets_array = obj["widgets"].to<JsonArray>();
     for (const auto& w : page.widgets) {
         JsonObject w_obj = widgets_array.add<JsonObject>();
@@ -396,6 +397,7 @@ static void page_to_json(JsonObject obj, const PageConfig& page) {
 // Helper: Deserialize page from JSON object (v2)
 static void json_to_page_v2(JsonObject obj, PageConfig& page) {
     if (!obj["name"].isNull()) page.name = obj["name"].as<const char*>();
+    if (!obj["bg_image"].isNull()) page.bg_image = obj["bg_image"].as<const char*>();
     page.widgets.clear();
     if (!obj["widgets"].isNull()) {
         JsonArray widgets_array = obj["widgets"].as<JsonArray>();

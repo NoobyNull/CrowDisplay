@@ -366,7 +366,7 @@ static String g_image_filename = "";
 static String g_image_folder = "icons";  // default folder
 static bool g_image_upload_success = false;
 static String g_image_upload_error = "";
-static const size_t MAX_IMAGE_SIZE = 204800;  // 200KB max (slideshow JPEGs can be 50-120KB)
+static const size_t MAX_IMAGE_SIZE = 4 * 1024 * 1024;  // 4MB max (picture frame photos)
 
 static void handle_image_upload() {
     HTTPUpload &upload = web_server->upload();

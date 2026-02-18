@@ -77,6 +77,9 @@ enum ActionType : uint8_t {
     ACTION_BRIGHTNESS = 12,       // Cycle brightness presets
     ACTION_CONFIG_MODE = 13,      // Enter SoftAP config mode
     ACTION_DDC = 14,              // DDC/CI monitor control (brightness, contrast, input, etc.)
+    ACTION_FOCUS_NEXT = 15,       // Focus next button on current page (display-local)
+    ACTION_FOCUS_PREV = 16,       // Focus previous button on current page (display-local)
+    ACTION_FOCUS_ACTIVATE = 17,   // Activate (press) the currently focused button (display-local)
 };
 
 // ============================================================
@@ -161,9 +164,10 @@ struct WidgetConfig {
 
 struct PageConfig {
     std::string name;                       // Page name (e.g., "Window Manager")
+    std::string bg_image;                   // SD card path for background image (e.g., "/bkgnds/dark.png")
     std::vector<WidgetConfig> widgets;      // Widgets on this page
 
-    PageConfig() : name(""), widgets() {}
+    PageConfig() : name(""), bg_image(""), widgets() {}
 };
 
 // ============================================================
