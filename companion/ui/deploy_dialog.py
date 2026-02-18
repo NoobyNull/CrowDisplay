@@ -27,10 +27,65 @@ from companion.http_client import HTTPClient, HTTPClientError
 from companion.bridge_device import BridgeDevice, BridgeDeviceError
 from companion.wifi_manager import WiFiManager, WiFiManagerError
 
+import json
+import os
 import time
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_deploy_images(config):
+    """Walk all widgets, resolve icon_source → system path, optimize to PNG bytes.
+
+    Returns dict of {filename: png_bytes} and a modified config dict with icon_path set.
+    The original config dict is not modified.
+    """
+    import copy
+    from companion.image_optimizer import optimize_for_widget
+
+    deploy_config = copy.deepcopy(config)
+    images = {}
+
+    for profile in deploy_config.get("profiles", []):
+        for page in profile.get("pages", []):
+            for widget in page.get("widgets", []):
+                icon_source = widget.get("icon_source", "")
+                icon_source_type = widget.get("icon_source_type", "")
+                if not icon_source or not icon_source_type:
+                    widget.pop("icon_path", None)
+                    continue
+
+                # Resolve to filesystem path
+                source_path = None
+                if icon_source_type == "file":
+                    source_path = icon_source if os.path.exists(icon_source) else None
+                elif icon_source_type == "freedesktop":
+                    from companion.app_scanner import _resolve_icon_path, _get_icon_theme
+                    source_path = _resolve_icon_path(icon_source, _get_icon_theme()) or None
+
+                if not source_path:
+                    logger.warning("Icon source not found: %s (%s)", icon_source, icon_source_type)
+                    widget.pop("icon_path", None)
+                    continue
+
+                # Generate safe filename
+                base = os.path.splitext(os.path.basename(icon_source))[0] or icon_source
+                safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in base)
+                filename = f"{safe_name}.png"
+
+                # Optimize at full widget size
+                try:
+                    w = widget.get("width", 180)
+                    h = widget.get("height", 100)
+                    png_data = optimize_for_widget(source_path, w, h)
+                    images[filename] = png_data
+                    widget["icon_path"] = f"/icons/{filename}"
+                except Exception as e:
+                    logger.warning("Failed to optimize icon %s: %s", source_path, e)
+                    widget.pop("icon_path", None)
+
+    return images, deploy_config
 
 # Deploy step definitions: (key, label)
 DEPLOY_STEPS = [
@@ -55,10 +110,12 @@ class DeployWorker(QThread):
     deploy_warning = Signal(str) # non-fatal warning message
     deploy_failed = Signal(str)  # error message
 
-    def __init__(self, json_str: str, pending_images: dict = None):
+    def __init__(self, config_manager):
         super().__init__()
-        self.json_str = json_str
-        self.pending_images = pending_images or {}
+        # Resolve icons at deploy time from system sources
+        images, deploy_config = _resolve_deploy_images(config_manager.config)
+        self.json_str = json.dumps(deploy_config, indent=2)
+        self.pending_images = images  # {filename: png_bytes}
         self._bridge = None
         self._wifi = None
 
@@ -99,7 +156,7 @@ class DeployWorker(QThread):
             self.step_started.emit("images")
             image_warnings = []
             if self.pending_images:
-                for i, (widget_idx, (filename, data)) in enumerate(self.pending_images.items()):
+                for filename, data in self.pending_images.items():
                     try:
                         result = client.upload_image(filename, data)
                         if not result.get("success"):
@@ -198,10 +255,9 @@ class StepLabel(QLabel):
 class DeployDialog(QDialog):
     """One-click deploy dialog with step-by-step progress."""
 
-    def __init__(self, config_manager, parent=None, pending_images=None):
+    def __init__(self, config_manager, parent=None):
         super().__init__(parent)
         self.config_manager = config_manager
-        self.pending_images = pending_images or {}
         self.deploy_worker = None
         self.setWindowTitle("Deploy to Device")
         self.setMinimumWidth(420)
@@ -261,8 +317,6 @@ class DeployDialog(QDialog):
 
     def _on_deploy(self):
         """Start the deploy sequence."""
-        json_str = self.config_manager.to_json()
-
         self.deploy_btn.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.status_label.setText("Starting deploy...")
@@ -272,7 +326,7 @@ class DeployDialog(QDialog):
         for sl in self.step_labels.values():
             sl.set_state(StepLabel.PENDING)
 
-        self.deploy_worker = DeployWorker(json_str, self.pending_images)
+        self.deploy_worker = DeployWorker(self.config_manager)
         self.deploy_worker.step_started.connect(self._on_step_started)
         self.deploy_worker.step_done.connect(self._on_step_done)
         self.deploy_worker.deploy_success.connect(self._on_success)

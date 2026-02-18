@@ -266,6 +266,12 @@ static void widget_to_json(JsonObject obj, const WidgetConfig& w) {
             obj["keycode"] = w.keycode;
             obj["consumer_code"] = w.consumer_code;
             obj["pressed_color"] = w.pressed_color;
+            if (w.action_type == ACTION_DDC) {
+                obj["ddc_vcp_code"] = w.ddc_vcp_code;
+                obj["ddc_value"] = w.ddc_value;
+                obj["ddc_adjustment"] = w.ddc_adjustment;
+                obj["ddc_display"] = w.ddc_display;
+            }
             break;
         case WIDGET_STAT_MONITOR:
             obj["stat_type"] = w.stat_type;
@@ -334,6 +340,10 @@ static void json_to_widget(JsonObject obj, WidgetConfig& w) {
             w.keycode = obj["keycode"] | (uint8_t)0;
             w.consumer_code = obj["consumer_code"] | (uint16_t)0;
             w.pressed_color = obj["pressed_color"] | (uint32_t)0;
+            w.ddc_vcp_code = obj["ddc_vcp_code"] | (uint8_t)0;
+            w.ddc_value = obj["ddc_value"] | (uint16_t)0;
+            w.ddc_adjustment = obj["ddc_adjustment"] | (int16_t)0;
+            w.ddc_display = obj["ddc_display"] | (uint8_t)0;
             break;
         case WIDGET_STAT_MONITOR:
             w.stat_type = obj["stat_type"] | (uint8_t)0;
@@ -656,6 +666,10 @@ AppConfig config_load() {
             cfg.hw_buttons[i].keycode = btn["keycode"] | 0;
             cfg.hw_buttons[i].consumer_code = btn["consumer_code"] | 0;
             cfg.hw_buttons[i].modifiers = btn["modifiers"] | 0;
+            cfg.hw_buttons[i].ddc_vcp_code = btn["ddc_vcp_code"] | 0;
+            cfg.hw_buttons[i].ddc_value = btn["ddc_value"] | 0;
+            cfg.hw_buttons[i].ddc_adjustment = btn["ddc_adjustment"] | 0;
+            cfg.hw_buttons[i].ddc_display = btn["ddc_display"] | 0;
         }
     }
 
@@ -668,6 +682,9 @@ AppConfig config_load() {
         cfg.encoder.push_consumer_code = enc["push_consumer_code"] | 0;
         cfg.encoder.push_modifiers = enc["push_modifiers"] | 0;
         cfg.encoder.encoder_mode = enc["encoder_mode"] | 0; // page_nav default
+        cfg.encoder.ddc_vcp_code = enc["ddc_vcp_code"] | 0x10;
+        cfg.encoder.ddc_step = enc["ddc_step"] | 10;
+        cfg.encoder.ddc_display = enc["ddc_display"] | 0;
     }
 
     // Mode cycle (optional)
@@ -781,6 +798,12 @@ bool config_save(const AppConfig& config) {
         btn["keycode"] = config.hw_buttons[i].keycode;
         btn["consumer_code"] = config.hw_buttons[i].consumer_code;
         btn["modifiers"] = config.hw_buttons[i].modifiers;
+        if (config.hw_buttons[i].action_type == ACTION_DDC) {
+            btn["ddc_vcp_code"] = config.hw_buttons[i].ddc_vcp_code;
+            btn["ddc_value"] = config.hw_buttons[i].ddc_value;
+            btn["ddc_adjustment"] = config.hw_buttons[i].ddc_adjustment;
+            btn["ddc_display"] = config.hw_buttons[i].ddc_display;
+        }
     }
 
     // Encoder
@@ -791,6 +814,9 @@ bool config_save(const AppConfig& config) {
     enc["push_consumer_code"] = config.encoder.push_consumer_code;
     enc["push_modifiers"] = config.encoder.push_modifiers;
     enc["encoder_mode"] = config.encoder.encoder_mode;
+    enc["ddc_vcp_code"] = config.encoder.ddc_vcp_code;
+    enc["ddc_step"] = config.encoder.ddc_step;
+    enc["ddc_display"] = config.encoder.ddc_display;
 
     // Mode cycle
     JsonArray modes = doc["mode_cycle"].to<JsonArray>();

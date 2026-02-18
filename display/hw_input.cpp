@@ -3,6 +3,7 @@
 #include <Wire.h>
 #include "touch.h"     // i2c_take/i2c_give
 #include "config.h"
+#include "protocol.h"
 #include "ui.h"
 #include "power.h"
 #include "espnow_link.h"
@@ -189,6 +190,18 @@ static void dispatch_action(ActionType action, uint8_t keycode, uint16_t consume
         case ACTION_BRIGHTNESS:
             power_cycle_brightness();
             break;
+        case ACTION_DDC: {
+            const HwButtonConfig &hbc = get_global_config().hw_buttons[hw_btn_idx < 4 ? hw_btn_idx : 0];
+            DdcCmdMsg ddc;
+            ddc.vcp_code = hbc.ddc_vcp_code;
+            ddc.value = hbc.ddc_value;
+            ddc.adjustment = hbc.ddc_adjustment;
+            ddc.display_num = hbc.ddc_display;
+            espnow_send(MSG_DDC_CMD, (const uint8_t *)&ddc, sizeof(ddc));
+            Serial.printf("[hw_input] DDC cmd: vcp=0x%02X val=%d adj=%d disp=%d\n",
+                          ddc.vcp_code, ddc.value, ddc.adjustment, ddc.display_num);
+            break;
+        }
     }
 }
 
@@ -222,6 +235,16 @@ static void dispatch_encoder_rotation(int8_t direction) {
             else
                 mode_cycle_next(cfg.mode_cycle.enabled_modes); // same direction, just cycle
             break;
+        case 5: { // ddc_control
+            DdcCmdMsg ddc;
+            ddc.vcp_code = cfg.encoder.ddc_vcp_code;
+            ddc.value = 0;
+            ddc.adjustment = (direction > 0) ? (int16_t)cfg.encoder.ddc_step : -(int16_t)cfg.encoder.ddc_step;
+            ddc.display_num = cfg.encoder.ddc_display;
+            espnow_send(MSG_DDC_CMD, (const uint8_t *)&ddc, sizeof(ddc));
+            Serial.printf("[hw_input] Encoder DDC: vcp=0x%02X adj=%d\n", ddc.vcp_code, ddc.adjustment);
+            break;
+        }
     }
 }
 

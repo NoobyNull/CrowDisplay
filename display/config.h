@@ -76,6 +76,7 @@ enum ActionType : uint8_t {
     ACTION_MODE_CYCLE = 11,       // Cycle through configured display modes
     ACTION_BRIGHTNESS = 12,       // Cycle brightness presets
     ACTION_CONFIG_MODE = 13,      // Enter SoftAP config mode
+    ACTION_DDC = 14,              // DDC/CI monitor control (brightness, contrast, input, etc.)
 };
 
 // ============================================================
@@ -106,6 +107,12 @@ struct WidgetConfig {
     uint8_t keycode;          // ASCII key or special key code
     uint16_t consumer_code;   // USB HID consumer control code (for MEDIA_KEY)
     uint32_t pressed_color;   // 0x000000 = auto-darken, else explicit color
+
+    // --- DDC Monitor Control properties (action_type == ACTION_DDC) ---
+    uint8_t ddc_vcp_code;     // DDC VCP code (0x10=brightness, 0x12=contrast, etc.)
+    uint16_t ddc_value;       // Absolute value (when ddc_adjustment == 0)
+    int16_t ddc_adjustment;   // Signed step (+/-), 0 = use absolute value
+    uint8_t ddc_display;      // ddcutil --display N (0 = auto-detect)
 
     // --- Stat Monitor properties (widget_type == WIDGET_STAT_MONITOR) ---
     uint8_t stat_type;        // StatType enum value (1-23)
@@ -139,6 +146,7 @@ struct WidgetConfig {
           description(""), show_description(true), icon(""), icon_path(""),
           action_type(ACTION_HOTKEY), modifiers(0), keycode(0),
           consumer_code(0), pressed_color(0x000000),
+          ddc_vcp_code(0), ddc_value(0), ddc_adjustment(0), ddc_display(0),
           stat_type(0), value_position(0),
           clock_analog(false),
           show_wifi(true), show_pc(true), show_settings(true), show_brightness(true),
@@ -194,8 +202,13 @@ struct HwButtonConfig {
     uint8_t keycode;        // For PAGE_GOTO (page number), or HOTKEY keycode
     uint16_t consumer_code; // For MEDIA_KEY
     uint8_t modifiers;      // For HOTKEY modifiers
+    uint8_t ddc_vcp_code;   // For ACTION_DDC
+    uint16_t ddc_value;
+    int16_t ddc_adjustment;
+    uint8_t ddc_display;
     HwButtonConfig() : action_type(ACTION_PAGE_NEXT), label(""), keycode(0),
-                       consumer_code(0), modifiers(0) {}
+                       consumer_code(0), modifiers(0),
+                       ddc_vcp_code(0), ddc_value(0), ddc_adjustment(0), ddc_display(0) {}
 };
 
 struct EncoderConfig {
@@ -204,10 +217,13 @@ struct EncoderConfig {
     uint8_t push_keycode;
     uint16_t push_consumer_code;
     uint8_t push_modifiers;
-    uint8_t encoder_mode;    // 0=page_nav, 1=volume, 2=brightness, 3=app_select, 4=mode_cycle
+    uint8_t encoder_mode;    // 0=page_nav, 1=volume, 2=brightness, 3=app_select, 4=mode_cycle, 5=ddc_control
+    uint8_t ddc_vcp_code;    // For mode 5: VCP code to adjust
+    uint8_t ddc_step;        // For mode 5: unsigned step per click
+    uint8_t ddc_display;     // For mode 5: display number (0=auto)
     EncoderConfig() : push_action(ACTION_BRIGHTNESS), push_label("Brightness"),
                       push_keycode(0), push_consumer_code(0), push_modifiers(0),
-                      encoder_mode(0) {}
+                      encoder_mode(0), ddc_vcp_code(0x10), ddc_step(10), ddc_display(0) {}
 };
 
 struct ModeCycleConfig {

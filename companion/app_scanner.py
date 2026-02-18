@@ -70,8 +70,8 @@ def _resolve_icon_path(icon_name: str, theme: str) -> str:
 
     # Search icon theme directories
     icon_dirs = [f"/usr/share/icons/{theme}", "/usr/share/icons/hicolor"]
-    # Prefer larger raster icons, then scalable
-    size_dirs = ["48x48", "64x64", "scalable", "32x32", "256x256", "128x128"]
+    # Prefer scalable (SVG) and large sizes for best quality when rasterized
+    size_dirs = ["scalable", "256x256", "128x128", "64x64", "48x48", "32x32"]
     extensions = [".png", ".svg", ".xpm"]
 
     for icon_dir in icon_dirs:

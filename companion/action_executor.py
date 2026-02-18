@@ -25,6 +25,7 @@ from companion.config_manager import (
     ACTION_DISPLAY_SETTINGS,
     ACTION_DISPLAY_CLOCK,
     ACTION_DISPLAY_PICTURE,
+    ACTION_DDC,
     DISPLAY_LOCAL_ACTIONS,
     MOD_CTRL,
     MOD_SHIFT,
@@ -157,6 +158,13 @@ def execute_action(config_manager, page_idx: int, widget_idx: int):
         _exec_keyboard_shortcut(widget)
     elif action_type == ACTION_MEDIA_KEY:
         _exec_media_key(widget)
+    elif action_type == ACTION_DDC:
+        execute_ddc_direct(
+            widget.get("ddc_vcp_code", 0x10),
+            widget.get("ddc_value", 0),
+            widget.get("ddc_adjustment", 0),
+            widget.get("ddc_display", 0),
+        )
     elif action_type in (ACTION_DISPLAY_SETTINGS, ACTION_DISPLAY_CLOCK, ACTION_DISPLAY_PICTURE):
         logging.debug("Display-local action_type %d handled on device, ignoring on PC", action_type)
     else:
@@ -293,6 +301,36 @@ def _exec_media_key(widget):
             logging.debug("ydotool media key failed: %s", exc)
 
     logging.warning("ydotool not available for media keys")
+
+
+def execute_ddc_direct(vcp_code, value, adjustment, display_num):
+    """Execute a DDC/CI command via ddcutil.
+
+    If adjustment != 0, uses relative adjustment: ddcutil setvcp 0xNN + N or - N
+    If adjustment == 0, uses absolute value: ddcutil setvcp 0xNN <value>
+    """
+    if not shutil.which("ddcutil"):
+        logging.error("ddcutil not found -- DDC/CI commands require ddcutil. "
+                      "Install with: sudo apt install ddcutil")
+        return
+
+    cmd = ["ddcutil"]
+    if display_num > 0:
+        cmd.extend(["--display", str(display_num)])
+
+    vcp_hex = f"0x{vcp_code:02X}"
+
+    if adjustment != 0:
+        op = "+" if adjustment > 0 else "-"
+        cmd.extend(["setvcp", vcp_hex, op, str(abs(adjustment))])
+    else:
+        cmd.extend(["setvcp", vcp_hex, str(value)])
+
+    try:
+        subprocess.Popen(cmd, stdout=DEVNULL, stderr=DEVNULL)
+        logging.info("DDC command: %s", " ".join(cmd))
+    except Exception as exc:
+        logging.error("DDC command failed: %s", exc)
 
 
 def _try_focus_window(wm_class: str) -> bool:

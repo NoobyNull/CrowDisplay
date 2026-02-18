@@ -220,6 +220,10 @@ struct ButtonEventData {
     uint8_t keycode;       // For PAGE_GOTO target page, or HOTKEY keycode
     uint8_t modifiers;     // For ACTION_HOTKEY modifier mask
     uint16_t consumer_code; // For ACTION_MEDIA_KEY consumer control code
+    uint8_t ddc_vcp_code;  // For ACTION_DDC
+    uint16_t ddc_value;
+    int16_t ddc_adjustment;
+    uint8_t ddc_display;
 };
 static ButtonEventData btn_event_data[CONFIG_MAX_WIDGETS * CONFIG_MAX_PAGES];
 static int btn_event_count = 0;
@@ -295,6 +299,17 @@ static void btn_event_cb(lv_event_t *e) {
                 send_media_key_to_bridge(bed->consumer_code);
                 Serial.printf("Media key: 0x%04X\n", bed->consumer_code);
                 break;
+            case ACTION_DDC: {
+                DdcCmdMsg ddc;
+                ddc.vcp_code = bed->ddc_vcp_code;
+                ddc.value = bed->ddc_value;
+                ddc.adjustment = bed->ddc_adjustment;
+                ddc.display_num = bed->ddc_display;
+                espnow_send(MSG_DDC_CMD, (const uint8_t *)&ddc, sizeof(ddc));
+                Serial.printf("DDC cmd: vcp=0x%02X val=%d adj=%d disp=%d\n",
+                              ddc.vcp_code, ddc.value, ddc.adjustment, ddc.display_num);
+                break;
+            }
             default:
                 // Companion-handled actions: send button identity for lookup
                 send_button_press_to_bridge(bed->page_idx, bed->widget_idx);
@@ -314,7 +329,8 @@ static void render_hotkey_button(lv_obj_t *parent, const WidgetConfig *cfg, uint
     if (btn_event_count < CONFIG_MAX_WIDGETS * CONFIG_MAX_PAGES) {
         btn_event_data[btn_event_count] = {
             page_idx, widget_idx, (uint8_t)cfg->action_type,
-            cfg->keycode, cfg->modifiers, cfg->consumer_code
+            cfg->keycode, cfg->modifiers, cfg->consumer_code,
+            cfg->ddc_vcp_code, cfg->ddc_value, cfg->ddc_adjustment, cfg->ddc_display
         };
         bed = &btn_event_data[btn_event_count++];
     }
@@ -352,6 +368,11 @@ static void render_hotkey_button(lv_obj_t *parent, const WidgetConfig *cfg, uint
     lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_all(btn, 8, LV_PART_MAIN);
 
+    // Determine if label/description will be shown (affects icon sizing)
+    bool has_label = cfg->show_label && !cfg->label.empty();
+    bool has_desc = cfg->show_description && !cfg->description.empty();
+    bool icon_only = !has_label && !has_desc;
+
     // Icon: image from SD card takes priority over symbol
     bool icon_rendered = false;
     if (!cfg->icon_path.empty()) {
@@ -360,15 +381,21 @@ static void render_hotkey_button(lv_obj_t *parent, const WidgetConfig *cfg, uint
         if (SD.exists(cfg->icon_path.c_str())) {
             lv_obj_t *img = lv_img_create(btn);
             lv_img_set_src(img, img_src.c_str());
-            // Scale image to fit ~60% of button area
-            lv_coord_t max_icon_w = cfg->width * 6 / 10;
-            lv_coord_t max_icon_h = cfg->height * 4 / 10;
+            // Scale image to fit button area — larger when icon-only
+            lv_coord_t max_icon_w, max_icon_h;
+            if (icon_only) {
+                max_icon_w = cfg->width * 8 / 10;
+                max_icon_h = cfg->height * 8 / 10;
+            } else {
+                max_icon_w = cfg->width * 6 / 10;
+                max_icon_h = cfg->height * 4 / 10;
+            }
             lv_img_header_t header;
             if (lv_img_decoder_get_info(img_src.c_str(), &header) == LV_RES_OK && header.w > 0 && header.h > 0) {
                 uint16_t zoom_w = (uint16_t)((uint32_t)max_icon_w * 256 / header.w);
                 uint16_t zoom_h = (uint16_t)((uint32_t)max_icon_h * 256 / header.h);
                 uint16_t zoom = (zoom_w < zoom_h) ? zoom_w : zoom_h;
-                if (zoom < 256) lv_img_set_zoom(img, zoom);
+                lv_img_set_zoom(img, zoom);
             }
             icon_rendered = true;
         } else {
@@ -378,7 +405,16 @@ static void render_hotkey_button(lv_obj_t *parent, const WidgetConfig *cfg, uint
     if (!icon_rendered && !cfg->icon.empty()) {
         lv_obj_t *icon = lv_label_create(btn);
         lv_label_set_text(icon, cfg->icon.c_str());
-        lv_obj_set_style_text_font(icon, &lv_font_montserrat_22, LV_PART_MAIN);
+        // Adaptive icon font size based on widget dimensions and whether text is shown
+        lv_coord_t icon_area = icon_only ? (cfg->width < cfg->height ? cfg->width : cfg->height)
+                                         : (cfg->height / 3);
+        const lv_font_t *icon_font;
+        if (icon_area >= 120)      icon_font = &lv_font_montserrat_40;
+        else if (icon_area >= 80)  icon_font = &lv_font_montserrat_28;
+        else if (icon_area >= 50)  icon_font = &lv_font_montserrat_22;
+        else if (icon_area >= 40)  icon_font = &lv_font_montserrat_20;
+        else                       icon_font = &lv_font_montserrat_16;
+        lv_obj_set_style_text_font(icon, icon_font, LV_PART_MAIN);
         lv_obj_set_style_text_color(icon, lv_color_hex(cfg->color), LV_PART_MAIN);
     }
 

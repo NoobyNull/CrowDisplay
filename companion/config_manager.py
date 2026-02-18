@@ -31,12 +31,14 @@ ACTION_PAGE_GOTO = 10        # Go to specific page N (display-local)
 ACTION_MODE_CYCLE = 11       # Cycle through configured display modes (display-local)
 ACTION_BRIGHTNESS = 12       # Cycle brightness presets (display-local)
 ACTION_CONFIG_MODE = 13      # Enter SoftAP config mode (display-local)
+ACTION_DDC = 14              # DDC/CI monitor control
 
 VALID_ACTION_TYPES = (
     ACTION_HOTKEY, ACTION_MEDIA_KEY, ACTION_LAUNCH_APP, ACTION_SHELL_CMD, ACTION_OPEN_URL,
     ACTION_DISPLAY_SETTINGS, ACTION_DISPLAY_CLOCK, ACTION_DISPLAY_PICTURE,
     ACTION_PAGE_NEXT, ACTION_PAGE_PREV, ACTION_PAGE_GOTO,
     ACTION_MODE_CYCLE, ACTION_BRIGHTNESS, ACTION_CONFIG_MODE,
+    ACTION_DDC,
 )
 
 # Display-local actions that the companion should NOT try to execute
@@ -62,6 +64,7 @@ ACTION_TYPE_NAMES = {
     ACTION_MODE_CYCLE: "Cycle Mode",
     ACTION_BRIGHTNESS: "Brightness",
     ACTION_CONFIG_MODE: "Config Mode (SoftAP)",
+    ACTION_DDC: "DDC Monitor Control",
 }
 
 # Encoder rotation mode names
@@ -71,6 +74,33 @@ ENCODER_MODE_NAMES = {
     2: "Brightness",
     3: "App Select",
     4: "Mode Cycle",
+    5: "DDC Control",
+}
+
+# DDC/CI VCP code constants
+DDC_VCP_BRIGHTNESS = 0x10
+DDC_VCP_CONTRAST = 0x12
+DDC_VCP_INPUT_SOURCE = 0x60
+DDC_VCP_VOLUME = 0x62
+DDC_VCP_AUDIO_MUTE = 0x8D
+DDC_VCP_POWER_MODE = 0xD6
+
+# Human-readable names for DDC VCP codes (for editor combo box)
+DDC_VCP_NAMES = {
+    DDC_VCP_BRIGHTNESS: "Brightness (0x10)",
+    DDC_VCP_CONTRAST: "Contrast (0x12)",
+    DDC_VCP_INPUT_SOURCE: "Input Source (0x60)",
+    DDC_VCP_VOLUME: "Volume (0x62)",
+    DDC_VCP_AUDIO_MUTE: "Audio Mute (0x8D)",
+    DDC_VCP_POWER_MODE: "Power Mode (0xD6)",
+}
+
+# DDC input source values (common MCCS values)
+DDC_INPUT_SOURCES = {
+    "DP1": 0x0F,
+    "DP2": 0x10,
+    "HDMI1": 0x11,
+    "HDMI2": 0x12,
 }
 
 # Widget type constants (must match display/config.h WidgetType enum)
@@ -128,7 +158,7 @@ WIDGET_MIN_H = 30
 # Default config paths
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "crowpanel"
 DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.json"
-DEFAULT_ICONS_DIR = DEFAULT_CONFIG_DIR / "icons"
+DEFAULT_ICONS_DIR = DEFAULT_CONFIG_DIR / "icons"  # Legacy, kept for migration
 
 # Stat type range (must match shared/protocol.h StatType enum)
 STAT_TYPE_MIN = 1
@@ -156,10 +186,14 @@ DEFAULT_COLORS = {
 def get_default_hardware_buttons():
     """Default hardware button configuration (4 buttons)."""
     return [
-        {"action_type": ACTION_PAGE_NEXT, "label": "Next Page", "keycode": 0, "consumer_code": 0, "modifiers": 0},
-        {"action_type": ACTION_PAGE_PREV, "label": "Prev Page", "keycode": 0, "consumer_code": 0, "modifiers": 0},
-        {"action_type": ACTION_MODE_CYCLE, "label": "Mode", "keycode": 0, "consumer_code": 0, "modifiers": 0},
-        {"action_type": ACTION_CONFIG_MODE, "label": "Config", "keycode": 0, "consumer_code": 0, "modifiers": 0},
+        {"action_type": ACTION_PAGE_NEXT, "label": "Next Page", "keycode": 0, "consumer_code": 0, "modifiers": 0,
+         "ddc_vcp_code": 0, "ddc_value": 0, "ddc_adjustment": 0, "ddc_display": 0},
+        {"action_type": ACTION_PAGE_PREV, "label": "Prev Page", "keycode": 0, "consumer_code": 0, "modifiers": 0,
+         "ddc_vcp_code": 0, "ddc_value": 0, "ddc_adjustment": 0, "ddc_display": 0},
+        {"action_type": ACTION_MODE_CYCLE, "label": "Mode", "keycode": 0, "consumer_code": 0, "modifiers": 0,
+         "ddc_vcp_code": 0, "ddc_value": 0, "ddc_adjustment": 0, "ddc_display": 0},
+        {"action_type": ACTION_CONFIG_MODE, "label": "Config", "keycode": 0, "consumer_code": 0, "modifiers": 0,
+         "ddc_vcp_code": 0, "ddc_value": 0, "ddc_adjustment": 0, "ddc_display": 0},
     ]
 
 
@@ -169,6 +203,7 @@ def get_default_encoder():
         "push_action": ACTION_BRIGHTNESS, "push_label": "Brightness",
         "push_keycode": 0, "push_consumer_code": 0, "push_modifiers": 0,
         "encoder_mode": 0,
+        "ddc_vcp_code": DDC_VCP_BRIGHTNESS, "ddc_step": 10, "ddc_display": 0,
     }
 
 
@@ -207,6 +242,8 @@ def make_default_widget(widget_type: int, x: int = 0, y: int = 0) -> Dict[str, A
             "label": "Button",
             "description": "",
             "icon": "\uf015",
+            "icon_source": "",
+            "icon_source_type": "",
             "color": DEFAULT_COLORS["BLUE"],
             "action_type": ACTION_HOTKEY,
             "modifiers": MOD_NONE,
@@ -218,6 +255,10 @@ def make_default_widget(widget_type: int, x: int = 0, y: int = 0) -> Dict[str, A
             "launch_focus_or_launch": True,
             "shell_command": "",
             "url": "",
+            "ddc_vcp_code": 0,
+            "ddc_value": 0,
+            "ddc_adjustment": 0,
+            "ddc_display": 0,
         })
     elif widget_type == WIDGET_STAT_MONITOR:
         widget.update({
@@ -685,12 +726,12 @@ class ConfigManager:
                     at = widget.get("action_type", ACTION_HOTKEY)
                     if at not in VALID_ACTION_TYPES:
                         return False, f"Page {pi} widget {wi}: invalid action_type"
-                    icon_path = widget.get("icon_path", "")
-                    if icon_path:
-                        if not isinstance(icon_path, str):
-                            return False, f"Page {pi} widget {wi}: icon_path must be a string"
-                        if not icon_path.startswith("/icons/") or not icon_path.endswith(".png"):
-                            return False, f"Page {pi} widget {wi}: icon_path must start with /icons/ and end with .png"
+                    icon_source = widget.get("icon_source", "")
+                    if icon_source and not isinstance(icon_source, str):
+                        return False, f"Page {pi} widget {wi}: icon_source must be a string"
+                    icon_source_type = widget.get("icon_source_type", "")
+                    if icon_source_type and icon_source_type not in ("freedesktop", "file"):
+                        return False, f"Page {pi} widget {wi}: icon_source_type must be 'freedesktop' or 'file'"
 
                 elif wtype == WIDGET_STAT_MONITOR:
                     st = widget.get("stat_type", 0)

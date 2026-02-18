@@ -9,12 +9,12 @@ from io import BytesIO
 from PIL import Image
 
 
-def _open_image(input_path: str) -> Image.Image:
+def _open_image(input_path: str, target_width: int = 256, target_height: int = 256) -> Image.Image:
     """Open an image file, handling SVG conversion if needed."""
     if input_path.lower().endswith(".svg"):
         try:
             import cairosvg
-            png_data = cairosvg.svg2png(url=input_path, output_width=256, output_height=256)
+            png_data = cairosvg.svg2png(url=input_path, output_width=target_width, output_height=target_height)
             return Image.open(BytesIO(png_data))
         except ImportError:
             raise ValueError("SVG support requires cairosvg (pip install cairosvg)")
@@ -33,7 +33,7 @@ def optimize_icon(input_path: str, max_width: int, max_height: int) -> bytes:
     Returns:
         PNG-encoded bytes ready for upload to device SD card
     """
-    img = _open_image(input_path)
+    img = _open_image(input_path, max_width, max_height)
 
     # Convert to RGBA for alpha support
     if img.mode != "RGBA":
@@ -85,8 +85,9 @@ def optimize_for_widget(input_path: str, widget_width: int, widget_height: int) 
     """
     Optimize an image for use as a button icon within a widget.
 
-    Icon area is roughly 60% of widget width and 40% of widget height
-    to leave room for label and description text.
+    Renders at full widget size so the device firmware can display it
+    at any zoom level without pixelation. The firmware handles layout
+    (icon-only vs icon+label sizing) via lv_img_set_zoom.
 
     Args:
         input_path: Path to source image
@@ -96,6 +97,6 @@ def optimize_for_widget(input_path: str, widget_width: int, widget_height: int) 
     Returns:
         PNG-encoded bytes
     """
-    icon_w = max(16, widget_width * 6 // 10)
-    icon_h = max(16, widget_height * 4 // 10)
+    icon_w = max(16, widget_width)
+    icon_h = max(16, widget_height)
     return optimize_icon(input_path, icon_w, icon_h)

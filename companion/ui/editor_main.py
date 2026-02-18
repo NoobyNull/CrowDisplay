@@ -77,8 +77,11 @@ from companion.config_manager import (
     ACTION_MODE_CYCLE,
     ACTION_BRIGHTNESS,
     ACTION_CONFIG_MODE,
+    ACTION_DDC,
     ACTION_TYPE_NAMES,
     ENCODER_MODE_NAMES,
+    DDC_VCP_NAMES,
+    DDC_VCP_BRIGHTNESS,
     DISPLAY_LOCAL_ACTIONS,
     MOD_NONE,
     DISPLAY_WIDTH,
@@ -88,7 +91,6 @@ from companion.config_manager import (
     WIDGET_MIN_H,
     DEFAULT_CONFIG_DIR,
     DEFAULT_CONFIG_PATH,
-    DEFAULT_ICONS_DIR,
     make_default_widget,
     get_default_hardware_buttons,
     get_default_encoder,
@@ -99,8 +101,41 @@ from companion.ui.deploy_dialog import DeployDialog
 from companion.ui.no_scroll_combo import NoScrollComboBox
 from companion.lvgl_symbols import SYMBOL_BY_UTF8
 import os
+import logging
 import threading
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def _resolve_icon_source(widget_dict):
+    """Resolve icon_source from widget dict to a filesystem path, or None."""
+    icon_source = widget_dict.get("icon_source", "")
+    icon_source_type = widget_dict.get("icon_source_type", "")
+    if not icon_source or not icon_source_type:
+        return None
+    if icon_source_type == "file":
+        return icon_source if os.path.exists(icon_source) else None
+    if icon_source_type == "freedesktop":
+        from companion.app_scanner import _resolve_icon_path, _get_icon_theme
+        return _resolve_icon_path(icon_source, _get_icon_theme()) or None
+    return None
+
+
+def _load_icon_pixmap(source_path, width, height):
+    """Load and rasterize an icon from source_path at the given size. Returns QPixmap or None."""
+    if not source_path:
+        return None
+    try:
+        from companion.image_optimizer import optimize_icon
+        png_data = optimize_icon(source_path, width, height)
+        pixmap = QPixmap()
+        pixmap.loadFromData(png_data, "PNG")
+        return pixmap if not pixmap.isNull() else None
+    except Exception as e:
+        logger.warning("Failed to load icon %s: %s", source_path, e)
+        return None
+
 
 # Stat type dropdown options: (display_name, type_id)
 STAT_TYPE_OPTIONS = [
@@ -592,6 +627,15 @@ class CanvasWidgetItem(QGraphicsRectItem):
         self._icon_pixmap = pixmap
         self.update()
 
+    def resolve_icon(self):
+        """Resolve icon_source to a pixmap and cache it."""
+        source_path = _resolve_icon_source(self.widget_dict)
+        if source_path:
+            pixmap = _load_icon_pixmap(source_path, self._w, self._h)
+            self._icon_pixmap = pixmap
+        else:
+            self._icon_pixmap = None
+
     def update_from_dict(self, widget_dict):
         """Update appearance from widget dict (called when properties change)."""
         self._suppress_notify = True
@@ -730,24 +774,30 @@ class CanvasWidgetItem(QGraphicsRectItem):
 
         # If we have an icon pixmap (from image picker), draw it
         if self._icon_pixmap and not self._icon_pixmap.isNull():
-            # Scale pixmap to fit ~60% width, ~50% height area
-            icon_w = max(16, int(rect.width() * 0.6))
-            icon_h = max(16, int(rect.height() * 0.5))
-            scaled = self._icon_pixmap.scaled(
-                icon_w, icon_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
             if label:
-                # Image on top, label below
+                # Image on top, label below — reserve space for label then fill rest
+                label_h = max(16, int(rect.height() * 0.15))
+                icon_w = max(16, int(rect.width() * 0.8))
+                icon_h = max(16, int(rect.height() - label_h - 8))
+                scaled = self._icon_pixmap.scaled(
+                    icon_w, icon_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
                 img_x = rect.center().x() - scaled.width() / 2
                 img_y = rect.top() + 4
                 painter.drawPixmap(int(img_x), int(img_y), scaled)
                 painter.setPen(text_color)
-                painter.setFont(QFont("Arial", 8))
+                font_size = max(8, min(12, int(rect.height() * 0.05)))
+                painter.setFont(QFont("Arial", font_size))
                 label_rect = QRectF(rect.left(), img_y + scaled.height() + 2,
                                     rect.width(), rect.bottom() - (img_y + scaled.height() + 2))
                 painter.drawText(label_rect, Qt.AlignHCenter | Qt.AlignTop, label)
             else:
-                # Center the image
+                # Icon-only — use 80% of available space
+                icon_w = max(16, int(rect.width() * 0.8))
+                icon_h = max(16, int(rect.height() * 0.8))
+                scaled = self._icon_pixmap.scaled(
+                    icon_w, icon_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
                 img_x = rect.center().x() - scaled.width() / 2
                 img_y = rect.center().y() - scaled.height() / 2
                 painter.drawPixmap(int(img_x), int(img_y), scaled)
@@ -765,15 +815,19 @@ class CanvasWidgetItem(QGraphicsRectItem):
 
         painter.setPen(text_color)
         if icon_display and label:
-            painter.setFont(QFont("Arial", 9))
-            painter.drawText(rect.adjusted(4, 2, -4, -rect.height() / 2), Qt.AlignCenter, icon_display)
-            painter.setFont(QFont("Arial", 8))
-            painter.drawText(rect.adjusted(4, rect.height() / 2 - 4, -4, -2), Qt.AlignCenter, label)
+            icon_size = max(9, int(min(rect.width(), rect.height()) * 0.3))
+            painter.setFont(QFont("Arial", icon_size))
+            painter.drawText(rect.adjusted(4, 2, -4, -rect.height() / 3), Qt.AlignCenter, icon_display)
+            label_size = max(8, min(12, int(rect.height() * 0.05)))
+            painter.setFont(QFont("Arial", label_size))
+            painter.drawText(rect.adjusted(4, rect.height() * 2 / 3 - 4, -4, -2), Qt.AlignCenter, label)
         elif label:
             painter.setFont(QFont("Arial", 9))
             painter.drawText(rect, Qt.AlignCenter, label)
         elif icon_display:
-            painter.setFont(QFont("Arial", 11))
+            # Icon-only: scale font to fill available space
+            icon_size = max(11, int(min(rect.width(), rect.height()) * 0.45))
+            painter.setFont(QFont("Arial", icon_size))
             painter.drawText(rect, Qt.AlignCenter, icon_display)
 
     def _paint_stat_monitor(self, painter, rect, qcolor):
@@ -1436,11 +1490,13 @@ class PropertiesPanel(QScrollArea):
         self.hotkey_group = QGroupBox("Hotkey Button")
         hotkey_layout = QVBoxLayout()
 
-        # Quick-fill from installed app
-        self.from_app_btn = QPushButton("From App...")
-        self.from_app_btn.setToolTip("Pick an installed application to auto-fill icon, label, and description")
-        self.from_app_btn.clicked.connect(self._on_from_app_clicked)
-        hotkey_layout.addWidget(self.from_app_btn)
+        # Action Type first — drives which fields are shown
+        hotkey_layout.addWidget(QLabel("Action Type:"))
+        self.action_type_combo = NoScrollComboBox()
+        for action_id, action_name in ACTION_TYPE_NAMES.items():
+            self.action_type_combo.addItem(action_name, action_id)
+        self.action_type_combo.currentIndexChanged.connect(self._on_action_type_changed)
+        hotkey_layout.addWidget(self.action_type_combo)
 
         desc_row = QHBoxLayout()
         desc_row.addWidget(QLabel("Description:"))
@@ -1482,15 +1538,8 @@ class PropertiesPanel(QScrollArea):
         self.icon_image_preview.setVisible(False)
         hotkey_layout.addWidget(self.icon_image_preview)
 
-        # Internal state for pending image upload
-        self._pending_icon_image_data = {}  # keyed by widget_id: (filename, bytes)
-
-        hotkey_layout.addWidget(QLabel("Action Type:"))
-        self.action_type_combo = NoScrollComboBox()
-        for action_id, action_name in ACTION_TYPE_NAMES.items():
-            self.action_type_combo.addItem(action_name, action_id)
-        self.action_type_combo.currentIndexChanged.connect(self._on_action_type_changed)
-        hotkey_layout.addWidget(self.action_type_combo)
+        # Icon source cache: widget_id -> resolved filesystem path (for preview)
+        self._icon_source_cache = {}
 
         # Page number spinner (for ACTION_PAGE_GOTO)
         self.page_goto_label = QLabel("Target Page:")
@@ -1573,6 +1622,58 @@ class PropertiesPanel(QScrollArea):
         self.url_input.setVisible(False)
         self.url_input.textChanged.connect(self._on_property_changed)
         hotkey_layout.addWidget(self.url_input)
+
+        # DDC Monitor Control section
+        self.ddc_section_label = QLabel("DDC Monitor Control:")
+        self.ddc_section_label.setVisible(False)
+        hotkey_layout.addWidget(self.ddc_section_label)
+
+        self.ddc_vcp_combo = NoScrollComboBox()
+        for vcp_code, vcp_name in DDC_VCP_NAMES.items():
+            self.ddc_vcp_combo.addItem(vcp_name, vcp_code)
+        self.ddc_vcp_combo.setVisible(False)
+        self.ddc_vcp_combo.currentIndexChanged.connect(self._on_property_changed)
+        hotkey_layout.addWidget(self.ddc_vcp_combo)
+
+        ddc_val_row = QHBoxLayout()
+        ddc_val_row.addWidget(QLabel("Value:"))
+        self.ddc_value_spin = QSpinBox()
+        self.ddc_value_spin.setRange(0, 65535)
+        self.ddc_value_spin.setFocusPolicy(Qt.StrongFocus)
+        self.ddc_value_spin.setVisible(False)
+        self.ddc_value_spin.valueChanged.connect(self._on_property_changed)
+        ddc_val_row.addWidget(self.ddc_value_spin)
+        self.ddc_value_label = QLabel("")
+        self.ddc_value_label.setVisible(False)
+        ddc_val_row.addWidget(self.ddc_value_label)
+        hotkey_layout.addLayout(ddc_val_row)
+
+        ddc_adj_row = QHBoxLayout()
+        ddc_adj_row.addWidget(QLabel("Adjustment:"))
+        self.ddc_adjustment_spin = QSpinBox()
+        self.ddc_adjustment_spin.setRange(-100, 100)
+        self.ddc_adjustment_spin.setFocusPolicy(Qt.StrongFocus)
+        self.ddc_adjustment_spin.setVisible(False)
+        self.ddc_adjustment_spin.valueChanged.connect(self._on_property_changed)
+        ddc_adj_row.addWidget(self.ddc_adjustment_spin)
+        hotkey_layout.addLayout(ddc_adj_row)
+
+        ddc_disp_row = QHBoxLayout()
+        ddc_disp_row.addWidget(QLabel("Display #:"))
+        self.ddc_display_spin = QSpinBox()
+        self.ddc_display_spin.setRange(0, 8)
+        self.ddc_display_spin.setSpecialValueText("Auto")
+        self.ddc_display_spin.setFocusPolicy(Qt.StrongFocus)
+        self.ddc_display_spin.setVisible(False)
+        self.ddc_display_spin.valueChanged.connect(self._on_property_changed)
+        ddc_disp_row.addWidget(self.ddc_display_spin)
+        hotkey_layout.addLayout(ddc_disp_row)
+
+        self.ddc_info_label = QLabel("adj!=0: relative (+/-), adj=0: absolute value")
+        self.ddc_info_label.setStyleSheet("color: #888; font-size: 10px;")
+        self.ddc_info_label.setWordWrap(True)
+        self.ddc_info_label.setVisible(False)
+        hotkey_layout.addWidget(self.ddc_info_label)
 
         pressed_row = QHBoxLayout()
         self.auto_darken_check = QCheckBox("Auto-darken")
@@ -1698,6 +1799,40 @@ class PropertiesPanel(QScrollArea):
         self.encoder_mode_info.setStyleSheet("color: #888; font-size: 10px;")
         self.encoder_mode_info.setWordWrap(True)
         enc_layout.addWidget(self.encoder_mode_info)
+
+        # Encoder DDC fields (visible when mode == 5)
+        self.enc_ddc_vcp_label = QLabel("DDC VCP Code:")
+        self.enc_ddc_vcp_label.setVisible(False)
+        enc_layout.addWidget(self.enc_ddc_vcp_label)
+        self.enc_ddc_vcp_combo = NoScrollComboBox()
+        for vcp_code, vcp_name in DDC_VCP_NAMES.items():
+            self.enc_ddc_vcp_combo.addItem(vcp_name, vcp_code)
+        self.enc_ddc_vcp_combo.setVisible(False)
+        self.enc_ddc_vcp_combo.currentIndexChanged.connect(self._on_hw_property_changed)
+        enc_layout.addWidget(self.enc_ddc_vcp_combo)
+
+        self.enc_ddc_step_label = QLabel("Step per click:")
+        self.enc_ddc_step_label.setVisible(False)
+        enc_layout.addWidget(self.enc_ddc_step_label)
+        self.enc_ddc_step_spin = QSpinBox()
+        self.enc_ddc_step_spin.setRange(1, 50)
+        self.enc_ddc_step_spin.setValue(10)
+        self.enc_ddc_step_spin.setFocusPolicy(Qt.StrongFocus)
+        self.enc_ddc_step_spin.setVisible(False)
+        self.enc_ddc_step_spin.valueChanged.connect(self._on_hw_property_changed)
+        enc_layout.addWidget(self.enc_ddc_step_spin)
+
+        self.enc_ddc_display_label = QLabel("Display #:")
+        self.enc_ddc_display_label.setVisible(False)
+        enc_layout.addWidget(self.enc_ddc_display_label)
+        self.enc_ddc_display_spin = QSpinBox()
+        self.enc_ddc_display_spin.setRange(0, 8)
+        self.enc_ddc_display_spin.setSpecialValueText("Auto")
+        self.enc_ddc_display_spin.setFocusPolicy(Qt.StrongFocus)
+        self.enc_ddc_display_spin.setVisible(False)
+        self.enc_ddc_display_spin.valueChanged.connect(self._on_hw_property_changed)
+        enc_layout.addWidget(self.enc_ddc_display_spin)
+
         self.hw_encoder_group.setLayout(enc_layout)
         self.main_layout.addWidget(self.hw_encoder_group)
 
@@ -1728,6 +1863,48 @@ class PropertiesPanel(QScrollArea):
         self.hw_page_goto_spin.setVisible(False)
         self.hw_page_goto_spin.valueChanged.connect(self._on_hw_property_changed)
         hw_action_layout.addWidget(self.hw_page_goto_spin)
+
+        # HW button DDC fields (visible when action_type == ACTION_DDC)
+        self.hw_ddc_vcp_label = QLabel("DDC VCP Code:")
+        self.hw_ddc_vcp_label.setVisible(False)
+        hw_action_layout.addWidget(self.hw_ddc_vcp_label)
+        self.hw_ddc_vcp_combo = NoScrollComboBox()
+        for vcp_code, vcp_name in DDC_VCP_NAMES.items():
+            self.hw_ddc_vcp_combo.addItem(vcp_name, vcp_code)
+        self.hw_ddc_vcp_combo.setVisible(False)
+        self.hw_ddc_vcp_combo.currentIndexChanged.connect(self._on_hw_property_changed)
+        hw_action_layout.addWidget(self.hw_ddc_vcp_combo)
+
+        self.hw_ddc_value_label = QLabel("Value:")
+        self.hw_ddc_value_label.setVisible(False)
+        hw_action_layout.addWidget(self.hw_ddc_value_label)
+        self.hw_ddc_value_spin = QSpinBox()
+        self.hw_ddc_value_spin.setRange(0, 65535)
+        self.hw_ddc_value_spin.setFocusPolicy(Qt.StrongFocus)
+        self.hw_ddc_value_spin.setVisible(False)
+        self.hw_ddc_value_spin.valueChanged.connect(self._on_hw_property_changed)
+        hw_action_layout.addWidget(self.hw_ddc_value_spin)
+
+        self.hw_ddc_adj_label = QLabel("Adjustment:")
+        self.hw_ddc_adj_label.setVisible(False)
+        hw_action_layout.addWidget(self.hw_ddc_adj_label)
+        self.hw_ddc_adj_spin = QSpinBox()
+        self.hw_ddc_adj_spin.setRange(-100, 100)
+        self.hw_ddc_adj_spin.setFocusPolicy(Qt.StrongFocus)
+        self.hw_ddc_adj_spin.setVisible(False)
+        self.hw_ddc_adj_spin.valueChanged.connect(self._on_hw_property_changed)
+        hw_action_layout.addWidget(self.hw_ddc_adj_spin)
+
+        self.hw_ddc_display_label = QLabel("Display #:")
+        self.hw_ddc_display_label.setVisible(False)
+        hw_action_layout.addWidget(self.hw_ddc_display_label)
+        self.hw_ddc_display_spin = QSpinBox()
+        self.hw_ddc_display_spin.setRange(0, 8)
+        self.hw_ddc_display_spin.setSpecialValueText("Auto")
+        self.hw_ddc_display_spin.setFocusPolicy(Qt.StrongFocus)
+        self.hw_ddc_display_spin.setVisible(False)
+        self.hw_ddc_display_spin.valueChanged.connect(self._on_hw_property_changed)
+        hw_action_layout.addWidget(self.hw_ddc_display_spin)
 
         self.hw_action_group.setLayout(hw_action_layout)
         self.main_layout.addWidget(self.hw_action_group)
@@ -1801,25 +1978,28 @@ class PropertiesPanel(QScrollArea):
             self.show_description_cb.setChecked(widget_dict.get("show_description", True))
             self.icon_picker.set_symbol(widget_dict.get("icon", ""))
 
-            # Restore image picker state
-            icon_path = widget_dict.get("icon_path", "")
-            if self._widget_id in self._pending_icon_image_data:
-                filename = self._pending_icon_image_data[self._widget_id][0]
-                data = self._pending_icon_image_data[self._widget_id][1]
-                self.icon_image_label.setText(f"{filename} ({len(data)} bytes)")
-                self.icon_image_clear_btn.setVisible(True)
-                from PySide6.QtGui import QPixmap
-                pixmap = QPixmap()
-                pixmap.loadFromData(data, "PNG")
-                self.icon_image_preview.setPixmap(
-                    pixmap.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                )
-                self.icon_image_preview.setVisible(True)
-            elif icon_path:
-                import os
-                self.icon_image_label.setText(os.path.basename(icon_path))
-                self.icon_image_clear_btn.setVisible(True)
-                self.icon_image_preview.setVisible(False)
+            # Restore icon source state
+            icon_source = widget_dict.get("icon_source", "")
+            icon_source_type = widget_dict.get("icon_source_type", "")
+            if icon_source:
+                source_path = _resolve_icon_source(widget_dict)
+                if source_path:
+                    display_name = os.path.basename(source_path) if icon_source_type == "file" else icon_source
+                    self.icon_image_label.setText(display_name)
+                    self.icon_image_clear_btn.setVisible(True)
+                    # Show preview thumbnail
+                    pixmap = _load_icon_pixmap(source_path, 64, 64)
+                    if pixmap:
+                        self.icon_image_preview.setPixmap(
+                            pixmap.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        )
+                        self.icon_image_preview.setVisible(True)
+                    else:
+                        self.icon_image_preview.setVisible(False)
+                else:
+                    self.icon_image_label.setText(f"{icon_source} (not found)")
+                    self.icon_image_clear_btn.setVisible(True)
+                    self.icon_image_preview.setVisible(False)
             else:
                 self.icon_image_label.setText("")
                 self.icon_image_clear_btn.setVisible(False)
@@ -1848,6 +2028,17 @@ class PropertiesPanel(QScrollArea):
 
             # Load URL
             self.url_input.setText(widget_dict.get("url", ""))
+
+            # Load DDC fields
+            if action_type == ACTION_DDC:
+                vcp = widget_dict.get("ddc_vcp_code", 0x10)
+                for i in range(self.ddc_vcp_combo.count()):
+                    if self.ddc_vcp_combo.itemData(i) == vcp:
+                        self.ddc_vcp_combo.setCurrentIndex(i)
+                        break
+                self.ddc_value_spin.setValue(widget_dict.get("ddc_value", 0))
+                self.ddc_adjustment_spin.setValue(widget_dict.get("ddc_adjustment", 0))
+                self.ddc_display_spin.setValue(widget_dict.get("ddc_display", 0))
 
             pressed = widget_dict.get("pressed_color", 0)
             self.auto_darken_check.setChecked(pressed == 0)
@@ -1933,6 +2124,17 @@ class PropertiesPanel(QScrollArea):
             # Page goto
             self.hw_page_goto_spin.setValue(btn_cfg.get("keycode", 0) + 1)
 
+            # DDC fields for hw button
+            if action_type == ACTION_DDC:
+                vcp = btn_cfg.get("ddc_vcp_code", 0x10)
+                for i in range(self.hw_ddc_vcp_combo.count()):
+                    if self.hw_ddc_vcp_combo.itemData(i) == vcp:
+                        self.hw_ddc_vcp_combo.setCurrentIndex(i)
+                        break
+                self.hw_ddc_value_spin.setValue(btn_cfg.get("ddc_value", 0))
+                self.hw_ddc_adj_spin.setValue(btn_cfg.get("ddc_adjustment", 0))
+                self.hw_ddc_display_spin.setValue(btn_cfg.get("ddc_display", 0))
+
         elif hw_type == "encoder":
             encoder = config_manager.config.get("encoder", get_default_encoder())
 
@@ -1962,6 +2164,17 @@ class PropertiesPanel(QScrollArea):
             # Page goto
             self.hw_page_goto_spin.setValue(encoder.get("push_keycode", 0) + 1)
 
+            # Encoder DDC fields
+            enc_mode = encoder.get("encoder_mode", 0)
+            if enc_mode == 5:
+                vcp = encoder.get("ddc_vcp_code", 0x10)
+                for i in range(self.enc_ddc_vcp_combo.count()):
+                    if self.enc_ddc_vcp_combo.itemData(i) == vcp:
+                        self.enc_ddc_vcp_combo.setCurrentIndex(i)
+                        break
+                self.enc_ddc_step_spin.setValue(encoder.get("ddc_step", 10))
+                self.enc_ddc_display_spin.setValue(encoder.get("ddc_display", 0))
+
         self._updating = False
 
     def _update_hw_action_visibility(self, action_type):
@@ -1969,6 +2182,16 @@ class PropertiesPanel(QScrollArea):
         is_goto = (action_type == ACTION_PAGE_GOTO)
         self.hw_page_goto_label.setVisible(is_goto)
         self.hw_page_goto_spin.setVisible(is_goto)
+
+        is_ddc = (action_type == ACTION_DDC)
+        self.hw_ddc_vcp_label.setVisible(is_ddc)
+        self.hw_ddc_vcp_combo.setVisible(is_ddc)
+        self.hw_ddc_value_label.setVisible(is_ddc)
+        self.hw_ddc_value_spin.setVisible(is_ddc)
+        self.hw_ddc_adj_label.setVisible(is_ddc)
+        self.hw_ddc_adj_spin.setVisible(is_ddc)
+        self.hw_ddc_display_label.setVisible(is_ddc)
+        self.hw_ddc_display_spin.setVisible(is_ddc)
 
     def _update_encoder_mode_info(self, mode):
         """Show informational text about what encoder rotation does in each mode."""
@@ -1978,8 +2201,18 @@ class PropertiesPanel(QScrollArea):
             2: "CW: Brighter, CCW: Dimmer",
             3: "CW: Next widget, CCW: Previous widget, Push: Activate",
             4: "CW: Next mode, CCW: Previous mode",
+            5: "CW: DDC value +step, CCW: DDC value -step",
         }
         self.encoder_mode_info.setText(info_texts.get(mode, ""))
+
+        # Show/hide encoder DDC fields
+        is_ddc_mode = (mode == 5)
+        self.enc_ddc_vcp_label.setVisible(is_ddc_mode)
+        self.enc_ddc_vcp_combo.setVisible(is_ddc_mode)
+        self.enc_ddc_step_label.setVisible(is_ddc_mode)
+        self.enc_ddc_step_spin.setVisible(is_ddc_mode)
+        self.enc_ddc_display_label.setVisible(is_ddc_mode)
+        self.enc_ddc_display_spin.setVisible(is_ddc_mode)
 
     def _on_hw_action_type_changed(self):
         action_type = self.hw_action_type_combo.currentData()
@@ -2009,6 +2242,11 @@ class PropertiesPanel(QScrollArea):
                 btn["label"] = self.hw_label_input.text()
                 if btn["action_type"] == ACTION_PAGE_GOTO:
                     btn["keycode"] = self.hw_page_goto_spin.value() - 1
+                if btn["action_type"] == ACTION_DDC:
+                    btn["ddc_vcp_code"] = self.hw_ddc_vcp_combo.currentData() or 0x10
+                    btn["ddc_value"] = self.hw_ddc_value_spin.value()
+                    btn["ddc_adjustment"] = self.hw_ddc_adj_spin.value()
+                    btn["ddc_display"] = self.hw_ddc_display_spin.value()
                 self._hw_config_manager.config["hardware_buttons"] = buttons
 
         elif self._hw_type == "encoder":
@@ -2018,6 +2256,10 @@ class PropertiesPanel(QScrollArea):
             encoder["encoder_mode"] = self.encoder_mode_combo.currentData() or 0
             if encoder["push_action"] == ACTION_PAGE_GOTO:
                 encoder["push_keycode"] = self.hw_page_goto_spin.value() - 1
+            if encoder["encoder_mode"] == 5:
+                encoder["ddc_vcp_code"] = self.enc_ddc_vcp_combo.currentData() or 0x10
+                encoder["ddc_step"] = self.enc_ddc_step_spin.value()
+                encoder["ddc_display"] = self.enc_ddc_display_spin.value()
             self._hw_config_manager.config["encoder"] = encoder
 
         self._hw_config_manager._emit_changed()
@@ -2053,12 +2295,8 @@ class PropertiesPanel(QScrollArea):
             d["description"] = self.description_input.text()
             d["show_description"] = self.show_description_cb.isChecked()
             d["icon"] = self.icon_picker.get_symbol()
-            # Set icon_path if an image is pending for this widget
-            if self._widget_id in self._pending_icon_image_data:
-                filename = self._pending_icon_image_data[self._widget_id][0]
-                d["icon_path"] = f"/icons/{filename}"
-            else:
-                d["icon_path"] = ""
+            # icon_source and icon_source_type are already in the widget dict
+            # (set by _on_app_selected or _on_icon_image_browse)
             action_type = self.action_type_combo.currentData()
             d["action_type"] = action_type
             if action_type == ACTION_MEDIA_KEY:
@@ -2069,6 +2307,14 @@ class PropertiesPanel(QScrollArea):
                 d["consumer_code"] = 0
                 d["modifiers"] = self.keyboard_recorder.current_modifiers
                 d["keycode"] = self.keyboard_recorder.current_keycode
+            elif action_type == ACTION_DDC:
+                d["consumer_code"] = 0
+                d["modifiers"] = 0
+                d["keycode"] = 0
+                d["ddc_vcp_code"] = self.ddc_vcp_combo.currentData() or 0x10
+                d["ddc_value"] = self.ddc_value_spin.value()
+                d["ddc_adjustment"] = self.ddc_adjustment_spin.value()
+                d["ddc_display"] = self.ddc_display_spin.value()
             else:
                 d["consumer_code"] = 0
                 d["modifiers"] = 0
@@ -2177,6 +2423,15 @@ class PropertiesPanel(QScrollArea):
         self.page_goto_label.setVisible(is_goto)
         self.page_goto_spin.setVisible(is_goto)
 
+        # DDC section
+        is_ddc = (action_type == ACTION_DDC)
+        self.ddc_section_label.setVisible(is_ddc)
+        self.ddc_vcp_combo.setVisible(is_ddc)
+        self.ddc_value_spin.setVisible(is_ddc)
+        self.ddc_adjustment_spin.setVisible(is_ddc)
+        self.ddc_display_spin.setVisible(is_ddc)
+        self.ddc_info_label.setVisible(is_ddc)
+
     def _ensure_apps_loaded(self):
         """Lazy-load applications list into app_picker_combo."""
         if self._apps_loaded:
@@ -2193,139 +2448,84 @@ class PropertiesPanel(QScrollArea):
             pass
 
     def _on_app_picker_changed(self, index):
-        """App picker dropdown changed -- auto-fill launch fields."""
+        """App picker dropdown changed -- auto-fill ALL fields from app."""
         if self._updating:
             return
         app = self.app_picker_combo.currentData()
         if app is None:
             return
         self._updating = True
-        self.launch_cmd_input.setText(app.exec_cmd)
-        wm_class = app.wm_class if hasattr(app, 'wm_class') and app.wm_class else app.name
-        self.launch_wm_class_input.setText(wm_class)
-        self._updating = False
-        if not self._updating:
-            self._emit_update()
 
-    def _on_from_app_clicked(self):
-        """Open app picker dialog and auto-fill button from selected app."""
-        from companion.ui.app_picker_dialog import AppPickerDialog
-
-        dialog = AppPickerDialog(self)
-        if dialog.exec() != QDialog.Accepted:
-            return
-
-        app = dialog.get_selected_app()
-        if not app:
-            return
-
-        self._updating = True
-
-        # Set label (truncate to fit)
-        name = app.name[:20]
-        self.label_input.setText(name)
-
-        # Set description from .desktop Comment field
+        # Label & description
+        self.label_input.setText(app.name[:20])
         desc = app.comment[:32] if app.comment else ""
         self.description_input.setText(desc)
 
+        # Launch command & WM_CLASS
+        self.launch_cmd_input.setText(app.exec_cmd)
+        wm_class = app.wm_class if app.wm_class else app.name
+        self.launch_wm_class_input.setText(wm_class)
+
+        # Icon from freedesktop theme
+        if app.icon_name and self._widget_dict is not None:
+            self._widget_dict["icon_source"] = app.icon_name
+            self._widget_dict["icon_source_type"] = "freedesktop"
+            self.icon_image_label.setText(app.icon_name)
+            self.icon_image_clear_btn.setVisible(True)
+            source_path = _resolve_icon_source(self._widget_dict)
+            if source_path:
+                pixmap = _load_icon_pixmap(source_path, 64, 64)
+                if pixmap:
+                    self.icon_image_preview.setPixmap(
+                        pixmap.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    )
+                    self.icon_image_preview.setVisible(True)
+                else:
+                    self.icon_image_preview.setVisible(False)
+            else:
+                self.icon_image_preview.setVisible(False)
+
         self._updating = False
-
-        # Process icon if available
-        if app.icon_path:
-            try:
-                from companion.image_optimizer import optimize_for_widget
-                w = self.w_spin.value()
-                h = self.h_spin.value()
-                png_data = optimize_for_widget(app.icon_path, w, h)
-
-                # Sanitize filename: use basename to strip path prefix
-                import os
-                base = os.path.splitext(os.path.basename(app.icon_name))[0] or app.icon_name
-                safe_name = "".join(
-                    c if c.isalnum() or c in "-_" else "_"
-                    for c in base
-                )
-                filename = f"{safe_name}.png"
-
-                # Store for deploy
-                self._pending_icon_image_data[self._widget_id] = (filename, png_data)
-
-                # Update UI
-                self.icon_image_label.setText(f"{filename} ({len(png_data)} bytes)")
-                self.icon_image_clear_btn.setVisible(True)
-
-                # Show preview
-                from PySide6.QtGui import QPixmap
-                pixmap = QPixmap()
-                pixmap.loadFromData(png_data, "PNG")
-                self.icon_image_preview.setPixmap(
-                    pixmap.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                )
-                self.icon_image_preview.setVisible(True)
-            except Exception as e:
-                # Icon processing failed, no big deal — label/desc still set
-                self.icon_image_label.setText(f"Icon error: {e}")
-
         self._emit_update()
 
     def _on_icon_image_browse(self):
-        """Open file dialog to pick an icon image."""
+        """Open file dialog to pick an icon image file."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Icon Image", "",
-            "Images (*.png *.jpg *.jpeg *.bmp *.gif)"
+            "Images (*.png *.jpg *.jpeg *.bmp *.gif *.svg)"
         )
         if not path:
             return
 
-        try:
-            from companion.image_optimizer import optimize_for_widget
-            w = self.w_spin.value()
-            h = self.h_spin.value()
-            png_data = optimize_for_widget(path, w, h)
+        self._widget_dict["icon_source"] = path
+        self._widget_dict["icon_source_type"] = "file"
 
-            # Generate filename from widget label or index
-            import os
-            base = os.path.splitext(os.path.basename(path))[0]
-            # Sanitize filename
-            safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in base)
-            filename = f"{safe_name}.png"
+        self.icon_image_label.setText(os.path.basename(path))
+        self.icon_image_clear_btn.setVisible(True)
 
-            # Store for deploy
-            self._pending_icon_image_data[self._widget_id] = (filename, png_data)
-
-            # Update UI
-            self.icon_image_label.setText(f"{filename} ({len(png_data)} bytes)")
-            self.icon_image_clear_btn.setVisible(True)
-
-            # Show preview
-            from PySide6.QtGui import QPixmap
-            pixmap = QPixmap()
-            pixmap.loadFromData(png_data, "PNG")
+        # Show preview thumbnail
+        pixmap = _load_icon_pixmap(path, 64, 64)
+        if pixmap:
             self.icon_image_preview.setPixmap(
                 pixmap.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
             self.icon_image_preview.setVisible(True)
+        else:
+            self.icon_image_preview.setVisible(False)
 
-            if not self._updating:
-                self._emit_update()
-        except Exception as e:
-            QMessageBox.warning(self, "Image Error", f"Failed to process image:\n{e}")
+        if not self._updating:
+            self._emit_update()
 
     def _on_icon_image_clear(self):
         """Clear selected icon image, revert to symbol."""
-        if self._widget_id in self._pending_icon_image_data:
-            del self._pending_icon_image_data[self._widget_id]
+        self._widget_dict["icon_source"] = ""
+        self._widget_dict["icon_source_type"] = ""
         self.icon_image_label.setText("")
         self.icon_image_clear_btn.setVisible(False)
         self.icon_image_preview.setVisible(False)
         self.icon_image_preview.clear()
         if not self._updating:
             self._emit_update()
-
-    def get_pending_images(self) -> dict:
-        """Return dict of widget_id -> (filename, png_bytes) for deploy."""
-        return dict(self._pending_icon_image_data)
 
     def _on_auto_darken_changed(self):
         is_auto = self.auto_darken_check.isChecked()
@@ -3282,7 +3482,6 @@ class EditorMainWindow(QMainWindow):
 
         # Auto-load last config (or default)
         self._auto_load_config()
-        self._load_saved_images()
 
         # Load initial state from config
         self._load_display_mode_settings()
@@ -3324,11 +3523,10 @@ class EditorMainWindow(QMainWindow):
                 self.statusBar().showMessage(f"Loaded: {DEFAULT_CONFIG_PATH}")
 
     def _auto_save_config(self):
-        """Save config and icon images to the current file path (or default)."""
+        """Save config to the current file path (or default)."""
         path = self._current_file_path or str(DEFAULT_CONFIG_PATH)
         DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         self.config_manager.save_json_file(path)
-        self._save_pending_images()
 
     def _resolve_widget_idx(self, widget_id: str) -> int:
         """Find positional index of widget by its stable widget_id. Returns -1 if not found."""
@@ -3339,38 +3537,6 @@ class EditorMainWindow(QMainWindow):
             if w.get("widget_id") == widget_id:
                 return idx
         return -1
-
-    def _save_pending_images(self):
-        """Persist pending icon images to ~/.config/crowpanel/icons/."""
-        pending = self.properties_panel.get_pending_images()
-        if not pending:
-            return
-        DEFAULT_ICONS_DIR.mkdir(parents=True, exist_ok=True)
-        for widget_idx, (filename, png_data) in pending.items():
-            icon_file = DEFAULT_ICONS_DIR / filename
-            icon_file.write_bytes(png_data)
-
-    def _load_saved_images(self):
-        """Restore icon images from disk into pending_icon_image_data."""
-        if not DEFAULT_ICONS_DIR.is_dir():
-            return
-        # Walk all pages/widgets looking for icon_path entries
-        for page_idx in range(self.config_manager.get_page_count()):
-            page = self.config_manager.get_page(page_idx)
-            if not page:
-                continue
-            for widget in page.get("widgets", []):
-                icon_path = widget.get("icon_path", "")
-                if not icon_path:
-                    continue
-                wid = widget.get("widget_id", "")
-                if not wid:
-                    continue
-                filename = os.path.basename(icon_path)
-                local_file = DEFAULT_ICONS_DIR / filename
-                if local_file.is_file():
-                    png_data = local_file.read_bytes()
-                    self.properties_panel._pending_icon_image_data[wid] = (filename, png_data)
 
     def closeEvent(self, event):
         """Auto-save config on window close. In tray mode, hide instead of quit."""
@@ -3422,16 +3588,11 @@ class EditorMainWindow(QMainWindow):
             return
 
         widgets = page.get("widgets", [])
-        pending = self.properties_panel.get_pending_images()
         for idx, widget_dict in enumerate(widgets):
             wid = widget_dict.get("widget_id", "")
             item = CanvasWidgetItem(widget_dict, idx)
-            # Restore icon pixmap from pending image data
-            if wid in pending:
-                from PySide6.QtGui import QPixmap
-                pixmap = QPixmap()
-                pixmap.loadFromData(pending[wid][1], "PNG")
-                item.set_icon_pixmap(pixmap)
+            # Resolve icon from source (freedesktop or file path)
+            item.resolve_icon()
             self.canvas_scene.addItem(item)
             self._canvas_items[wid] = item
 
@@ -3584,15 +3745,8 @@ class EditorMainWindow(QMainWindow):
         if widget_id in self._canvas_items:
             item = self._canvas_items[widget_id]
             item.update_from_dict(widget_dict)
-            # Sync icon pixmap from pending image data
-            pending = self.properties_panel.get_pending_images()
-            if widget_id in pending:
-                from PySide6.QtGui import QPixmap
-                pixmap = QPixmap()
-                pixmap.loadFromData(pending[widget_id][1], "PNG")
-                item.set_icon_pixmap(pixmap)
-            else:
-                item.set_icon_pixmap(None)
+            # Resolve icon from source dynamically
+            item.resolve_icon()
             self.canvas_scene.update_handles()
 
     # -- Page navigation --
@@ -3850,9 +4004,7 @@ class EditorMainWindow(QMainWindow):
         if not is_valid:
             QMessageBox.critical(self, "Validation Error", error_msg)
             return
-        # Gather pending icon images from properties panel
-        pending_images = self.properties_panel.get_pending_images()
-        deploy_dialog = DeployDialog(self.config_manager, self, pending_images=pending_images)
+        deploy_dialog = DeployDialog(self.config_manager, self)
         result = deploy_dialog.exec()
         if result == QDialog.Accepted:
             self._auto_save_config()

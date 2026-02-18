@@ -132,6 +132,7 @@ class CrowPanelTray(QApplication):
         quit_action.triggered.connect(self._on_quit)
 
         self._tray.setContextMenu(self._menu)
+        self._tray.activated.connect(self._on_tray_activated)
         self._tray.show()
 
         # Editor window (in-process) or subprocess handle
@@ -159,6 +160,10 @@ class CrowPanelTray(QApplication):
         text = self._service.status_text
         self._status_action.setText(text)
         self._tray.setToolTip(f"CrowPanel — {text}")
+
+    def _on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.DoubleClick:
+            self._on_edit()
 
     def _on_edit(self):
         """Open or bring to front the editor window.

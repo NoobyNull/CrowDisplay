@@ -28,6 +28,7 @@ enum MsgType : uint8_t {
     MSG_CONFIG_MODE  = 0x09,  // Bridge -> Display: enter SoftAP config mode
     MSG_CONFIG_DONE  = 0x0A,  // Bridge -> Display: reload config, exit AP mode
     MSG_BUTTON_PRESS = 0x0B,  // Display -> Bridge: button identity (page + widget index)
+    MSG_DDC_CMD      = 0x0C,  // Display -> Bridge: DDC/CI monitor control
 };
 
 // --- Stat Type Enum (for TLV stats protocol) ------------------------
@@ -130,6 +131,13 @@ struct __attribute__((packed)) TimeSyncMsg {
 struct __attribute__((packed)) ButtonPressMsg {
     uint8_t page_index;       // Which page the button is on
     uint8_t widget_index;     // Widget index within the page
+};
+
+struct __attribute__((packed)) DdcCmdMsg {
+    uint8_t  vcp_code;        // 0x10=brightness, 0x12=contrast, 0x60=input, 0x62=volume, etc.
+    uint16_t value;           // Absolute value (when adjustment == 0)
+    int16_t  adjustment;      // Signed step (+10/-10), 0 = use absolute value
+    uint8_t  display_num;     // ddcutil --display N (0 = auto-detect)
 };
 
 struct __attribute__((packed)) NotificationMsg {
