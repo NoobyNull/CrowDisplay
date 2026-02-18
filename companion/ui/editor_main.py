@@ -78,12 +78,19 @@ from companion.config_manager import (
     ACTION_BRIGHTNESS,
     ACTION_CONFIG_MODE,
     ACTION_DDC,
+    ACTION_FOCUS_NEXT,
+    ACTION_FOCUS_PREV,
+    ACTION_FOCUS_ACTIVATE,
     ACTION_TYPE_NAMES,
     ENCODER_MODE_NAMES,
     DDC_VCP_NAMES,
     DDC_VCP_BRIGHTNESS,
     DISPLAY_LOCAL_ACTIONS,
     MOD_NONE,
+    MOD_CTRL,
+    MOD_SHIFT,
+    MOD_ALT,
+    MOD_GUI,
     DISPLAY_WIDTH,
     DISPLAY_HEIGHT,
     SNAP_GRID,
@@ -106,6 +113,29 @@ import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Load FontAwesome for rendering LVGL symbol icons as actual glyphs
+_FA_FONT_FAMILY = None
+_FA_FONT_PATHS = [
+    "/usr/share/fonts/awesome-terminal-fonts/fontawesome-regular.ttf",
+    "/usr/share/fonts/TTF/fontawesome-regular.ttf",
+]
+def _get_fa_font_family():
+    global _FA_FONT_FAMILY
+    if _FA_FONT_FAMILY is not None:
+        return _FA_FONT_FAMILY
+    from PySide6.QtGui import QFontDatabase
+    for path in _FA_FONT_PATHS:
+        if os.path.exists(path):
+            font_id = QFontDatabase.addApplicationFont(path)
+            families = QFontDatabase.applicationFontFamilies(font_id)
+            if families:
+                _FA_FONT_FAMILY = families[0]
+                logger.info("Loaded FontAwesome: %s", _FA_FONT_FAMILY)
+                return _FA_FONT_FAMILY
+    _FA_FONT_FAMILY = ""  # Not found, use fallback
+    logger.warning("FontAwesome font not found, icons will show as text names")
+    return _FA_FONT_FAMILY
 
 
 def _resolve_icon_source(widget_dict):
@@ -258,6 +288,264 @@ def _int_to_qcolor(color_val):
 def _qcolor_to_int(qcolor):
     """Convert QColor to 0xRRGGBB int."""
     return (qcolor.red() << 16) | (qcolor.green() << 8) | qcolor.blue()
+
+
+# ============================================================
+# Page Template Functions
+# ============================================================
+# Each returns a list of widget dicts for a pre-built page layout.
+# Grid layout: 800x480, status bar at (0,0,800,40), usable y=45..440,
+# page nav at (300,445,200,30).
+
+_GRID_X0 = 6
+_GRID_Y0 = 50
+_CELL_W = 192
+_CELL_H = 122
+_GAP = 6
+
+
+def _tpl_btn(label, x, y, w=None, h=None, *, action_type=ACTION_HOTKEY,
+             icon="\uf015", color=0x3498DB, modifiers=MOD_NONE, keycode=0,
+             consumer_code=0, launch_command="", shell_command="", url=""):
+    """Helper: create a hotkey button widget dict with overrides."""
+    b = make_default_widget(WIDGET_HOTKEY_BUTTON, x, y)
+    b["label"] = label
+    b["icon"] = icon
+    b["color"] = color
+    b["action_type"] = action_type
+    b["modifiers"] = modifiers
+    b["keycode"] = keycode
+    b["consumer_code"] = consumer_code
+    b["launch_command"] = launch_command
+    b["shell_command"] = shell_command
+    b["url"] = url
+    if w is not None:
+        b["width"] = w
+    if h is not None:
+        b["height"] = h
+    return b
+
+
+def _tpl_stat(label, stat_type, x, y, color=None):
+    """Helper: create a stat monitor widget dict."""
+    s = make_default_widget(WIDGET_STAT_MONITOR, x, y)
+    s["label"] = label
+    s["stat_type"] = stat_type
+    if color is not None:
+        s["color"] = color
+    else:
+        s["color"] = STAT_DEFAULT_COLORS.get(stat_type, 0x3498DB)
+    return s
+
+
+def _tpl_status_bar():
+    return make_default_widget(WIDGET_STATUS_BAR, 0, 0)
+
+
+def _tpl_page_nav():
+    return make_default_widget(WIDGET_PAGE_NAV, 300, 445)
+
+
+def _tpl_text_label(label, x, y, w=200, h=30, font_size=16, color=0xFFFFFF):
+    t = make_default_widget(WIDGET_TEXT_LABEL, x, y)
+    t["label"] = label
+    t["width"] = w
+    t["height"] = h
+    t["font_size"] = font_size
+    t["color"] = color
+    return t
+
+
+def _tpl_clock(x, y):
+    c = make_default_widget(WIDGET_CLOCK, x, y)
+    return c
+
+
+def template_app_launcher():
+    """4x3 grid of Launch App buttons."""
+    widgets = [_tpl_status_bar()]
+    for i in range(12):
+        col, row = i % 4, i // 4
+        x = _GRID_X0 + col * (_CELL_W + _GAP)
+        y = _GRID_Y0 + row * (_CELL_H + _GAP)
+        widgets.append(_tpl_btn(
+            f"App {i + 1}", x, y, _CELL_W, _CELL_H,
+            action_type=ACTION_LAUNCH_APP, icon="\uf015", color=0x3498DB,
+        ))
+    widgets.append(_tpl_page_nav())
+    return widgets
+
+
+def template_system_dashboard():
+    """Digital clock + 8 stat monitors + uptime."""
+    widgets = [_tpl_status_bar()]
+    widgets.append(_tpl_clock(300, 50))
+    stats = [
+        ("CPU", 0x01), ("RAM", 0x02), ("GPU", 0x03), ("CPU Temp", 0x04),
+        ("GPU Temp", 0x05), ("Disk", 0x06), ("Net Up", 0x07), ("Net Down", 0x08),
+    ]
+    for i, (label, st) in enumerate(stats):
+        col, row = i % 4, i // 4
+        x = 6 + col * 198
+        y = 200 + row * 60
+        widgets.append(_tpl_stat(label, st, x, y))
+    # Uptime widget
+    widgets.append(_tpl_stat("Uptime", 0x0C, 6, 330, color=0x7F8C8D))
+    return widgets
+
+
+def template_media_controller():
+    """Now Playing label + media control buttons."""
+    widgets = [_tpl_status_bar()]
+    widgets.append(_tpl_text_label("Now Playing", 200, 50, 400, 40, font_size=22))
+    media_btns = [
+        ("Prev", "\uf048", 0xB6),      # Previous Track
+        ("Play", "\uf04b", 0xCD),       # Play/Pause
+        ("Next", "\uf051", 0xB5),       # Next Track
+        ("Vol-", "\uf027", 0xEA),       # Volume Down
+        ("Vol+", "\uf028", 0xE9),       # Volume Up
+    ]
+    for i, (label, icon, cc) in enumerate(media_btns):
+        x = 50 + i * 150
+        widgets.append(_tpl_btn(
+            label, x, 150, 130, 120,
+            action_type=ACTION_MEDIA_KEY, icon=icon, color=0x9B59B6,
+            consumer_code=cc,
+        ))
+    # Mute button centered below
+    widgets.append(_tpl_btn(
+        "Mute", 300, 300, 200, 100,
+        action_type=ACTION_MEDIA_KEY, icon="\uf026", color=0xE74C3C,
+        consumer_code=0xE2,
+    ))
+    return widgets
+
+
+def template_dev_workbench():
+    """6 dev hotkey buttons + 4 stat monitors."""
+    widgets = [_tpl_status_bar()]
+    # Dev shortcuts — common IDE keybindings (lowercase ASCII = HID keycode)
+    dev_btns = [
+        ("Build", "\uf013", MOD_CTRL | MOD_SHIFT, ord('b')),   # SETTINGS
+        ("Run", "\uf04b", MOD_CTRL | MOD_SHIFT, ord('r')),     # PLAY
+        ("Debug", "\uf071", MOD_CTRL | MOD_SHIFT, ord('d')),   # WARNING
+        ("Terminal", "\uf11c", MOD_CTRL, ord('`')),             # KEYBOARD
+        ("Git", "\uf021", MOD_CTRL | MOD_SHIFT, ord('g')),     # REFRESH
+        ("Browser", "\uf1eb", MOD_ALT, 0xC8),                  # WIFI
+    ]
+    for i, (label, icon, mods, kc) in enumerate(dev_btns):
+        col, row = i % 3, i // 3
+        x = 6 + col * 264
+        y = 50 + row * 130
+        widgets.append(_tpl_btn(
+            label, x, y, 255, 120,
+            icon=icon, color=0x3F51B5, modifiers=mods, keycode=kc,
+        ))
+    # Stats row at bottom
+    dev_stats = [
+        ("CPU", 0x01), ("RAM", 0x02), ("GPU Temp", 0x05), ("Load Avg", 0x0F),
+    ]
+    for i, (label, st) in enumerate(dev_stats):
+        x = 6 + i * 198
+        y = 320
+        widgets.append(_tpl_stat(label, st, x, y))
+    return widgets
+
+
+def template_productivity():
+    """8 shell/launch buttons for productivity apps."""
+    widgets = [_tpl_status_bar()]
+    apps = [
+        ("Screenshot", "\uf03e", "gnome-screenshot"),   # IMAGE
+        ("Files", "\uf07b", "nautilus"),                 # DIRECTORY
+        ("Calculator", "\uf00b", "gnome-calculator"),    # LIST
+        ("Lock", "\uf00d", ""),                          # CLOSE
+        ("Browser", "\uf1eb", "xdg-open http://"),       # WIFI
+        ("Email", "\uf0e0", "xdg-open mailto:"),         # ENVELOPE
+        ("Notes", "\uf304", "gnome-text-editor"),        # EDIT
+        ("Settings", "\uf013", "gnome-control-center"),  # SETTINGS
+    ]
+    for i, (label, icon, cmd) in enumerate(apps):
+        col, row = i % 4, i // 4
+        x = _GRID_X0 + col * (_CELL_W + _GAP)
+        y = _GRID_Y0 + row * (160 + _GAP)
+        at = ACTION_SHELL_CMD if cmd else ACTION_HOTKEY
+        widgets.append(_tpl_btn(
+            label, x, y, _CELL_W, 150,
+            action_type=at, icon=icon, color=0x2ECC71,
+            shell_command=cmd,
+            # Lock uses Super+L
+            modifiers=MOD_GUI if label == "Lock" else MOD_NONE,
+            keycode=ord('l') if label == "Lock" else 0,
+        ))
+    widgets.append(_tpl_page_nav())
+    return widgets
+
+
+def template_streaming_deck():
+    """Streaming control buttons with color coding."""
+    widgets = [_tpl_status_bar()]
+    widgets.append(_tpl_text_label("STREAM CONTROLS", 200, 50, 400, 35, font_size=20))
+    stream_btns = [
+        ("Scene 1", "\uf008", 0x3498DB, MOD_NONE, 0),   # VIDEO
+        ("Scene 2", "\uf008", 0x3498DB, MOD_NONE, 0),   # VIDEO
+        ("Scene 3", "\uf008", 0x3498DB, MOD_NONE, 0),   # VIDEO
+        ("Mute Mic", "\uf026", 0xE74C3C, MOD_NONE, 0),  # MUTE
+        ("Stream", "\uf008", 0x2ECC71, MOD_NONE, 0),    # VIDEO
+        ("Camera", "\uf03e", 0x2ECC71, MOD_NONE, 0),    # IMAGE
+    ]
+    for i, (label, icon, color, mods, kc) in enumerate(stream_btns):
+        col, row = i % 3, i // 3
+        x = 50 + col * 245
+        y = 110 + row * 160
+        widgets.append(_tpl_btn(
+            label, x, y, 230, 140,
+            icon=icon, color=color, modifiers=mods, keycode=kc,
+        ))
+    return widgets
+
+
+def template_meeting_controls():
+    """Meeting control buttons for Teams/Zoom."""
+    widgets = [_tpl_status_bar()]
+    widgets.append(_tpl_text_label("MEETING", 250, 50, 300, 35, font_size=22))
+    # Ctrl+Shift+<key> combos that work in Teams & Zoom
+    meeting_btns = [
+        ("Mute Mic", "\uf026", 0xE67E22, ord('m')),      # MUTE — Ctrl+Shift+M
+        ("Camera", "\uf03e", 0xE67E22, ord('o')),         # IMAGE — Ctrl+Shift+O
+        ("Share", "\uf093", 0x3498DB, ord('e')),           # UPLOAD — Ctrl+Shift+E
+        ("Chat", "\uf0e0", 0x3498DB, ord('c')),            # ENVELOPE — Ctrl+Shift+C
+        ("Hand", "\uf077", 0x3498DB, ord('k')),            # UP — Ctrl+Shift+K
+        ("Leave", "\uf011", 0xE74C3C, ord('h')),           # POWER — Ctrl+Shift+H
+    ]
+    for i, (label, icon, color, kc) in enumerate(meeting_btns):
+        col, row = i % 3, i // 3
+        x = 50 + col * 245
+        y = 110 + row * 160
+        widgets.append(_tpl_btn(
+            label, x, y, 230, 140,
+            icon=icon, color=color,
+            modifiers=MOD_CTRL | MOD_SHIFT, keycode=kc,
+        ))
+    return widgets
+
+
+def template_blank_canvas():
+    """Status bar only — blank canvas."""
+    return [_tpl_status_bar()]
+
+
+# All templates: (menu_label, function)
+PAGE_TEMPLATES = [
+    ("App Launcher (4x3 grid)", template_app_launcher),
+    ("System Dashboard", template_system_dashboard),
+    ("Media Controller", template_media_controller),
+    ("Dev Workbench", template_dev_workbench),
+    ("Productivity", template_productivity),
+    ("Streaming Deck", template_streaming_deck),
+    ("Meeting Controls", template_meeting_controls),
+    ("Blank Canvas", template_blank_canvas),
+]
 
 
 # ============================================================
@@ -803,32 +1091,50 @@ class CanvasWidgetItem(QGraphicsRectItem):
                 painter.drawPixmap(int(img_x), int(img_y), scaled)
             return
 
-        # Fall back to symbol icon
+        # Fall back to symbol icon — render as FontAwesome glyph if available
         icon = self.widget_dict.get("icon", "")
-        icon_display = ""
+        icon_glyph = ""   # The actual unicode character for FontAwesome rendering
+        icon_name = ""    # Fallback text name if FA font not available
         if icon:
             icon_bytes = icon.encode("utf-8")
             if icon_bytes in SYMBOL_BY_UTF8:
-                icon_display = SYMBOL_BY_UTF8[icon_bytes][0]
+                icon_name = SYMBOL_BY_UTF8[icon_bytes][0]
+                icon_glyph = icon  # The raw unicode char (e.g., \uf04b)
             else:
-                icon_display = "?"
+                icon_name = "?"
 
+        fa_family = _get_fa_font_family()
         painter.setPen(text_color)
-        if icon_display and label:
+        if (icon_glyph or icon_name) and label:
             icon_size = max(9, int(min(rect.width(), rect.height()) * 0.3))
-            painter.setFont(QFont("Arial", icon_size))
-            painter.drawText(rect.adjusted(4, 2, -4, -rect.height() / 3), Qt.AlignCenter, icon_display)
-            label_size = max(8, min(12, int(rect.height() * 0.05)))
+            if fa_family and icon_glyph:
+                painter.setFont(QFont(fa_family, icon_size))
+                painter.drawText(rect.adjusted(4, 2, -4, -rect.height() / 3), Qt.AlignCenter, icon_glyph)
+            else:
+                # Fallback: shrink text name to fit
+                max_chars = max(1, int(rect.width() / (icon_size * 0.6)))
+                if len(icon_name) > max_chars:
+                    icon_size = max(9, int(rect.width() / (len(icon_name) * 0.7)))
+                painter.setFont(QFont("Arial", icon_size))
+                painter.drawText(rect.adjusted(4, 2, -4, -rect.height() / 3), Qt.AlignCenter, icon_name)
+            label_size = max(8, min(13, int(rect.height() * 0.12)))
             painter.setFont(QFont("Arial", label_size))
             painter.drawText(rect.adjusted(4, rect.height() * 2 / 3 - 4, -4, -2), Qt.AlignCenter, label)
         elif label:
-            painter.setFont(QFont("Arial", 9))
+            label_size = max(9, min(14, int(min(rect.width(), rect.height()) * 0.15)))
+            painter.setFont(QFont("Arial", label_size))
             painter.drawText(rect, Qt.AlignCenter, label)
-        elif icon_display:
-            # Icon-only: scale font to fill available space
+        elif icon_glyph or icon_name:
             icon_size = max(11, int(min(rect.width(), rect.height()) * 0.45))
-            painter.setFont(QFont("Arial", icon_size))
-            painter.drawText(rect, Qt.AlignCenter, icon_display)
+            if fa_family and icon_glyph:
+                painter.setFont(QFont(fa_family, icon_size))
+                painter.drawText(rect, Qt.AlignCenter, icon_glyph)
+            else:
+                max_chars = max(1, int(rect.width() / (icon_size * 0.6)))
+                if len(icon_name) > max_chars:
+                    icon_size = max(11, int(rect.width() / (len(icon_name) * 0.7)))
+                painter.setFont(QFont("Arial", icon_size))
+                painter.drawText(rect, Qt.AlignCenter, icon_name)
 
     def _paint_stat_monitor(self, painter, rect, qcolor):
         stat_type = self.widget_dict.get("stat_type", 0x01)
@@ -3124,7 +3430,7 @@ class SettingsTab(QScrollArea):
 
         files, _ = QFileDialog.getOpenFileNames(
             self, "Select Images for Slideshow", "",
-            "Images (*.png *.jpg *.jpeg *.bmp *.gif *.svg)"
+            "Images (*.jpg *.jpeg *.png *.gif *.webp *.svg)"
         )
         if not files:
             return
@@ -3136,9 +3442,9 @@ class SettingsTab(QScrollArea):
         errors = 0
         for i, path in enumerate(files):
             basename = os.path.basename(path)
-            # Force .jpg extension since we convert to JPEG
+            # Force .sjpg extension since we convert to SJPG
             name_root = os.path.splitext(basename)[0]
-            dest_name = name_root + ".jpg"
+            dest_name = name_root + ".sjpg"
 
             self.sd_status_label.setText(f"Uploading {i+1}/{len(files)}: {basename}")
             self.sd_status_label.setStyleSheet("color: #3498db; font-size: 11px;")
@@ -3376,6 +3682,9 @@ class EditorMainWindow(QMainWindow):
         self.remove_page_btn.clicked.connect(self._on_remove_page)
         self.rename_page_btn = QPushButton("Rename")
         self.rename_page_btn.clicked.connect(self._on_rename_page)
+        self.bg_image_btn = QPushButton("BG")
+        self.bg_image_btn.setToolTip("Set page background image")
+        self.bg_image_btn.clicked.connect(self._on_set_bg_image)
 
         page_layout.addWidget(self.prev_page_btn)
         page_layout.addWidget(self.page_label, stretch=1)
@@ -3383,6 +3692,7 @@ class EditorMainWindow(QMainWindow):
         page_layout.addWidget(self.add_page_btn)
         page_layout.addWidget(self.remove_page_btn)
         page_layout.addWidget(self.rename_page_btn)
+        page_layout.addWidget(self.bg_image_btn)
 
         # Settings toggle button
         self.settings_btn = QPushButton("Settings")
@@ -3625,6 +3935,48 @@ class EditorMainWindow(QMainWindow):
         redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
         redo_action.triggered.connect(self._redo)
 
+        templates_menu = menubar.addMenu("Templates")
+        for label, fn in PAGE_TEMPLATES:
+            action = templates_menu.addAction(label)
+            action.triggered.connect(lambda checked=False, f=fn: self._apply_template(f))
+
+    def _apply_template(self, template_fn):
+        """Apply a page template — replace current page or add as new page."""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Apply Template")
+        msg.setText("How would you like to apply this template?")
+        replace_btn = msg.addButton("Replace Current Page", QMessageBox.AcceptRole)
+        new_btn = msg.addButton("Add as New Page", QMessageBox.ActionRole)
+        msg.addButton(QMessageBox.Cancel)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if clicked == replace_btn:
+            widgets = template_fn()
+            page = self.config_manager.get_page(self.current_page)
+            if page is not None:
+                page["widgets"] = widgets
+                self._mark_dirty()
+                self.properties_panel.clear_selection()
+                self._rebuild_canvas()
+                self.statusBar().showMessage("Template applied to current page")
+        elif clicked == new_btn:
+            widgets = template_fn()
+            page_count = self.config_manager.get_page_count()
+            new_name = f"Page {page_count + 1}"
+            if self.config_manager.add_page(new_name):
+                # Navigate to the new page and set its widgets
+                new_idx = self.config_manager.get_page_count() - 1
+                new_page = self.config_manager.get_page(new_idx)
+                if new_page is not None:
+                    new_page["widgets"] = widgets
+                self.current_page = new_idx
+                self._mark_dirty()
+                self.properties_panel.clear_selection()
+                self._rebuild_canvas()
+                self._update_page_display()
+                self.statusBar().showMessage(f"Template added as {new_name}")
+
     def _rebuild_canvas(self):
         """Rebuild canvas items from current page config."""
         # Clear existing items (except handles)
@@ -3857,6 +4209,34 @@ class EditorMainWindow(QMainWindow):
             self.config_manager.rename_page(self.current_page, new_name.strip())
             self._mark_dirty()
             self._update_page_display()
+
+    def _on_set_bg_image(self):
+        page = self.config_manager.get_page(self.current_page)
+        if page is None:
+            return
+        current_bg = page.get("bg_image", "")
+        # Offer clear option if already set
+        if current_bg:
+            reply = QMessageBox.question(
+                self, "Background Image",
+                f"Current: {os.path.basename(current_bg)}\n\nChange or clear?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Reset,
+            )
+            if reply == QMessageBox.Reset:
+                page.pop("bg_image", None)
+                self._mark_dirty()
+                self.statusBar().showMessage("Background image cleared")
+                return
+            if reply != QMessageBox.Yes:
+                return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Background Image", "",
+            "Images (*.jpg *.jpeg *.png *.gif *.webp *.svg);;All Files (*)"
+        )
+        if path:
+            page["bg_image"] = path
+            self._mark_dirty()
+            self.statusBar().showMessage(f"Background: {os.path.basename(path)}")
 
     # -- File operations --
 

@@ -5,6 +5,7 @@ Uses Pillow to resize images to fit within widget bounds and convert to PNG
 format for LVGL's lodepng decoder on the device. Handles SVG via cairosvg.
 """
 
+import struct
 from io import BytesIO
 from PIL import Image
 
@@ -47,38 +48,80 @@ def optimize_icon(input_path: str, max_width: int, max_height: int) -> bytes:
     return buf.getvalue()
 
 
-def optimize_for_slideshow(input_path: str) -> bytes:
+def optimize_for_sjpg(input_path: str, width: int = 800, height: int = 480) -> bytes:
     """
-    Optimize an image for the device slideshow (800x480 screen).
+    Convert an image to SJPG (LVGL split-JPEG) format.
 
-    Resizes to fit within 800x480 preserving aspect ratio, converts to JPEG.
+    SJPG decodes in 16-pixel-tall strips without loading the full image
+    into RAM, which is ideal for ESP32 devices.
 
     Args:
-        input_path: Path to source image (PNG, JPG, BMP, GIF, SVG, etc.)
+        input_path: Path to source image
+        width: Target width in pixels
+        height: Target height in pixels
 
     Returns:
-        JPEG-encoded bytes ready for upload to device /pictures/ folder
+        SJPG-encoded bytes
 
     Raises:
         ValueError: If the file is not a valid image
     """
+    SPLIT_HEIGHT = 16
+    JPEG_QUALITY = 90
+
     try:
-        img = _open_image(input_path)
+        img = _open_image(input_path, width, height)
     except Exception as e:
         raise ValueError(f"Cannot open image: {e}")
 
-    # Convert to RGB for JPEG (no alpha channel)
-    if img.mode in ("RGBA", "P", "LA", "PA"):
-        img = img.convert("RGB")
-    elif img.mode != "RGB":
+    if img.mode != "RGB":
         img = img.convert("RGB")
 
-    # Resize preserving aspect ratio to fit 800x480
-    img.thumbnail((800, 480), Image.LANCZOS)
+    img.thumbnail((width, height), Image.LANCZOS)
+    w, h = img.size
 
-    buf = BytesIO()
-    img.save(buf, format="JPEG", quality=85, optimize=True)
-    return buf.getvalue()
+    # Slice into 16px-tall horizontal strips
+    strips = []
+    for y in range(0, h, SPLIT_HEIGHT):
+        strip_h = min(SPLIT_HEIGHT, h - y)
+        strip = img.crop((0, y, w, y + strip_h))
+        buf = BytesIO()
+        strip.save(buf, format="JPEG", quality=JPEG_QUALITY)
+        strips.append(buf.getvalue())
+
+    total_frames = len(strips)
+
+    # Build SJPG binary
+    out = BytesIO()
+    out.write(b"_SJPG__\x00")                           # magic
+    out.write(b"V1.00\x00")                              # version
+    out.write(struct.pack("<H", w))                       # width
+    out.write(struct.pack("<H", h))                       # height
+    out.write(struct.pack("<H", total_frames))            # total_frames
+    out.write(struct.pack("<H", SPLIT_HEIGHT))            # split_height
+    for s in strips:
+        out.write(struct.pack("<H", len(s)))              # frame sizes
+    for s in strips:
+        out.write(s)                                      # JPEG data
+    return out.getvalue()
+
+
+def optimize_for_slideshow(input_path: str) -> bytes:
+    """
+    Optimize an image for the device slideshow (800x480 screen).
+
+    Converts to SJPG format for efficient ESP32 rendering.
+
+    Args:
+        input_path: Path to source image
+
+    Returns:
+        SJPG-encoded bytes ready for upload to device /pictures/ folder
+
+    Raises:
+        ValueError: If the file is not a valid image
+    """
+    return optimize_for_sjpg(input_path)
 
 
 def optimize_for_widget(input_path: str, widget_width: int, widget_height: int) -> bytes:

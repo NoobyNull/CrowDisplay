@@ -85,7 +85,27 @@ def _resolve_deploy_images(config):
                     logger.warning("Failed to optimize icon %s: %s", source_path, e)
                     widget.pop("icon_path", None)
 
-    return images, deploy_config
+    # Resolve page background images (separate dict — uploaded to /bkgnds/)
+    bg_images = {}
+    for profile in deploy_config.get("profiles", []):
+        for page in profile.get("pages", []):
+            bg_src = page.get("bg_image", "")
+            if not bg_src or not os.path.exists(bg_src):
+                page.pop("bg_image", None)
+                continue
+            base = os.path.splitext(os.path.basename(bg_src))[0]
+            safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in base)
+            filename = f"bg_{safe_name}.sjpg"
+            try:
+                from companion.image_optimizer import optimize_for_sjpg
+                sjpg_data = optimize_for_sjpg(bg_src)
+                bg_images[filename] = sjpg_data
+                page["bg_image"] = f"/bkgnds/{filename}"
+            except Exception as e:
+                logger.warning("Failed to optimize bg image %s: %s", bg_src, e)
+                page.pop("bg_image", None)
+
+    return images, bg_images, deploy_config
 
 # Deploy step definitions: (key, label)
 DEPLOY_STEPS = [
@@ -112,10 +132,11 @@ class DeployWorker(QThread):
 
     def __init__(self, config_manager):
         super().__init__()
-        # Resolve icons at deploy time from system sources
-        images, deploy_config = _resolve_deploy_images(config_manager.config)
+        # Resolve icons and bg images at deploy time from system sources
+        images, bg_images, deploy_config = _resolve_deploy_images(config_manager.config)
         self.json_str = json.dumps(deploy_config, indent=2)
-        self.pending_images = images  # {filename: png_bytes}
+        self.pending_images = images      # {filename: png_bytes} → /icons/
+        self.pending_bg_images = bg_images  # {filename: png_bytes} → /bkgnds/
         self._bridge = None
         self._wifi = None
 
@@ -163,6 +184,14 @@ class DeployWorker(QThread):
                             image_warnings.append(f"{filename}: {result.get('error', 'unknown')}")
                     except Exception as e:
                         image_warnings.append(f"{filename}: {e}")
+            if self.pending_bg_images:
+                for filename, data in self.pending_bg_images.items():
+                    try:
+                        result = client.sd_upload_image(filename, data, folder="bkgnds")
+                        if not result.get("success"):
+                            image_warnings.append(f"bg/{filename}: {result.get('error', 'unknown')}")
+                    except Exception as e:
+                        image_warnings.append(f"bg/{filename}: {e}")
             self.step_done.emit("images")
 
             # 7. Upload config

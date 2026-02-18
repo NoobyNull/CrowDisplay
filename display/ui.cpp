@@ -893,6 +893,16 @@ static void create_pages(lv_obj_t *screen, const AppConfig *cfg) {
         lv_obj_set_style_pad_all(container, 0, LV_PART_MAIN);
         lv_obj_clear_flag(container, LV_OBJ_FLAG_SCROLLABLE);
 
+        // Background image from SD card (rendered behind all widgets)
+        if (!page.bg_image.empty() && SD.exists(page.bg_image.c_str())) {
+            std::string bg_src = "S:" + page.bg_image;
+            lv_obj_t *bg = lv_img_create(container);
+            lv_img_set_src(bg, bg_src.c_str());
+            lv_obj_set_size(bg, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+            lv_obj_set_pos(bg, 0, 0);
+            lv_obj_clear_flag(bg, LV_OBJ_FLAG_CLICKABLE);
+        }
+
         // Render all widgets
         for (size_t wi = 0; wi < page.widgets.size(); wi++) {
             render_widget(container, &page.widgets[wi], (uint8_t)pi, (uint8_t)wi);
@@ -1252,7 +1262,7 @@ static void init_picture_frame_mode() {
         while ((entry = dir.openNextFile())) {
             if (!entry.isDirectory()) {
                 String name = String(entry.name()); String lower = name; lower.toLowerCase();
-                if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".sjpg") || lower.endsWith(".bmp")) {
+                if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".sjpg")) {
                     slideshow_files.push_back(name.startsWith("/") ? name : "/pictures/" + name);
                 }
             }
@@ -1263,7 +1273,7 @@ static void init_picture_frame_mode() {
 
     if (slideshow_files.empty()) {
         slideshow_fallback_label = lv_label_create(picture_frame_screen);
-        lv_label_set_text(slideshow_fallback_label, "No images in /pictures\n\nUpload JPG/BMP files to SD card");
+        lv_label_set_text(slideshow_fallback_label, "No images in /pictures\n\nUpload images via companion app");
         lv_obj_center(slideshow_fallback_label);
         lv_obj_set_style_text_color(slideshow_fallback_label, lv_color_white(), LV_PART_MAIN);
         lv_obj_set_style_text_font(slideshow_fallback_label, &lv_font_montserrat_20, LV_PART_MAIN);
