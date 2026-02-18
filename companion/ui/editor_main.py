@@ -770,7 +770,7 @@ class CanvasWidgetItem(QGraphicsRectItem):
     def _paint_hotkey_button(self, painter, rect, qcolor):
         text_color = qcolor  # color field is now the text/foreground color
 
-        label = self.widget_dict.get("label", "")
+        label = self.widget_dict.get("label", "") if self.widget_dict.get("show_label", True) else ""
 
         # If we have an icon pixmap (from image picker), draw it
         if self._icon_pixmap and not self._icon_pixmap.isNull():
@@ -2466,8 +2466,9 @@ class PropertiesPanel(QScrollArea):
         wm_class = app.wm_class if app.wm_class else app.name
         self.launch_wm_class_input.setText(wm_class)
 
-        # Icon from freedesktop theme
+        # Icon from freedesktop theme — clear symbol icon since image takes over
         if app.icon_name and self._widget_dict is not None:
+            self.icon_picker.set_symbol("")
             self._widget_dict["icon_source"] = app.icon_name
             self._widget_dict["icon_source_type"] = "freedesktop"
             self.icon_image_label.setText(app.icon_name)
@@ -3312,6 +3313,19 @@ class EditorMainWindow(QMainWindow):
         self.setWindowTitle("CrowPanel Editor")
         self.setMinimumSize(1100, 700)
 
+        # Debounced auto-save: fires 300ms after last change
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(300)
+        self._save_timer.timeout.connect(self._auto_save_config)
+
+        # Undo/redo stacks (config snapshots, max 20)
+        import copy as _copy
+        self._undo_stack = []
+        self._redo_stack = []
+        self._undo_max = 20
+        self._copy = _copy
+
         # Canvas items tracked by stable widget_id
         self._canvas_items = {}  # widget_id -> CanvasWidgetItem
 
@@ -3522,6 +3536,37 @@ class EditorMainWindow(QMainWindow):
                 self._current_file_path = str(DEFAULT_CONFIG_PATH)
                 self.statusBar().showMessage(f"Loaded: {DEFAULT_CONFIG_PATH}")
 
+    def _mark_dirty(self):
+        """Push undo snapshot and schedule debounced save to disk."""
+        snapshot = self._copy.deepcopy(self.config_manager.config)
+        self._undo_stack.append(snapshot)
+        if len(self._undo_stack) > self._undo_max:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
+        self._save_timer.start()
+
+    def _undo(self):
+        if not self._undo_stack:
+            self.statusBar().showMessage("Nothing to undo")
+            return
+        self._redo_stack.append(self._copy.deepcopy(self.config_manager.config))
+        if len(self._redo_stack) > self._undo_max:
+            self._redo_stack.pop(0)
+        self.config_manager.config = self._undo_stack.pop()
+        self._rebuild_canvas()
+        self._save_timer.start()
+        self.statusBar().showMessage("Undo")
+
+    def _redo(self):
+        if not self._redo_stack:
+            self.statusBar().showMessage("Nothing to redo")
+            return
+        self._undo_stack.append(self._copy.deepcopy(self.config_manager.config))
+        self.config_manager.config = self._redo_stack.pop()
+        self._rebuild_canvas()
+        self._save_timer.start()
+        self.statusBar().showMessage("Redo")
+
     def _auto_save_config(self):
         """Save config to the current file path (or default)."""
         path = self._current_file_path or str(DEFAULT_CONFIG_PATH)
@@ -3571,6 +3616,14 @@ class EditorMainWindow(QMainWindow):
 
         exit_action = file_menu.addAction("Exit")
         exit_action.triggered.connect(self.close)
+
+        edit_menu = menubar.addMenu("Edit")
+        undo_action = edit_menu.addAction("Undo")
+        undo_action.setShortcut(QKeySequence("Ctrl+Z"))
+        undo_action.triggered.connect(self._undo)
+        redo_action = edit_menu.addAction("Redo")
+        redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        redo_action.triggered.connect(self._redo)
 
     def _rebuild_canvas(self):
         """Rebuild canvas items from current page config."""
@@ -3643,6 +3696,7 @@ class EditorMainWindow(QMainWindow):
             widget_dict["width"] = w
             widget_dict["height"] = h
             self.config_manager.set_widget(self.current_page, widget_idx, widget_dict)
+            self._mark_dirty()
             # Update position readout in properties panel
             self.properties_panel.update_position(x, y, w, h)
 
@@ -3662,6 +3716,7 @@ class EditorMainWindow(QMainWindow):
             # Select the new item
             self.canvas_scene.clearSelection()
             item.setSelected(True)
+            self._mark_dirty()
             type_name = WIDGET_TYPE_NAMES.get(widget_type, "Widget")
             self.statusBar().showMessage(f"Added: {type_name} at ({x}, {y})")
 
@@ -3680,6 +3735,7 @@ class EditorMainWindow(QMainWindow):
             self.config_manager.remove_widget(self.current_page, idx)
 
         # Rebuild canvas to fix indices
+        self._mark_dirty()
         self.properties_panel.clear_selection()
         self._rebuild_canvas()
         self.statusBar().showMessage(f"Deleted {len(widget_ids)} widget(s)")
@@ -3698,6 +3754,7 @@ class EditorMainWindow(QMainWindow):
                 self.canvas_scene.addItem(item)
                 self._canvas_items[wid] = item
                 item.setSelected(True)
+        self._mark_dirty()
         self.statusBar().showMessage(f"Pasted {len(widget_dicts)} widget(s)")
 
     def _on_move_widgets_to_page(self, widget_ids, target_page):
@@ -3722,6 +3779,7 @@ class EditorMainWindow(QMainWindow):
         tp = self.config_manager.get_page(target_page)
         if tp:
             target_name = tp.get("name", f"Page {target_page + 1}")
+        self._mark_dirty()
         self.statusBar().showMessage(f"Moved {moved} widget(s) to {target_name}")
 
     def _get_page_list(self):
@@ -3741,6 +3799,7 @@ class EditorMainWindow(QMainWindow):
         if widget_idx < 0:
             return
         self.config_manager.set_widget(self.current_page, widget_idx, widget_dict)
+        self._mark_dirty()
         # Update the canvas item appearance
         if widget_id in self._canvas_items:
             item = self._canvas_items[widget_id]
@@ -3769,6 +3828,7 @@ class EditorMainWindow(QMainWindow):
         page_count = self.config_manager.get_page_count()
         new_name = f"Page {page_count + 1}"
         if self.config_manager.add_page(new_name):
+            self._mark_dirty()
             self._update_page_display()
             self.statusBar().showMessage(f"Added page: {new_name}")
 
@@ -3777,6 +3837,7 @@ class EditorMainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "Cannot remove the last page")
             return
         if self.config_manager.remove_page(self.current_page):
+            self._mark_dirty()
             if self.current_page >= self.config_manager.get_page_count():
                 self.current_page -= 1
             self.properties_panel.clear_selection()
@@ -3794,6 +3855,7 @@ class EditorMainWindow(QMainWindow):
         )
         if ok and new_name.strip():
             self.config_manager.rename_page(self.current_page, new_name.strip())
+            self._mark_dirty()
             self._update_page_display()
 
     # -- File operations --
@@ -3912,6 +3974,7 @@ class EditorMainWindow(QMainWindow):
             self.statusBar().showMessage("Ready")
 
     def _on_settings_tab_changed(self):
+        self._mark_dirty()
         self.statusBar().showMessage("Display settings updated")
 
     # -- Hardware input handlers --
@@ -3930,6 +3993,7 @@ class EditorMainWindow(QMainWindow):
 
     def _on_hw_config_changed(self):
         """Hardware config changed in properties panel -- update button labels."""
+        self._mark_dirty()
         self.hardware_section.update_labels()
 
     def _on_test_action_clicked(self):

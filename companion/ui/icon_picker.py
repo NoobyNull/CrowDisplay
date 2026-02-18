@@ -27,6 +27,9 @@ class IconPicker(QComboBox):
         super().__init__(parent)
         self.setMinimumWidth(200)
 
+        # First item: no symbol icon (useful when using an icon image)
+        self.addItem("None", "")
+
         # Populate dropdown from LVGL symbol registry
         for name, codepoint, utf8_bytes in LVGL_SYMBOLS:
             # The UTF-8 bytes decoded to a Python string -- this is what
@@ -57,6 +60,11 @@ class IconPicker(QComboBox):
         Looks up in SYMBOL_BY_UTF8 first (for JSON-format values),
         then SYMBOL_BY_NAME (for legacy name-format values).
         """
+        # Empty or missing -> select "None"
+        if not icon_str:
+            self.setCurrentIndex(0)
+            return
+
         # Try matching as UTF-8 string (the normal case from device JSON)
         icon_bytes = icon_str.encode("utf-8") if isinstance(icon_str, str) else icon_str
         if icon_bytes in SYMBOL_BY_UTF8:
@@ -87,6 +95,5 @@ class IconPicker(QComboBox):
         """
         index = self.currentIndex()
         if index >= 0:
-            return self.itemData(index)
-        # Default fallback: HOME symbol as UTF-8 string
-        return SYMBOL_BY_NAME["HOME"][1].decode("utf-8")
+            return self.itemData(index) or ""
+        return ""
