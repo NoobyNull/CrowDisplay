@@ -27,6 +27,7 @@
 // Debounce timing
 #define BUTTON_DEBOUNCE_MS  50
 #define ENCODER_ROT_MIN_MS  80  // Minimum interval between rotation events
+#define REBOOT_HOLD_MS      5000 // Hold all 4 buttons for 5s to force reboot
 
 // ============================================================
 // State
@@ -42,6 +43,10 @@ static bool btn_prev_pressed[5] = {false};
 // Encoder quadrature state
 static uint8_t enc_prev_state = 0;
 static uint32_t enc_last_rotation_ms = 0;
+
+// All-buttons-held reboot detection
+static uint32_t all_btn_hold_start = 0;
+static bool all_btn_held = false;
 
 // App-select focus
 static int focused_widget_idx = -1;
@@ -311,6 +316,23 @@ void hw_input_poll() {
     if (millis() - dbg_timer >= 2000) {
         dbg_timer = millis();
         Serial.printf("[hw_input] raw pins=0x%04X\n", pins);
+    }
+
+    // --- All-4-buttons held reboot check ---
+    bool all_four = !(pins & PIN_BTN1) && !(pins & PIN_BTN2) &&
+                    !(pins & PIN_BTN3) && !(pins & PIN_BTN4);
+    if (all_four) {
+        if (!all_btn_held) {
+            all_btn_held = true;
+            all_btn_hold_start = millis();
+            Serial.println("[hw_input] All 4 buttons held — hold 5s to reboot");
+        } else if (millis() - all_btn_hold_start >= REBOOT_HOLD_MS) {
+            Serial.println("[hw_input] REBOOT triggered by 4-button hold");
+            delay(100);
+            ESP.restart();
+        }
+    } else {
+        all_btn_held = false;
     }
 
     if (pins == 0xFFFF && prev_pin_state == 0xFFFF) return; // No change, all high
