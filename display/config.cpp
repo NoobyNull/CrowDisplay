@@ -28,6 +28,17 @@ static WidgetConfig make_hotkey(int16_t x, int16_t y, int16_t w, int16_t h,
     return w_cfg;
 }
 
+// Helper: create a default status bar widget for the top of a page
+static WidgetConfig make_default_status_bar() {
+    WidgetConfig sb;
+    sb.widget_type = WIDGET_STATUS_BAR;
+    sb.x = 0; sb.y = 0; sb.width = DISPLAY_WIDTH; sb.height = 45;
+    sb.label = "Hotkeys";
+    sb.color = 0xE0E0E0;
+    sb.bg_color = 0x16213e;
+    return sb;
+}
+
 AppConfig config_create_defaults() {
     AppConfig cfg;
     cfg.version = CONFIG_VERSION;
@@ -78,13 +89,7 @@ AppConfig config_create_defaults() {
         page.name = "Window Manager";
 
         // Add a status bar at top
-        WidgetConfig sb;
-        sb.widget_type = WIDGET_STATUS_BAR;
-        sb.x = 0; sb.y = 0; sb.width = 800; sb.height = 45;
-        sb.label = "Hotkeys";
-        sb.color = 0xE0E0E0;
-        sb.bg_color = 0x16213e;
-        page.widgets.push_back(sb);
+        page.widgets.push_back(make_default_status_bar());
 
         struct { const char* lbl; const char* desc; uint32_t clr; const char* ico; uint8_t mod; uint8_t key; } btns[] = {
             {"WS 1", "Super+1", CLR_BLUE, LV_SYMBOL_HOME, MOD_GUI, '1'},
@@ -124,13 +129,7 @@ AppConfig config_create_defaults() {
         PageConfig page;
         page.name = "System Actions";
 
-        WidgetConfig sb;
-        sb.widget_type = WIDGET_STATUS_BAR;
-        sb.x = 0; sb.y = 0; sb.width = 800; sb.height = 45;
-        sb.label = "Hotkeys";
-        sb.color = 0xE0E0E0;
-        sb.bg_color = 0x16213e;
-        page.widgets.push_back(sb);
+        page.widgets.push_back(make_default_status_bar());
 
         struct { const char* lbl; const char* desc; uint32_t clr; const char* ico; uint8_t mod; uint8_t key; } btns[] = {
             {"Terminal", "Super+Enter", CLR_GREEN, LV_SYMBOL_KEYBOARD, MOD_GUI, KEY_RETURN},
@@ -169,13 +168,7 @@ AppConfig config_create_defaults() {
         PageConfig page;
         page.name = "Media + Extras";
 
-        WidgetConfig sb;
-        sb.widget_type = WIDGET_STATUS_BAR;
-        sb.x = 0; sb.y = 0; sb.width = 800; sb.height = 45;
-        sb.label = "Hotkeys";
-        sb.color = 0xE0E0E0;
-        sb.bg_color = 0x16213e;
-        page.widgets.push_back(sb);
+        page.widgets.push_back(make_default_status_bar());
 
         // Media keys (first 6)
         struct { const char* lbl; const char* desc; const char* ico; uint16_t cc; } media[] = {
@@ -427,13 +420,7 @@ static void migrate_v1_page(JsonObject page_obj, PageConfig& page) {
     page.widgets.clear();
 
     // Add a default status bar at top
-    WidgetConfig sb;
-    sb.widget_type = WIDGET_STATUS_BAR;
-    sb.x = 0; sb.y = 0; sb.width = DISPLAY_WIDTH; sb.height = 45;
-    sb.label = "Hotkeys";
-    sb.color = 0xE0E0E0;
-    sb.bg_color = 0x16213e;
-    page.widgets.push_back(sb);
+    page.widgets.push_back(make_default_status_bar());
 
     // Grid cell dimensions for v1 layout
     const int16_t GRID_X0 = 6;
@@ -549,6 +536,168 @@ static void json_to_profile(JsonObject obj, ProfileConfig& profile, uint8_t conf
 }
 
 // ============================================================
+// Configuration I/O — Section Parsers
+// ============================================================
+
+// Parse top-level scalar fields: version, active_profile, brightness, mode settings
+static uint8_t parse_top_level(JsonDocument& doc, AppConfig& cfg) {
+    uint8_t file_version = doc["version"] | (uint8_t)0;
+    cfg.version = CONFIG_VERSION;  // Always upgrade to current
+    Serial.printf("CONFIG: file schema version %d (current %d)\n", file_version, CONFIG_VERSION);
+
+    if (file_version < 2) {
+        Serial.println("CONFIG: Migrating v1 -> v2 (grid -> absolute positioning)");
+    }
+
+    if (!doc["active_profile_name"].isNull()) {
+        cfg.active_profile_name = doc["active_profile_name"].as<const char*>();
+    }
+    if (!doc["brightness_level"].isNull()) {
+        cfg.brightness_level = doc["brightness_level"].as<uint8_t>();
+    }
+
+    // Parse display mode settings
+    cfg.default_mode = doc["default_mode"] | (uint8_t)0;
+    cfg.slideshow_interval_sec = doc["slideshow_interval_sec"] | (uint16_t)30;
+    cfg.clock_analog = doc["clock_analog"] | false;
+
+    if (cfg.default_mode > 3) {
+        Serial.printf("CONFIG: WARNING - invalid default_mode=%d, using MODE_HOTKEYS\n", cfg.default_mode);
+        cfg.default_mode = 0;
+    }
+    if (cfg.slideshow_interval_sec < 5) cfg.slideshow_interval_sec = 5;
+    if (cfg.slideshow_interval_sec > 300) cfg.slideshow_interval_sec = 300;
+
+    // Parse profiles
+    cfg.profiles.clear();
+    if (!doc["profiles"].isNull()) {
+        JsonArray profiles_array = doc["profiles"].as<JsonArray>();
+        for (JsonObject profile_obj : profiles_array) {
+            ProfileConfig profile;
+            json_to_profile(profile_obj, profile, file_version);
+            cfg.profiles.push_back(profile);
+        }
+    }
+
+    return file_version;
+}
+
+// Parse stats_header array or apply 8-entry defaults
+static void parse_stats_header(JsonDocument& doc, AppConfig& cfg) {
+    if (!doc["stats_header"].isNull()) {
+        cfg.stats_header.clear();
+        JsonArray stats_arr = doc["stats_header"].as<JsonArray>();
+        int stat_count = 0;
+        for (JsonObject stat_obj : stats_arr) {
+            if (stat_count >= CONFIG_MAX_STATS) break;
+            StatConfig sc;
+            sc.type = stat_obj["type"] | (uint8_t)0;
+            sc.color = stat_obj["color"] | (uint32_t)0xFFFFFF;
+            sc.position = stat_obj["position"] | (uint8_t)0;
+            if (sc.type < 1 || sc.type > STAT_TYPE_MAX) {
+                Serial.printf("CONFIG: WARNING - invalid stat type %d, skipping\n", sc.type);
+                continue;
+            }
+            cfg.stats_header.push_back(sc);
+            stat_count++;
+        }
+        Serial.printf("CONFIG: Loaded %d stats_header entries\n", (int)cfg.stats_header.size());
+    } else {
+        cfg.stats_header = {
+            {STAT_CPU_PERCENT, 0x3498DB, 0},
+            {STAT_RAM_PERCENT, 0x2ECC71, 1},
+            {STAT_GPU_PERCENT, 0xE67E22, 2},
+            {STAT_CPU_TEMP,    0xE74C3C, 3},
+            {STAT_GPU_TEMP,    0xF1C40F, 4},
+            {STAT_NET_UP,      0x1ABC9C, 5},
+            {STAT_NET_DOWN,    0x1ABC9C, 6},
+            {STAT_DISK_PERCENT,0x7F8C8D, 7},
+        };
+        Serial.println("CONFIG: No stats_header in JSON, using 8 defaults");
+    }
+}
+
+// Parse hw_buttons[4] from JSON
+static void parse_hardware_buttons(JsonDocument& doc, AppConfig& cfg) {
+    JsonArray hw_btns = doc["hardware_buttons"];
+    if (!hw_btns.isNull()) {
+        for (int i = 0; i < 4 && i < (int)hw_btns.size(); i++) {
+            JsonObject btn = hw_btns[i];
+            cfg.hw_buttons[i].action_type = (ActionType)(btn["action_type"] | 8); // PAGE_NEXT default
+            cfg.hw_buttons[i].label = btn["label"] | "";
+            cfg.hw_buttons[i].keycode = btn["keycode"] | 0;
+            cfg.hw_buttons[i].consumer_code = btn["consumer_code"] | 0;
+            cfg.hw_buttons[i].modifiers = btn["modifiers"] | 0;
+            cfg.hw_buttons[i].ddc_vcp_code = btn["ddc_vcp_code"] | 0;
+            cfg.hw_buttons[i].ddc_value = btn["ddc_value"] | 0;
+            cfg.hw_buttons[i].ddc_adjustment = btn["ddc_adjustment"] | 0;
+            cfg.hw_buttons[i].ddc_display = btn["ddc_display"] | 0;
+        }
+    }
+}
+
+// Parse encoder object from JSON
+static void parse_encoder(JsonDocument& doc, AppConfig& cfg) {
+    JsonObject enc = doc["encoder"];
+    if (!enc.isNull()) {
+        cfg.encoder.push_action = (ActionType)(enc["push_action"] | 12); // BRIGHTNESS default
+        cfg.encoder.push_label = enc["push_label"] | "Brightness";
+        cfg.encoder.push_keycode = enc["push_keycode"] | 0;
+        cfg.encoder.push_consumer_code = enc["push_consumer_code"] | 0;
+        cfg.encoder.push_modifiers = enc["push_modifiers"] | 0;
+        cfg.encoder.encoder_mode = enc["encoder_mode"] | 0; // page_nav default
+        cfg.encoder.ddc_vcp_code = enc["ddc_vcp_code"] | 0x10;
+        cfg.encoder.ddc_step = enc["ddc_step"] | 10;
+        cfg.encoder.ddc_display = enc["ddc_display"] | 0;
+    }
+}
+
+// Parse mode_cycle array from JSON
+static void parse_mode_cycle(JsonDocument& doc, AppConfig& cfg) {
+    JsonArray modes = doc["mode_cycle"];
+    if (!modes.isNull()) {
+        cfg.mode_cycle.enabled_modes.clear();
+        for (JsonVariant m : modes) {
+            cfg.mode_cycle.enabled_modes.push_back(m.as<uint8_t>());
+        }
+    }
+}
+
+// Parse display_settings object from JSON
+static void parse_display_settings(JsonDocument& doc, AppConfig& cfg) {
+    JsonObject ds = doc["display_settings"];
+    if (!ds.isNull()) {
+        cfg.display_settings.dim_timeout_sec = ds["dim_timeout_sec"] | 60;
+        cfg.display_settings.sleep_timeout_sec = ds["sleep_timeout_sec"] | 300;
+        cfg.display_settings.wake_on_touch = ds["wake_on_touch"] | true;
+        cfg.display_settings.clock_24h = ds["clock_24h"] | true;
+        cfg.display_settings.clock_color_theme = ds["clock_color_theme"] | (uint32_t)0xFFFFFF;
+        cfg.display_settings.slideshow_interval_sec = ds["slideshow_interval_sec"] | 30;
+        cfg.display_settings.slideshow_transition = ds["slideshow_transition"] | "fade";
+    }
+}
+
+// Validate config has valid profiles/pages, truncate if over limit
+static bool validate_config(AppConfig& cfg) {
+    if (cfg.profiles.empty() || !cfg.get_active_profile()) {
+        Serial.println("CONFIG: Invalid configuration (no valid active profile), using defaults");
+        return false;
+    }
+
+    ProfileConfig *active = cfg.get_active_profile();
+    if (active->pages.empty()) {
+        Serial.println("CONFIG: Active profile has 0 pages, using defaults");
+        return false;
+    }
+    if ((int)active->pages.size() > CONFIG_MAX_PAGES) {
+        Serial.printf("CONFIG: WARNING - active profile has %zu pages (max %d), truncating\n",
+                      active->pages.size(), CONFIG_MAX_PAGES);
+        active->pages.resize(CONFIG_MAX_PAGES);
+    }
+    return true;
+}
+
+// ============================================================
 // Configuration I/O
 // ============================================================
 
@@ -587,144 +736,17 @@ AppConfig config_load() {
 
     AppConfig cfg;
 
-    // Read version field
-    uint8_t file_version = doc["version"] | (uint8_t)0;
-    cfg.version = CONFIG_VERSION;  // Always upgrade to current
-    Serial.printf("CONFIG: file schema version %d (current %d)\n", file_version, CONFIG_VERSION);
-
-    if (file_version < 2) {
-        Serial.println("CONFIG: Migrating v1 -> v2 (grid -> absolute positioning)");
-    }
-
-    if (!doc["active_profile_name"].isNull()) {
-        cfg.active_profile_name = doc["active_profile_name"].as<const char*>();
-    }
-    if (!doc["brightness_level"].isNull()) {
-        cfg.brightness_level = doc["brightness_level"].as<uint8_t>();
-    }
-
-    // Parse display mode settings
-    cfg.default_mode = doc["default_mode"] | (uint8_t)0;
-    cfg.slideshow_interval_sec = doc["slideshow_interval_sec"] | (uint16_t)30;
-    cfg.clock_analog = doc["clock_analog"] | false;
-
-    if (cfg.default_mode > 3) {
-        Serial.printf("CONFIG: WARNING - invalid default_mode=%d, using MODE_HOTKEYS\n", cfg.default_mode);
-        cfg.default_mode = 0;
-    }
-    if (cfg.slideshow_interval_sec < 5) cfg.slideshow_interval_sec = 5;
-    if (cfg.slideshow_interval_sec > 300) cfg.slideshow_interval_sec = 300;
-
-    cfg.profiles.clear();
-    if (!doc["profiles"].isNull()) {
-        JsonArray profiles_array = doc["profiles"].as<JsonArray>();
-        for (JsonObject profile_obj : profiles_array) {
-            ProfileConfig profile;
-            json_to_profile(profile_obj, profile, file_version);
-            cfg.profiles.push_back(profile);
-        }
-    }
-
-    // Parse stats_header
-    if (!doc["stats_header"].isNull()) {
-        cfg.stats_header.clear();
-        JsonArray stats_arr = doc["stats_header"].as<JsonArray>();
-        int stat_count = 0;
-        for (JsonObject stat_obj : stats_arr) {
-            if (stat_count >= CONFIG_MAX_STATS) break;
-            StatConfig sc;
-            sc.type = stat_obj["type"] | (uint8_t)0;
-            sc.color = stat_obj["color"] | (uint32_t)0xFFFFFF;
-            sc.position = stat_obj["position"] | (uint8_t)0;
-            if (sc.type < 1 || sc.type > STAT_TYPE_MAX) {
-                Serial.printf("CONFIG: WARNING - invalid stat type %d, skipping\n", sc.type);
-                continue;
-            }
-            cfg.stats_header.push_back(sc);
-            stat_count++;
-        }
-        Serial.printf("CONFIG: Loaded %d stats_header entries\n", (int)cfg.stats_header.size());
-    } else {
-        cfg.stats_header = {
-            {STAT_CPU_PERCENT, 0x3498DB, 0},
-            {STAT_RAM_PERCENT, 0x2ECC71, 1},
-            {STAT_GPU_PERCENT, 0xE67E22, 2},
-            {STAT_CPU_TEMP,    0xE74C3C, 3},
-            {STAT_GPU_TEMP,    0xF1C40F, 4},
-            {STAT_NET_UP,      0x1ABC9C, 5},
-            {STAT_NET_DOWN,    0x1ABC9C, 6},
-            {STAT_DISK_PERCENT,0x7F8C8D, 7},
-        };
-        Serial.println("CONFIG: No stats_header in JSON, using 8 defaults");
-    }
-
-    // Hardware buttons (optional, defaults if missing)
-    JsonArray hw_btns = doc["hardware_buttons"];
-    if (!hw_btns.isNull()) {
-        for (int i = 0; i < 4 && i < (int)hw_btns.size(); i++) {
-            JsonObject btn = hw_btns[i];
-            cfg.hw_buttons[i].action_type = (ActionType)(btn["action_type"] | 8); // PAGE_NEXT default
-            cfg.hw_buttons[i].label = btn["label"] | "";
-            cfg.hw_buttons[i].keycode = btn["keycode"] | 0;
-            cfg.hw_buttons[i].consumer_code = btn["consumer_code"] | 0;
-            cfg.hw_buttons[i].modifiers = btn["modifiers"] | 0;
-            cfg.hw_buttons[i].ddc_vcp_code = btn["ddc_vcp_code"] | 0;
-            cfg.hw_buttons[i].ddc_value = btn["ddc_value"] | 0;
-            cfg.hw_buttons[i].ddc_adjustment = btn["ddc_adjustment"] | 0;
-            cfg.hw_buttons[i].ddc_display = btn["ddc_display"] | 0;
-        }
-    }
-
-    // Encoder (optional)
-    JsonObject enc = doc["encoder"];
-    if (!enc.isNull()) {
-        cfg.encoder.push_action = (ActionType)(enc["push_action"] | 12); // BRIGHTNESS default
-        cfg.encoder.push_label = enc["push_label"] | "Brightness";
-        cfg.encoder.push_keycode = enc["push_keycode"] | 0;
-        cfg.encoder.push_consumer_code = enc["push_consumer_code"] | 0;
-        cfg.encoder.push_modifiers = enc["push_modifiers"] | 0;
-        cfg.encoder.encoder_mode = enc["encoder_mode"] | 0; // page_nav default
-        cfg.encoder.ddc_vcp_code = enc["ddc_vcp_code"] | 0x10;
-        cfg.encoder.ddc_step = enc["ddc_step"] | 10;
-        cfg.encoder.ddc_display = enc["ddc_display"] | 0;
-    }
-
-    // Mode cycle (optional)
-    JsonArray modes = doc["mode_cycle"];
-    if (!modes.isNull()) {
-        cfg.mode_cycle.enabled_modes.clear();
-        for (JsonVariant m : modes) {
-            cfg.mode_cycle.enabled_modes.push_back(m.as<uint8_t>());
-        }
-    }
-
-    // Display settings (optional)
-    JsonObject ds = doc["display_settings"];
-    if (!ds.isNull()) {
-        cfg.display_settings.dim_timeout_sec = ds["dim_timeout_sec"] | 60;
-        cfg.display_settings.sleep_timeout_sec = ds["sleep_timeout_sec"] | 300;
-        cfg.display_settings.wake_on_touch = ds["wake_on_touch"] | true;
-        cfg.display_settings.clock_24h = ds["clock_24h"] | true;
-        cfg.display_settings.clock_color_theme = ds["clock_color_theme"] | (uint32_t)0xFFFFFF;
-        cfg.display_settings.slideshow_interval_sec = ds["slideshow_interval_sec"] | 30;
-        cfg.display_settings.slideshow_transition = ds["slideshow_transition"] | "fade";
-    }
+    // Parse all config sections
+    uint8_t file_version = parse_top_level(doc, cfg);
+    parse_stats_header(doc, cfg);
+    parse_hardware_buttons(doc, cfg);
+    parse_encoder(doc, cfg);
+    parse_mode_cycle(doc, cfg);
+    parse_display_settings(doc, cfg);
 
     // Validate
-    if (cfg.profiles.empty() || !cfg.get_active_profile()) {
-        Serial.println("CONFIG: Invalid configuration (no valid active profile), using defaults");
+    if (!validate_config(cfg)) {
         return config_create_defaults();
-    }
-
-    ProfileConfig *active = cfg.get_active_profile();
-    if (active->pages.empty()) {
-        Serial.println("CONFIG: Active profile has 0 pages, using defaults");
-        return config_create_defaults();
-    }
-    if ((int)active->pages.size() > CONFIG_MAX_PAGES) {
-        Serial.printf("CONFIG: WARNING - active profile has %zu pages (max %d), truncating\n",
-                      active->pages.size(), CONFIG_MAX_PAGES);
-        active->pages.resize(CONFIG_MAX_PAGES);
     }
 
     // If migrated from v1, save upgraded config
@@ -733,6 +755,7 @@ AppConfig config_load() {
         config_save(cfg);
     }
 
+    ProfileConfig *active = cfg.get_active_profile();
     int total_widgets = 0;
     for (const auto& page : active->pages) {
         total_widgets += (int)page.widgets.size();
