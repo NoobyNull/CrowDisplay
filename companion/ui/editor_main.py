@@ -954,6 +954,9 @@ class CanvasScene(QGraphicsScene):
     widget_deselected = Signal()
     widget_geometry_changed = Signal(str, int, int, int, int)  # widget_id, x, y, w, h
     widget_dropped = Signal(int, int, int)  # type, x, y
+    delete_requested = Signal(list)
+    paste_requested = Signal(list)
+    move_to_page_requested = Signal(list, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -963,6 +966,8 @@ class CanvasScene(QGraphicsScene):
         self._clipboard = []  # list of widget dicts for copy/paste
         self._multi_move_origin = None  # for group drag
         self.page_count = 1  # updated by EditorMainWindow when pages change
+        self.page_list = []  # list of (page_idx, page_name) tuples
+        self.current_page_index = 0
 
     def drawBackground(self, painter, rect):
         # Fill everything outside the canvas dark
@@ -1097,9 +1102,8 @@ class CanvasScene(QGraphicsScene):
             # Move to page submenu
             move_menu = menu.addMenu("Move to Page...")
             page_actions = []
-            if hasattr(self, "_get_page_list"):
-                for page_idx, page_name in self._get_page_list():
-                    if page_idx != self._current_page:
+            for page_idx, page_name in self.page_list:
+                    if page_idx != self.current_page_index:
                         pa = move_menu.addAction(page_name)
                         pa.setData(page_idx)
                         page_actions.append(pa)
@@ -1151,8 +1155,7 @@ class CanvasScene(QGraphicsScene):
                 item.setZValue(min_z - 1)
         elif action in page_actions:
             target_page = action.data()
-            if hasattr(self, "_on_move_to_page"):
-                self._on_move_to_page([i.widget_id for i in selected], target_page)
+            self.move_to_page_requested.emit([i.widget_id for i in selected], target_page)
 
     def _copy_selected(self, selected):
         """Copy selected widget dicts to clipboard."""
@@ -1164,7 +1167,7 @@ class CanvasScene(QGraphicsScene):
 
     def _paste_at(self, scene_pos):
         """Paste clipboard widgets near the given position."""
-        if not self._clipboard or not hasattr(self, "_on_paste_callback"):
+        if not self._clipboard:
             return
         import copy
         offset = 20
@@ -1174,15 +1177,14 @@ class CanvasScene(QGraphicsScene):
             nd["x"] = min(DISPLAY_WIDTH - nd.get("width", 100), max(0, nd["x"] + offset))
             nd["y"] = min(DISPLAY_HEIGHT - nd.get("height", 100), max(0, nd["y"] + offset))
             widgets.append(nd)
-        self._on_paste_callback(widgets)
+        self.paste_requested.emit(widgets)
 
     def _delete_selected(self, selected):
         """Delete selected items."""
         for item in selected:
             self.removeItem(item)
         self._clear_handles()
-        if hasattr(self, "_on_delete_callback"):
-            self._on_delete_callback([item.widget_id for item in selected])
+        self.delete_requested.emit([item.widget_id for item in selected])
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Delete or event.key() == Qt.Key_Backspace:
@@ -3483,11 +3485,10 @@ class EditorMainWindow(QMainWindow):
         self.canvas_scene.widget_deselected.connect(self._on_canvas_widget_deselected)
         self.canvas_scene.widget_geometry_changed.connect(self._on_canvas_geometry_changed)
         self.canvas_scene.widget_dropped.connect(self._on_canvas_widget_dropped)
-        self.canvas_scene._on_delete_callback = self._on_canvas_widget_deleted
-        self.canvas_scene._on_paste_callback = self._on_canvas_paste
-        self.canvas_scene._on_move_to_page = self._on_move_widgets_to_page
-        self.canvas_scene._get_page_list = self._get_page_list
-        self.canvas_scene._current_page = self.current_page
+        self.canvas_scene.delete_requested.connect(self._on_canvas_widget_deleted)
+        self.canvas_scene.paste_requested.connect(self._on_canvas_paste)
+        self.canvas_scene.move_to_page_requested.connect(self._on_move_widgets_to_page)
+        self.canvas_scene.current_page_index = self.current_page
 
         # Menu bar
         self._create_menu_bar()
@@ -3700,7 +3701,7 @@ class EditorMainWindow(QMainWindow):
         self._canvas_items.clear()
 
         # Keep scene in sync with current page
-        self.canvas_scene._current_page = self.current_page
+        self.canvas_scene.current_page_index = self.current_page
 
         page = self.config_manager.get_page(self.current_page)
         if page is None:
@@ -3724,6 +3725,10 @@ class EditorMainWindow(QMainWindow):
         self.prev_page_btn.setEnabled(self.current_page > 0)
         self.next_page_btn.setEnabled(self.current_page < page_count - 1)
         self.remove_page_btn.setEnabled(page_count > 1)
+
+        # Keep scene in sync with page state
+        self.canvas_scene.current_page_index = self.current_page
+        self.canvas_scene.page_list = self._get_page_list()
 
         # Update page nav dot widgets
         if self.canvas_scene.page_count != page_count:
