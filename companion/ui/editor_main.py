@@ -19,115 +19,42 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QDialog,
     QGroupBox,
-    QComboBox,
     QSpinBox,
     QCheckBox,
-    QTableWidget,
-    QTableWidgetItem,
-    QHeaderView,
-    QColorDialog,
-    QAbstractItemView,
-    QScrollArea,
-    QListWidget,
-    QListWidgetItem,
-    QLineEdit,
-    QGraphicsScene,
-    QGraphicsView,
-    QGraphicsRectItem,
-    QGraphicsItem,
-    QSplitter,
     QTabWidget,
-    QMenu,
 )
-from PySide6.QtCore import Qt, Signal, QSize, QRectF, QPointF, QMimeData, QTimer, QMetaObject, Q_ARG
-from PySide6.QtGui import (
-    QColor,
-    QFont,
-    QKeySequence,
-    QPen,
-    QBrush,
-    QPainter,
-    QPixmap,
-    QDrag,
-)
+from PySide6.QtCore import Qt, QTimer, QMetaObject, Q_ARG
+from PySide6.QtGui import QKeySequence
 
 from companion.config_manager import (
-    get_config_manager,
     WIDGET_HOTKEY_BUTTON,
     WIDGET_STAT_MONITOR,
-    WIDGET_STATUS_BAR,
-    WIDGET_CLOCK,
-    WIDGET_TEXT_LABEL,
-    WIDGET_SEPARATOR,
     WIDGET_PAGE_NAV,
     WIDGET_TYPE_NAMES,
-    WIDGET_DEFAULT_SIZES,
-    WIDGET_TYPE_MAX,
     ACTION_HOTKEY,
     ACTION_MEDIA_KEY,
     ACTION_LAUNCH_APP,
     ACTION_SHELL_CMD,
     ACTION_OPEN_URL,
-    ACTION_DISPLAY_SETTINGS,
-    ACTION_DISPLAY_CLOCK,
-    ACTION_DISPLAY_PICTURE,
-    ACTION_PAGE_NEXT,
-    ACTION_PAGE_PREV,
-    ACTION_PAGE_GOTO,
-    ACTION_MODE_CYCLE,
-    ACTION_BRIGHTNESS,
-    ACTION_CONFIG_MODE,
-    ACTION_DDC,
-    ACTION_FOCUS_NEXT,
-    ACTION_FOCUS_PREV,
-    ACTION_FOCUS_ACTIVATE,
-    ACTION_TYPE_NAMES,
-    ENCODER_MODE_NAMES,
-    DDC_VCP_NAMES,
-    DDC_VCP_BRIGHTNESS,
-    DISPLAY_LOCAL_ACTIONS,
-    MOD_NONE,
-    MOD_CTRL,
-    MOD_SHIFT,
-    MOD_ALT,
-    MOD_GUI,
     DISPLAY_WIDTH,
     DISPLAY_HEIGHT,
-    SNAP_GRID,
-    WIDGET_MIN_W,
-    WIDGET_MIN_H,
     DEFAULT_CONFIG_DIR,
     DEFAULT_CONFIG_PATH,
     FACTORY_CONFIG_PATH,
     make_default_widget,
-    get_default_hardware_buttons,
-    get_default_encoder,
 )
-from companion.ui.icon_picker import IconPicker
-from companion.ui.keyboard_recorder import KeyboardRecorder
 from companion.ui.deploy_dialog import DeployDialog
 from companion.ui.slideshow_upload_dialog import SlideshowUploadDialog
 from companion.ui.no_scroll_combo import NoScrollComboBox
-from companion.ui.editor_constants import (
-    STAT_TYPE_OPTIONS,
-    STAT_TYPE_NAMES,
-    STAT_DEFAULT_COLORS,
-    STAT_PLACEHOLDERS,
-    STAT_VALUE_PLACEHOLDERS,
-    STAT_NAME_LABELS,
-    DEFAULT_STATS_HEADER,
-    MEDIA_KEY_OPTIONS,
-    WIDGET_PALETTE_ICONS,
-)
-from companion.ui.editor_utils import (
-    _get_fa_font_family,
-    _resolve_icon_source,
-    _load_icon_pixmap,
-    _int_to_qcolor,
-    _qcolor_to_int,
-)
+from companion.ui.editor_constants import STAT_TYPE_NAMES
 from companion.ui.templates import PAGE_TEMPLATES, _generate_smart_default_config
-from companion.lvgl_symbols import SYMBOL_BY_UTF8
+from companion.ui.canvas_items import CanvasWidgetItem
+from companion.ui.canvas_scene import CanvasScene, CanvasView, ItemsPalette
+from companion.ui.stats_panels import StatsHeaderPanel, NotificationsPanel
+from companion.ui.properties_panel import PropertiesPanel
+from companion.ui.settings_tab import SettingsTab
+from companion.ui.hardware_section import HardwareSection
+
 import os
 import logging
 import threading
@@ -137,12 +64,7 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# Stats Header Panel (unchanged from v1, still used for global stats config)
-from companion.ui.stats_panels import StatsHeaderPanel, NotificationsPanel
-from companion.ui.properties_panel import PropertiesPanel
-from companion.ui.settings_tab import SettingsTab
-from companion.ui.hardware_section import HardwareSection
-
+# Editor Main Window
 # ============================================================
 
 class EditorMainWindow(QMainWindow):
