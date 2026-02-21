@@ -8,6 +8,13 @@ static uint32_t last_espnow_rx_ms = 0;
 static bool in_config_mode = false;
 static bool pc_asleep = false;
 
+// Notification fragment reassembly buffer
+static uint8_t notif_buf[256];  // >= sizeof(NotificationMsg)
+static uint8_t notif_frags_expected = 0;
+static uint8_t notif_frags_received = 0;
+static uint32_t notif_start_ms = 0;
+static const uint32_t NOTIF_TIMEOUT_MS = 500;  // discard stale fragments
+
 void setup() {
     status_led_init();  // Yellow during init
 
@@ -59,12 +66,43 @@ void loop() {
                         Serial.println("TIME: relayed to display");
                     }
                     break;
-                case MSG_NOTIFICATION:
-                    if (payload_len >= sizeof(NotificationMsg)) {
-                        espnow_send(MSG_NOTIFICATION, payload, sizeof(NotificationMsg));
-                        Serial.printf("NOTIF: relayed (%d bytes)\n", (int)sizeof(NotificationMsg));
+                case MSG_NOTIFICATION: {
+                    // Fragmented: payload[0] = frag header (seq<<4 | total), payload[1..] = data
+                    if (payload_len < 2) break;
+                    uint8_t frag_header = payload[0];
+                    uint8_t seq = frag_header >> 4;
+                    uint8_t total = frag_header & 0x0F;
+                    uint8_t *frag_data = payload + 1;
+                    size_t frag_len = payload_len - 1;
+
+                    // Reset if new sequence or timeout
+                    if (seq == 0 || total != notif_frags_expected ||
+                        (millis() - notif_start_ms > NOTIF_TIMEOUT_MS && notif_frags_received > 0)) {
+                        memset(notif_buf, 0, sizeof(notif_buf));
+                        notif_frags_expected = total;
+                        notif_frags_received = 0;
+                        notif_start_ms = millis();
+                    }
+
+                    // Copy fragment data into reassembly buffer
+                    size_t offset = (size_t)seq * 61;  // 61 bytes per fragment
+                    if (offset + frag_len <= sizeof(notif_buf)) {
+                        memcpy(notif_buf + offset, frag_data, frag_len);
+                    }
+                    notif_frags_received++;
+
+                    if (notif_frags_received >= notif_frags_expected) {
+                        // All fragments received — relay complete notification
+                        espnow_send(MSG_NOTIFICATION, notif_buf, sizeof(NotificationMsg));
+                        Serial.printf("NOTIF: reassembled %d frags, relayed %d bytes\n",
+                                      notif_frags_expected, (int)sizeof(NotificationMsg));
+                        notif_frags_expected = 0;
+                        notif_frags_received = 0;
+                    } else {
+                        Serial.printf("NOTIF: frag %d/%d\n", seq + 1, total);
                     }
                     break;
+                }
                 case MSG_CONFIG_MODE:
                     espnow_send(MSG_CONFIG_MODE, nullptr, 0);
                     in_config_mode = true;
@@ -131,6 +169,17 @@ void loop() {
                     send_vendor_report(MSG_BUTTON_PRESS, payload, sizeof(ButtonPressMsg));
                     Serial.printf("BTN: page=%d widget=%d -> companion\n",
                                   payload[0], payload[1]);
+                }
+                break;
+            }
+            case MSG_DDC_CMD: {
+                if (payload_len >= sizeof(DdcCmdMsg)) {
+                    // Relay DDC command to companion via vendor HID
+                    send_vendor_report(MSG_DDC_CMD, payload, sizeof(DdcCmdMsg));
+                    Serial.println("DDC: relayed to companion");
+                    status_led_flash();
+                } else {
+                    Serial.printf("ERR: DDC payload too short (%d)\n", payload_len);
                 }
                 break;
             }

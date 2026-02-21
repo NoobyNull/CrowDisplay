@@ -20,6 +20,7 @@ Dependencies:
     pip install dbus-next  # Optional: for shutdown detection
 """
 
+import contextlib
 import hid
 import json
 import psutil
@@ -330,6 +331,10 @@ class NotificationListener:
     """Monitors D-Bus session bus for desktop notifications and forwards
     matching ones (by app name filter) via a callback.
 
+    Uses the org.freedesktop.DBus.Monitoring.BecomeMonitor API which works
+    with dbus-broker (the default on modern Arch/Fedora/systemd distros).
+    The older AddMatch+eavesdrop approach silently fails on dbus-broker.
+
     If app_filter is empty, all notifications are forwarded.
     """
 
@@ -355,36 +360,43 @@ class NotificationListener:
             return
 
         try:
-            # Add match rule to intercept Notify method calls
+            # Use BecomeMonitor API — works on both dbus-broker and dbus-daemon.
+            # This turns the connection into a passive monitor that sees all
+            # matching messages without needing eavesdrop permissions.
+            match_rule = "type='method_call',interface='org.freedesktop.Notifications',member='Notify'"
             await bus.call(
                 Message(
                     destination='org.freedesktop.DBus',
                     path='/org/freedesktop/DBus',
-                    interface='org.freedesktop.DBus',
-                    member='AddMatch',
-                    signature='s',
-                    body=["type='method_call',interface='org.freedesktop.Notifications',member='Notify'"]
+                    interface='org.freedesktop.DBus.Monitoring',
+                    member='BecomeMonitor',
+                    signature='asu',
+                    body=[[match_rule], 0]
                 )
             )
 
             def message_filter(msg):
-                if (msg.message_type == MessageType.METHOD_CALL and
-                    msg.interface == 'org.freedesktop.Notifications' and
-                    msg.member == 'Notify'):
-                    args = msg.body
-                    if len(args) >= 5:
-                        app_name = str(args[0])
-                        summary = str(args[3])
-                        body = str(args[4])
-                        if not self.app_filter or app_name in self.app_filter:
-                            logging.info("Forwarding notification: %s - %s", app_name, summary)
-                            try:
-                                self.callback(app_name, summary, body)
-                            except Exception as exc:
-                                logging.debug("Notification callback error: %s", exc)
+                # Must return True for all messages to prevent dbus-next from
+                # trying to send error replies (monitor connections can't send).
+                if not (msg.message_type == MessageType.METHOD_CALL and
+                        msg.interface == 'org.freedesktop.Notifications' and
+                        msg.member == 'Notify'):
+                    return True
+                args = msg.body
+                if len(args) >= 5:
+                    app_name = str(args[0])
+                    summary = str(args[3])
+                    body = str(args[4])
+                    if not self.app_filter or app_name in self.app_filter:
+                        logging.info("Forwarding notification: %s - %s", app_name, summary)
+                        try:
+                            self.callback(app_name, summary, body)
+                        except Exception as exc:
+                            logging.debug("Notification callback error: %s", exc)
+                return True
 
             bus.add_message_handler(message_filter)
-            logging.info("D-Bus notification listener active (filter: %s)",
+            logging.info("D-Bus notification monitor active (filter: %s)",
                          list(self.app_filter) if self.app_filter else "ALL")
             await bus.wait_for_disconnect()
         except Exception as exc:
@@ -407,8 +419,12 @@ def _run_notification_listener(app_filter, callback):
 def send_notification_to_display(device, app_name, summary, body, hid_lock=None):
     """Encode and send a MSG_NOTIFICATION payload to the bridge.
 
-    NotificationMsg: app_name[32] + summary[100] + body[116] = 248 bytes.
-    Packet: [0x00 report ID] [0x08 MSG_NOTIFICATION] [248-byte payload]
+    NotificationMsg is 248 bytes but USB HID vendor reports are 63 bytes max
+    (62 bytes payload after msg_type). We fragment into multiple reports:
+
+    Each report: [0x06 report_id] [MSG_NOTIFICATION] [seq<<4 | total] [data...]
+    Fragment header byte: high nibble = sequence (0-based), low nibble = total frags.
+    Data per fragment: 61 bytes (63 - msg_type - frag_header).
     """
     app_bytes = app_name.encode('utf-8')[:31] + b'\x00'
     sum_bytes = summary.encode('utf-8')[:99] + b'\x00'
@@ -418,12 +434,20 @@ def send_notification_to_display(device, app_name, summary, body, hid_lock=None)
                sum_bytes.ljust(100, b'\x00') +
                body_bytes.ljust(116, b'\x00'))
 
+    FRAG_DATA = 61  # 63 - 1 (msg_type) - 1 (frag header)
+    total_frags = (len(payload) + FRAG_DATA - 1) // FRAG_DATA
+
     try:
-        if hid_lock:
-            with hid_lock:
-                device.write(b"\x06" + bytes([MSG_NOTIFICATION]) + payload)
-        else:
-            device.write(b"\x06" + bytes([MSG_NOTIFICATION]) + payload)
+        lock = hid_lock if hid_lock else contextlib.nullcontext()
+        with lock:
+            for seq in range(total_frags):
+                chunk = payload[seq * FRAG_DATA:(seq + 1) * FRAG_DATA]
+                frag_byte = (seq << 4) | (total_frags & 0x0F)
+                report = b"\x06" + bytes([MSG_NOTIFICATION, frag_byte]) + chunk
+                # Pad to 63 bytes (report_id + 62 data) for consistent HID report size
+                report = report.ljust(63, b'\x00')
+                device.write(report)
+        logging.debug("Notification sent in %d fragments", total_frags)
     except (IOError, OSError) as exc:
         logging.debug("Failed to send notification: %s", exc)
 
@@ -1382,10 +1406,12 @@ class CompanionService:
             logging.info("Disk mount: %s", self._disk_mount)
 
     def reload_config(self):
-        """Reload config from disk."""
+        """Reload config from disk (stat types, lock-follow, notifications)."""
         if self._config_mgr.load_json_file(self._config_path):
             self._load_device_config()
-            logging.info("Config reloaded, %d stat types", len(self._enabled_stat_types))
+            self._follow_lock = load_follow_lock_config(self._config_path)
+            logging.info("Config reloaded, %d stat types, follow_lock=%s",
+                         len(self._enabled_stat_types), self._follow_lock)
 
     def _set_bridge_connected(self, connected):
         prev = self._bridge_connected
@@ -1510,8 +1536,14 @@ class CompanionService:
                      1.0 / UPDATE_INTERVAL, len(self._enabled_stat_types))
 
         pc_locked = False
-        TIME_SYNC_INTERVAL = 12 * 3600  # Sync time every 12 hours
-        last_time_sync = 0  # Force immediate sync on first loop
+
+        # Boot time-sync burst: send 3 syncs over ~25 seconds to cover
+        # lost ESP-NOW packets. The display has no RTC and starts at 00:00.
+        BOOT_SYNC_TIMES = [0, 8, 25]  # seconds after connect
+        boot_sync_remaining = list(BOOT_SYNC_TIMES)
+        boot_start = time.time()
+        last_periodic_sync = 0  # epoch; force immediate sync on first loop
+        PERIODIC_SYNC_INTERVAL = 60  # re-sync every 60s (handles display reboots)
 
         while self._running:
             if shutdown_event.is_set():
@@ -1521,16 +1553,33 @@ class CompanionService:
                 running = False
                 break
 
-            # Session lock/unlock detection
+            # Session lock/unlock detection (piggyback time sync on each event)
             if self._follow_lock:
                 if lock_event.is_set() and not pc_locked:
                     pc_locked = True
                     logging.info("Sending POWER_LOCKED to display")
                     send_power_state(self._device, POWER_LOCKED, self._hid_lock)
+                    send_time_sync(self._device, self._hid_lock)
                 elif unlock_event.is_set() and pc_locked:
                     pc_locked = False
                     logging.info("Sending POWER_WAKE to display (unlocked)")
                     send_power_state(self._device, POWER_WAKE, self._hid_lock)
+                    send_time_sync(self._device, self._hid_lock)
+
+            # Boot time-sync burst: fire syncs at scheduled offsets
+            if boot_sync_remaining:
+                elapsed = time.time() - boot_start
+                if elapsed >= boot_sync_remaining[0]:
+                    boot_sync_remaining.pop(0)
+                    send_time_sync(self._device, self._hid_lock)
+                    logging.info("Boot time sync sent (%.0fs after connect)", elapsed)
+
+            # Periodic time sync: display has no RTC, re-sync every 60s
+            # Covers display reboots (DTR reset) and clock drift
+            now_ts = time.time()
+            if now_ts - last_periodic_sync >= PERIODIC_SYNC_INTERVAL:
+                last_periodic_sync = now_ts
+                send_time_sync(self._device, self._hid_lock)
 
             time.sleep(UPDATE_INTERVAL)
             if not self._running:
@@ -1573,11 +1622,6 @@ class CompanionService:
                 prev_time = time.time()
                 continue
 
-            if self._device is not None:
-                now = time.time()
-                if now - last_time_sync >= TIME_SYNC_INTERVAL:
-                    send_time_sync(self._device, self._hid_lock)
-                    last_time_sync = now
 
         # Clean up
         if self._device is not None:

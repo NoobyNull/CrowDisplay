@@ -974,6 +974,8 @@ class EditorMainWindow(QMainWindow):
         finally:
             if self._companion_service:
                 self._companion_service.reclaim_bridge()
+                self._companion_service.reload_config()
+                logging.info("Companion service config reloaded after deploy")
 
     def _on_upload_pictures(self):
         """Upload pictures via bridge + WiFi. Uses queued list or opens file picker."""

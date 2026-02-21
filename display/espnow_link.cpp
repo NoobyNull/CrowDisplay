@@ -4,6 +4,9 @@
  *
  * Broadcasts hotkey/media key commands; receives ACKs and stats from bridge.
  * No pairing required -- bridge accepts from any peer.
+ *
+ * Uses a ring buffer for received messages to prevent race conditions
+ * between the WiFi task receive callback and the main loop poll.
  */
 
 #include "espnow_link.h"
@@ -17,16 +20,20 @@
 // Broadcast address (all 0xFF)
 static const uint8_t broadcast_addr[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-// ACK receive buffer (callback -> poll)
-static volatile bool ack_ready = false;
-static volatile uint8_t ack_status_buf = 0;
+// Ring buffer for received messages (callback -> poll)
+#define RX_QUEUE_SIZE 8
 
-// Generic message receive buffer (callback -> poll)
-// Stores one message at a time; newer messages overwrite older unread ones.
-static volatile bool msg_ready = false;
-static volatile uint8_t msg_type_buf = 0;
-static volatile uint8_t msg_payload_len_buf = 0;
-static uint8_t msg_payload_buf[PROTO_MAX_PAYLOAD];
+struct RxMsg {
+    uint8_t type;
+    uint8_t payload[PROTO_MAX_PAYLOAD];
+    uint8_t len;
+    bool is_ack;        // true = ACK message, false = generic message
+    uint8_t ack_status; // only valid when is_ack == true
+};
+
+static volatile RxMsg rx_queue[RX_QUEUE_SIZE];
+static volatile int rx_head = 0;
+static volatile int rx_tail = 0;
 
 // RSSI from last received packet
 static volatile int last_rssi = 0;
@@ -34,30 +41,33 @@ static volatile int last_rssi = 0;
 // ESP-NOW receive callback (runs in WiFi task context)
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
-    const uint8_t *mac = info->src_addr;
     if (info->rx_ctrl) last_rssi = info->rx_ctrl->rssi;
 #else
 static void on_recv(const uint8_t *mac, const uint8_t *data, int len) {
 #endif
     if (len < 1) return;  // need at least type byte
 
+    int next = (rx_head + 1) % RX_QUEUE_SIZE;
+    if (next == rx_tail) return;  // queue full, drop
+
     uint8_t msg_type = data[0];
 
     if (msg_type == MSG_HOTKEY_ACK && len >= 2) {
-        ack_status_buf = data[1];
-        ack_ready = true;
+        rx_queue[rx_head].is_ack = true;
+        rx_queue[rx_head].ack_status = data[1];
+        rx_queue[rx_head].type = msg_type;
+        rx_queue[rx_head].len = 0;
     } else {
-        // Queue as generic message for espnow_poll_msg()
-        // Supports zero-payload messages (e.g. CONFIG_MODE, CONFIG_DONE)
+        rx_queue[rx_head].is_ack = false;
+        rx_queue[rx_head].type = msg_type;
         uint8_t plen = (len > 1) ? (uint8_t)(len - 1) : 0;
         if (plen > PROTO_MAX_PAYLOAD) plen = PROTO_MAX_PAYLOAD;
         if (plen > 0) {
-            memcpy(msg_payload_buf, &data[1], plen);
+            memcpy((void *)rx_queue[rx_head].payload, &data[1], plen);
         }
-        msg_payload_len_buf = plen;
-        msg_type_buf = msg_type;
-        msg_ready = true;
+        rx_queue[rx_head].len = plen;
     }
+    rx_head = next;  // publish only after all fields are written
 }
 
 void espnow_link_init() {
@@ -121,22 +131,29 @@ void send_button_press_to_bridge(uint8_t page_index, uint8_t widget_index) {
 }
 
 bool espnow_poll_ack(uint8_t &status) {
-    if (ack_ready) {
-        ack_ready = false;
-        status = ack_status_buf;
-        return true;
+    // Scan ring buffer for ACK messages, skip non-ACK entries
+    while (rx_tail != rx_head) {
+        if (rx_queue[rx_tail].is_ack) {
+            status = rx_queue[rx_tail].ack_status;
+            rx_tail = (rx_tail + 1) % RX_QUEUE_SIZE;
+            return true;
+        }
+        break;  // stop at first non-ACK; let poll_msg handle it
     }
     return false;
 }
 
 bool espnow_poll_msg(uint8_t &type, uint8_t *payload, uint8_t &payload_len) {
-    if (msg_ready) {
-        msg_ready = false;
-        type = msg_type_buf;
-        payload_len = msg_payload_len_buf;
-        if (payload_len > 0) {
-            memcpy(payload, msg_payload_buf, payload_len);
+    while (rx_tail != rx_head) {
+        if (rx_queue[rx_tail].is_ack) {
+            break;  // stop at ACK; let poll_ack handle it
         }
+        type = rx_queue[rx_tail].type;
+        payload_len = rx_queue[rx_tail].len;
+        if (payload_len > 0) {
+            memcpy(payload, (const void *)rx_queue[rx_tail].payload, payload_len);
+        }
+        rx_tail = (rx_tail + 1) % RX_QUEUE_SIZE;
         return true;
     }
     return false;

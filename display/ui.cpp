@@ -38,6 +38,7 @@ static const AppConfig *g_active_config = nullptr;
 
 // Page management (replaces tabview)
 static std::vector<lv_obj_t *> page_containers;
+static std::vector<std::vector<lv_obj_t *>> page_widget_objs;  // [page][widget] -> LVGL obj
 static int current_page = 0;
 
 // Main screen
@@ -51,6 +52,9 @@ static lv_obj_t *clock_rssi_label = nullptr;
 // Config mode screen
 static lv_obj_t *config_screen = nullptr;
 static lv_obj_t *config_info_label = nullptr;
+
+// Clock screen stats labels
+static lv_obj_t *clock_stats_label = nullptr;
 
 // Analog clock widgets
 static lv_obj_t *analog_clock_face = nullptr;
@@ -381,22 +385,7 @@ static void render_hotkey_button(lv_obj_t *parent, const WidgetConfig *cfg, uint
         if (SD.exists(cfg->icon_path.c_str())) {
             lv_obj_t *img = lv_img_create(btn);
             lv_img_set_src(img, img_src.c_str());
-            // Scale image to fit button area — larger when icon-only
-            lv_coord_t max_icon_w, max_icon_h;
-            if (icon_only) {
-                max_icon_w = cfg->width * 8 / 10;
-                max_icon_h = cfg->height * 8 / 10;
-            } else {
-                max_icon_w = cfg->width * 6 / 10;
-                max_icon_h = cfg->height * 4 / 10;
-            }
-            lv_img_header_t header;
-            if (lv_img_decoder_get_info(img_src.c_str(), &header) == LV_RES_OK && header.w > 0 && header.h > 0) {
-                uint16_t zoom_w = (uint16_t)((uint32_t)max_icon_w * 256 / header.w);
-                uint16_t zoom_h = (uint16_t)((uint32_t)max_icon_h * 256 / header.h);
-                uint16_t zoom = (zoom_w < zoom_h) ? zoom_w : zoom_h;
-                lv_img_set_zoom(img, zoom);
-            }
+            // Display at 1:1 — companion already resized to exact pixel size
             icon_rendered = true;
         } else {
             Serial.printf("[ui] icon_path '%s' not found on SD, falling back to symbol\n", cfg->icon_path.c_str());
@@ -797,7 +786,8 @@ static void update_page_nav_indicators() {
 // ============================================================
 //  Widget Dispatcher
 // ============================================================
-static void render_widget(lv_obj_t *parent, const WidgetConfig *cfg, uint8_t page_idx, uint8_t widget_idx) {
+static lv_obj_t* render_widget(lv_obj_t *parent, const WidgetConfig *cfg, uint8_t page_idx, uint8_t widget_idx) {
+    int before = (int)lv_obj_get_child_cnt(parent);
     switch (cfg->widget_type) {
         case WIDGET_HOTKEY_BUTTON: render_hotkey_button(parent, cfg, page_idx, widget_idx); break;
         case WIDGET_STAT_MONITOR:  render_stat_monitor(parent, cfg);  break;
@@ -810,6 +800,8 @@ static void render_widget(lv_obj_t *parent, const WidgetConfig *cfg, uint8_t pag
             Serial.printf("[ui] Unknown widget type %d, skipping\n", cfg->widget_type);
             break;
     }
+    int after = (int)lv_obj_get_child_cnt(parent);
+    return (after > before) ? lv_obj_get_child(parent, before) : nullptr;
 }
 
 // ============================================================
@@ -853,11 +845,9 @@ int ui_get_current_page() { return current_page; }
 int ui_get_page_count() { return (int)page_containers.size(); }
 
 lv_obj_t* ui_get_widget_obj(int page_idx, int widget_idx) {
-    if (page_idx < 0 || page_idx >= (int)page_containers.size()) return nullptr;
-    lv_obj_t *page = page_containers[page_idx];
-    int child_count = (int)lv_obj_get_child_cnt(page);
-    if (widget_idx < 0 || widget_idx >= child_count) return nullptr;
-    return lv_obj_get_child(page, widget_idx);
+    if (page_idx < 0 || page_idx >= (int)page_widget_objs.size()) return nullptr;
+    if (widget_idx < 0 || widget_idx >= (int)page_widget_objs[page_idx].size()) return nullptr;
+    return page_widget_objs[page_idx][widget_idx];
 }
 
 // ============================================================
@@ -870,6 +860,7 @@ static void create_pages(lv_obj_t *screen, const AppConfig *cfg) {
     page_nav_refs.clear();
     clock_widget_labels.clear();
     page_containers.clear();
+    page_widget_objs.clear();
     btn_event_count = 0;
 
     const ProfileConfig *active = cfg->get_active_profile();
@@ -898,14 +889,26 @@ static void create_pages(lv_obj_t *screen, const AppConfig *cfg) {
             std::string bg_src = "S:" + page.bg_image;
             lv_obj_t *bg = lv_img_create(container);
             lv_img_set_src(bg, bg_src.c_str());
-            lv_obj_set_size(bg, DISPLAY_WIDTH, DISPLAY_HEIGHT);
-            lv_obj_set_pos(bg, 0, 0);
+            // SJPG is pre-rendered at 800x480 by companion; if the source
+            // image is a different size, scale to cover the full screen.
+            lv_img_header_t header;
+            if (lv_img_decoder_get_info(bg_src.c_str(), &header) == LV_RES_OK
+                && header.w > 0 && header.h > 0
+                && (header.w != DISPLAY_WIDTH || header.h != DISPLAY_HEIGHT)) {
+                uint16_t zoom_w = (uint16_t)((uint32_t)DISPLAY_WIDTH * 256 / header.w);
+                uint16_t zoom_h = (uint16_t)((uint32_t)DISPLAY_HEIGHT * 256 / header.h);
+                uint16_t zoom = (zoom_w > zoom_h) ? zoom_w : zoom_h;  // cover (not contain)
+                lv_img_set_zoom(bg, zoom);
+            }
+            lv_obj_center(bg);
             lv_obj_clear_flag(bg, LV_OBJ_FLAG_CLICKABLE);
         }
 
-        // Render all widgets
+        // Render all widgets and track their LVGL objects
+        std::vector<lv_obj_t *> widget_objs;
         for (size_t wi = 0; wi < page.widgets.size(); wi++) {
-            render_widget(container, &page.widgets[wi], (uint8_t)pi, (uint8_t)wi);
+            lv_obj_t *obj = render_widget(container, &page.widgets[wi], (uint8_t)pi, (uint8_t)wi);
+            widget_objs.push_back(obj);
         }
 
         // Hide all pages except the first
@@ -914,6 +917,7 @@ static void create_pages(lv_obj_t *screen, const AppConfig *cfg) {
         }
 
         page_containers.push_back(container);
+        page_widget_objs.push_back(std::move(widget_objs));
     }
 
     current_page = 0;
@@ -925,7 +929,27 @@ static void create_pages(lv_obj_t *screen, const AppConfig *cfg) {
 // ============================================================
 //  Public: update_stats()
 // ============================================================
+// Cached stat values for clock/standby screens
+static uint16_t cached_cpu = 0xFFFF, cached_ram = 0xFFFF, cached_gpu = 0xFFFF;
+
+static void update_clock_stats_label() {
+    if (!clock_stats_label) return;
+    auto pct = [](uint16_t v) -> String { return v == 0xFFFF ? "--%" : String(v) + "%"; };
+    String line = "CPU " + pct(cached_cpu) + " | RAM " + pct(cached_ram) + " | GPU " + pct(cached_gpu);
+    lv_label_set_text(clock_stats_label, line.c_str());
+
+    // Also update standby if it exists
+    if (standby_stats_label) {
+        lv_label_set_text(standby_stats_label, line.c_str());
+    }
+}
+
 static void update_stat_widget(uint8_t type, uint16_t value) {
+    // Cache key stats for clock/standby screens
+    if (type == STAT_CPU_PERCENT) cached_cpu = value;
+    else if (type == STAT_RAM_PERCENT) cached_ram = value;
+    else if (type == STAT_GPU_PERCENT) cached_gpu = value;
+
     for (auto &ref : stat_widget_refs) {
         if (ref.stat_type == type && ref.label) {
             if (ref.value_position == 0) {
@@ -956,6 +980,8 @@ void update_stats(const uint8_t *data, uint8_t len) {
     } else {
         tlv_decode_stats(data, len, update_stat_widget);
     }
+
+    update_clock_stats_label();
 }
 
 // ============================================================
@@ -1017,12 +1043,11 @@ void show_notification_toast(const char *app_name, const char *summary, const ch
     lv_obj_set_size(toast, 600, 120);
     lv_obj_align(toast, LV_ALIGN_TOP_RIGHT, -20, 50);
     lv_obj_set_style_bg_color(toast, lv_color_hex(0x1a1a2e), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(toast, LV_OPA_90, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(toast, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_color(toast, lv_color_hex(CLR_BLUE), LV_PART_MAIN);
     lv_obj_set_style_border_width(toast, 2, LV_PART_MAIN);
     lv_obj_set_style_radius(toast, 12, LV_PART_MAIN);
-    lv_obj_set_style_shadow_width(toast, 12, LV_PART_MAIN);
-    lv_obj_set_style_shadow_opa(toast, LV_OPA_40, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(toast, 0, LV_PART_MAIN);
     lv_obj_clear_flag(toast, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *app_lbl = lv_label_create(toast);
@@ -1057,12 +1082,13 @@ void show_notification_toast(const char *app_name, const char *summary, const ch
         active_toast = nullptr;
     }, LV_EVENT_CLICKED, nullptr);
 
+    // Auto-dismiss after 5 seconds (no opacity animation — avoids alpha blending)
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, toast);
-    lv_anim_set_values(&a, LV_OPA_90, LV_OPA_TRANSP);
-    lv_anim_set_exec_cb(&a, toast_anim_opa_cb);
-    lv_anim_set_time(&a, 300);
+    lv_anim_set_values(&a, 0, 1);
+    lv_anim_set_exec_cb(&a, nullptr);
+    lv_anim_set_time(&a, 1);
     lv_anim_set_delay(&a, 5000);
     lv_anim_set_ready_cb(&a, [](lv_anim_t *anim) {
         lv_obj_del((lv_obj_t *)anim->var);
@@ -1092,6 +1118,8 @@ void update_clock_time() {
     time_t now = time(nullptr);
     struct tm *tm_info = localtime(&now);
     if (!tm_info) return;
+    // Don't update display until time has been synced from companion
+    if (now < 1000000000) return;
 
     bool use_analog = g_active_config ? g_active_config->clock_analog : false;
 
@@ -1316,7 +1344,7 @@ static void init_standby_mode() {
     }
     time_t now = time(nullptr);
     struct tm *tm_info = localtime(&now);
-    if (standby_time_label && tm_info)
+    if (standby_time_label && tm_info && now > 1000000000)
         lv_label_set_text_fmt(standby_time_label, "%02d:%02d", tm_info->tm_hour, tm_info->tm_min);
 }
 
@@ -1324,7 +1352,8 @@ void update_standby_time() {
     if (!standby_time_label) return;
     time_t now = time(nullptr);
     struct tm *tm_info = localtime(&now);
-    if (tm_info) lv_label_set_text_fmt(standby_time_label, "%02d:%02d", tm_info->tm_hour, tm_info->tm_min);
+    if (tm_info && now > 1000000000)
+        lv_label_set_text_fmt(standby_time_label, "%02d:%02d", tm_info->tm_hour, tm_info->tm_min);
 }
 
 void update_standby_stats(const StatsPayload *stats) {
@@ -1426,6 +1455,14 @@ void create_ui(const AppConfig* cfg) {
     lv_obj_set_style_text_font(clock_rssi_label, &lv_font_montserrat_28, LV_PART_MAIN);
     lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
     lv_obj_align(clock_rssi_label, LV_ALIGN_CENTER, 0, 30);
+
+    // Stats line (CPU / RAM / GPU)
+    clock_stats_label = lv_label_create(clock_screen);
+    lv_label_set_text(clock_stats_label, "CPU --% | RAM --% | GPU --%");
+    lv_obj_set_style_text_font(clock_stats_label, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(clock_stats_label, lv_color_hex(0x888888), LV_PART_MAIN);
+    lv_obj_align(clock_stats_label, LV_ALIGN_CENTER, 0, 80);
+
     create_analog_clock_widgets(clock_screen);
 
     // Config screen
@@ -1473,6 +1510,7 @@ void rebuild_ui(const AppConfig* cfg) {
         lv_obj_del(p);
     }
     page_containers.clear();
+    page_widget_objs.clear();
     stat_widget_refs.clear();
     status_bar_refs.clear();
     page_nav_refs.clear();
