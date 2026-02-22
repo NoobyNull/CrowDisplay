@@ -102,6 +102,14 @@ static std::vector<lv_obj_t *> page_nav_refs;
 // Clock widget labels on pages (for periodic time updates)
 static std::vector<lv_obj_t *> clock_widget_labels;
 
+// Analog clock widgets on pages (for periodic hand updates)
+struct AnalogClockRef {
+    lv_obj_t *face;       // Arc object for the clock face
+    lv_obj_t *hour_hand;  // Line object for hour hand
+    lv_obj_t *min_hand;   // Line object for minute hand
+};
+static std::vector<AnalogClockRef> analog_clock_widgets;
+
 // Forward declarations
 void update_clock_time();
 void show_config_screen();
@@ -667,7 +675,28 @@ static void render_clock(lv_obj_t *parent, const WidgetConfig *cfg) {
         lv_obj_remove_style(face, NULL, LV_PART_INDICATOR);
         lv_obj_set_style_arc_width(face, 3, LV_PART_MAIN);
         lv_obj_set_style_arc_color(face, lv_color_hex(0x888888), LV_PART_MAIN);
-        // TODO: analog clock widget hands not yet wired to periodic update
+
+        // Create hour and minute hands
+        int cx = cfg->x + cfg->width / 2;
+        int cy = cfg->y + cfg->height / 2;
+        int hand_radius = sz / 2;
+
+        lv_point_t hour_pts[2] = {{(lv_coord_t)cx, (lv_coord_t)cy}, {(lv_coord_t)cx, (lv_coord_t)(cy - hand_radius / 2)}};
+        lv_obj_t *hour_hand = lv_line_create(container);
+        lv_line_set_points(hour_hand, hour_pts, 2);
+        lv_obj_set_style_line_width(hour_hand, 4, LV_PART_MAIN);
+        lv_obj_set_style_line_color(hour_hand, lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_line_rounded(hour_hand, true, LV_PART_MAIN);
+
+        lv_point_t min_pts[2] = {{(lv_coord_t)cx, (lv_coord_t)cy}, {(lv_coord_t)cx, (lv_coord_t)(cy - hand_radius)}};
+        lv_obj_t *min_hand = lv_line_create(container);
+        lv_line_set_points(min_hand, min_pts, 2);
+        lv_obj_set_style_line_width(min_hand, 2, LV_PART_MAIN);
+        lv_obj_set_style_line_color(min_hand, lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_line_rounded(min_hand, true, LV_PART_MAIN);
+
+        // Track for periodic updates
+        analog_clock_widgets.push_back({face, hour_hand, min_hand});
     } else {
         // Digital clock
         lv_obj_t *lbl = lv_label_create(container);
@@ -859,6 +888,7 @@ static void create_pages(lv_obj_t *screen, const AppConfig *cfg) {
     status_bar_refs.clear();
     page_nav_refs.clear();
     clock_widget_labels.clear();
+    analog_clock_widgets.clear();
     page_containers.clear();
     page_widget_objs.clear();
     btn_event_count = 0;
@@ -1166,10 +1196,11 @@ void update_clock_time() {
 //  Page Clock Widget Updates
 // ============================================================
 void update_page_clocks() {
-    if (clock_widget_labels.empty()) return;
     time_t now = time(nullptr);
     struct tm *tm_info = localtime(&now);
     if (!tm_info || now <= 1000000000) return;
+
+    // Update digital clock labels
     bool use_24h = g_active_config ? g_active_config->display_settings.clock_24h : true;
     for (lv_obj_t *lbl : clock_widget_labels) {
         if (!lbl) continue;
@@ -1181,6 +1212,36 @@ void update_page_clocks() {
             lv_label_set_text_fmt(lbl, "%d:%02d%s", hour12, tm_info->tm_min,
                                   tm_info->tm_hour >= 12 ? "p" : "a");
         }
+    }
+
+    // Update analog clock hands
+    for (const auto &ref : analog_clock_widgets) {
+        if (!ref.face || !ref.hour_hand || !ref.min_hand) continue;
+
+        float hour_angle = (tm_info->tm_hour % 12) * 30.0f + tm_info->tm_min * 0.5f;
+        float min_angle = tm_info->tm_min * 6.0f;
+
+        // Get the center of the widget from its parent
+        lv_obj_t *parent = lv_obj_get_parent(ref.face);
+        if (!parent) continue;
+
+        lv_area_t area;
+        lv_obj_get_coords(parent, &area);
+        int cx = area.x1 + (area.x2 - area.x1) / 2;
+        int cy = area.y1 + (area.y2 - area.y1) / 2;
+
+        float hour_rad = (hour_angle - 90.0f) * M_PI / 180.0f;
+        float min_rad = (min_angle - 90.0f) * M_PI / 180.0f;
+
+        lv_point_t hour_pts[2];
+        hour_pts[0] = {(lv_coord_t)cx, (lv_coord_t)cy};
+        hour_pts[1] = {(lv_coord_t)(cx + 40 * cosf(hour_rad)), (lv_coord_t)(cy + 40 * sinf(hour_rad))};
+        lv_line_set_points(ref.hour_hand, hour_pts, 2);
+
+        lv_point_t min_pts[2];
+        min_pts[0] = {(lv_coord_t)cx, (lv_coord_t)cy};
+        min_pts[1] = {(lv_coord_t)(cx + 60 * cosf(min_rad)), (lv_coord_t)(cy + 60 * sinf(min_rad))};
+        lv_line_set_points(ref.min_hand, min_pts, 2);
     }
 }
 
@@ -1515,6 +1576,7 @@ void rebuild_ui(const AppConfig* cfg) {
     status_bar_refs.clear();
     page_nav_refs.clear();
     clock_widget_labels.clear();
+    analog_clock_widgets.clear();
 
     g_active_config = cfg;
 
