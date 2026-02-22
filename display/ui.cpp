@@ -125,98 +125,77 @@ static void update_page_nav_indicators();
 // ============================================================
 //  Stat helpers
 // ============================================================
+
+// Data-driven stat formatting info lookup — single source of truth for all stat metadata
+// Format: stat_type, name, unit, placeholder
+// Note: entries must be in same order as enum StatType in protocol.h
+static const char *stat_names[] = {
+    "CPU", "RAM", "GPU", "CPU", "GPU", "Disk", LV_SYMBOL_UPLOAD, LV_SYMBOL_DOWNLOAD,
+    "CPU", "GPU", "Swap", "Up", "Bat", "Fan", "Load", "Proc", "VRAM", "GPU",
+    LV_SYMBOL_DOWNLOAD " R", LV_SYMBOL_UPLOAD " W", "Disp", "User", "Sys"
+};
+
+static const char *stat_units[] = {
+    "%", "%", "%", "\xC2\xB0""C", "\xC2\xB0""C", "%", " KB/s", " KB/s",
+    " MHz", " MHz", "%", "h", "%", "", "", "", "%", "W",
+    " KB/s", " KB/s", "h", "", ""
+};
+
+static const char *stat_placeholders[] = {
+    "--%", "--%", "--%", "--\xC2\xB0""C", "--\xC2\xB0""C", "--%", LV_SYMBOL_UPLOAD " -- KB/s", LV_SYMBOL_DOWNLOAD " -- KB/s",
+    "-- MHz", "-- MHz", "--%", "--h", "--%", "--", "--", "--", "--%", "--W",
+    LV_SYMBOL_DOWNLOAD " R -- KB/s", LV_SYMBOL_UPLOAD " W -- KB/s", "--h", "--", "--"
+};
+
 static const char *get_stat_name(uint8_t type) {
-    switch (type) {
-        case STAT_CPU_PERCENT:    return "CPU";
-        case STAT_RAM_PERCENT:    return "RAM";
-        case STAT_GPU_PERCENT:    return "GPU";
-        case STAT_CPU_TEMP:       return "CPU";
-        case STAT_GPU_TEMP:       return "GPU";
-        case STAT_DISK_PERCENT:   return "Disk";
-        case STAT_NET_UP:         return LV_SYMBOL_UPLOAD;
-        case STAT_NET_DOWN:       return LV_SYMBOL_DOWNLOAD;
-        case STAT_CPU_FREQ:       return "CPU";
-        case STAT_GPU_FREQ:       return "GPU";
-        case STAT_SWAP_PERCENT:   return "Swap";
-        case STAT_UPTIME_HOURS:   return "Up";
-        case STAT_BATTERY_PCT:    return "Bat";
-        case STAT_FAN_RPM:        return "Fan";
-        case STAT_LOAD_AVG:       return "Load";
-        case STAT_PROC_COUNT:     return "Proc";
-        case STAT_GPU_MEM_PCT:    return "VRAM";
-        case STAT_GPU_POWER_W:    return "GPU";
-        case STAT_DISK_READ_KBS:  return LV_SYMBOL_DOWNLOAD " R";
-        case STAT_DISK_WRITE_KBS: return LV_SYMBOL_UPLOAD " W";
-        case STAT_DISPLAY_UPTIME: return "Disp";
-        case STAT_PROC_USER:      return "User";
-        case STAT_PROC_SYSTEM:    return "Sys";
-        default:                  return "?";
+    if (type < (uint8_t)(sizeof(stat_names) / sizeof(stat_names[0]))) {
+        return stat_names[type];
     }
+    return "?";
 }
 
 static void format_stat_value(lv_obj_t *lbl, uint8_t type, uint16_t value) {
     const char *name = get_stat_name(type);
-    switch (type) {
-        case STAT_CPU_PERCENT: case STAT_RAM_PERCENT: case STAT_GPU_PERCENT:
-        case STAT_DISK_PERCENT: case STAT_SWAP_PERCENT: case STAT_BATTERY_PCT:
-        case STAT_GPU_MEM_PCT:
-            if ((value & 0xFF) == 0xFF) lv_label_set_text_fmt(lbl, "%s N/A", name);
-            else lv_label_set_text_fmt(lbl, "%s %d%%", name, value & 0xFF);
-            break;
-        case STAT_CPU_TEMP: case STAT_GPU_TEMP:
-            if ((value & 0xFF) == 0xFF) lv_label_set_text_fmt(lbl, "%s N/A", name);
-            else lv_label_set_text_fmt(lbl, "%s %d\xC2\xB0""C", name, value & 0xFF);
-            break;
-        case STAT_NET_UP: case STAT_NET_DOWN:
-            if (value >= 1024) lv_label_set_text_fmt(lbl, "%s %.1f MB/s", name, value / 1024.0f);
-            else lv_label_set_text_fmt(lbl, "%s %d KB/s", name, value);
-            break;
-        case STAT_CPU_FREQ: case STAT_GPU_FREQ:
-            lv_label_set_text_fmt(lbl, "%s %d MHz", name, value); break;
-        case STAT_UPTIME_HOURS: case STAT_DISPLAY_UPTIME:
-            lv_label_set_text_fmt(lbl, "%s %dh", name, value); break;
-        case STAT_FAN_RPM: case STAT_PROC_COUNT:
-        case STAT_PROC_USER: case STAT_PROC_SYSTEM:
-            lv_label_set_text_fmt(lbl, "%s %d", name, value); break;
-        case STAT_LOAD_AVG:
-            lv_label_set_text_fmt(lbl, "%s %.2f", name, value / 100.0f); break;
-        case STAT_GPU_POWER_W:
-            lv_label_set_text_fmt(lbl, "%s %dW", name, value); break;
-        case STAT_DISK_READ_KBS: case STAT_DISK_WRITE_KBS:
-            if (value >= 1024) lv_label_set_text_fmt(lbl, "%s %.1f MB/s", name, value / 1024.0f);
-            else lv_label_set_text_fmt(lbl, "%s %d KB/s", name, value);
-            break;
-        default:
-            lv_label_set_text_fmt(lbl, "? %d", value); break;
-    }
-}
 
-static const char *get_stat_placeholder(uint8_t type) {
-    switch (type) {
-        case STAT_CPU_PERCENT:    return "CPU --%";
-        case STAT_RAM_PERCENT:    return "RAM --%";
-        case STAT_GPU_PERCENT:    return "GPU --%";
-        case STAT_CPU_TEMP:       return "CPU --\xC2\xB0""C";
-        case STAT_GPU_TEMP:       return "GPU --\xC2\xB0""C";
-        case STAT_DISK_PERCENT:   return "Disk --%";
-        case STAT_NET_UP:         return LV_SYMBOL_UPLOAD " -- KB/s";
-        case STAT_NET_DOWN:       return LV_SYMBOL_DOWNLOAD " -- KB/s";
-        case STAT_CPU_FREQ:       return "CPU -- MHz";
-        case STAT_GPU_FREQ:       return "GPU -- MHz";
-        case STAT_SWAP_PERCENT:   return "Swap --%";
-        case STAT_UPTIME_HOURS:   return "Up --h";
-        case STAT_BATTERY_PCT:    return "Bat --%";
-        case STAT_FAN_RPM:        return "Fan --";
-        case STAT_LOAD_AVG:       return "Load --";
-        case STAT_PROC_COUNT:     return "Proc --";
-        case STAT_GPU_MEM_PCT:    return "VRAM --%";
-        case STAT_GPU_POWER_W:    return "GPU --W";
-        case STAT_DISK_READ_KBS:  return LV_SYMBOL_DOWNLOAD " R -- KB/s";
-        case STAT_DISK_WRITE_KBS: return LV_SYMBOL_UPLOAD " W -- KB/s";
-        case STAT_DISPLAY_UPTIME: return "Disp --h";
-        case STAT_PROC_USER:      return "User --";
-        case STAT_PROC_SYSTEM:    return "Sys --";
-        default:                  return "---";
+    // Special cases: percentage-like types
+    if (type == STAT_CPU_PERCENT || type == STAT_RAM_PERCENT || type == STAT_GPU_PERCENT ||
+        type == STAT_DISK_PERCENT || type == STAT_SWAP_PERCENT || type == STAT_BATTERY_PCT ||
+        type == STAT_GPU_MEM_PCT) {
+        if ((value & 0xFF) == 0xFF) lv_label_set_text_fmt(lbl, "%s N/A", name);
+        else lv_label_set_text_fmt(lbl, "%s %d%%", name, value & 0xFF);
+    }
+    // Temperature types
+    else if (type == STAT_CPU_TEMP || type == STAT_GPU_TEMP) {
+        if ((value & 0xFF) == 0xFF) lv_label_set_text_fmt(lbl, "%s N/A", name);
+        else lv_label_set_text_fmt(lbl, "%s %d%s", name, value & 0xFF, stat_units[type]);
+    }
+    // Network and disk speed types
+    else if (type == STAT_NET_UP || type == STAT_NET_DOWN || type == STAT_DISK_READ_KBS || type == STAT_DISK_WRITE_KBS) {
+        if (value >= 1024) lv_label_set_text_fmt(lbl, "%s %.1f MB/s", name, value / 1024.0f);
+        else lv_label_set_text_fmt(lbl, "%s %d KB/s", name, value);
+    }
+    // Frequency types
+    else if (type == STAT_CPU_FREQ || type == STAT_GPU_FREQ) {
+        lv_label_set_text_fmt(lbl, "%s %d MHz", name, value);
+    }
+    // Uptime types
+    else if (type == STAT_UPTIME_HOURS || type == STAT_DISPLAY_UPTIME) {
+        lv_label_set_text_fmt(lbl, "%s %dh", name, value);
+    }
+    // Integer types (counts, RPM, etc.)
+    else if (type == STAT_FAN_RPM || type == STAT_PROC_COUNT || type == STAT_PROC_USER || type == STAT_PROC_SYSTEM) {
+        lv_label_set_text_fmt(lbl, "%s %d", name, value);
+    }
+    // Load average (decimal)
+    else if (type == STAT_LOAD_AVG) {
+        lv_label_set_text_fmt(lbl, "%s %.2f", name, value / 100.0f);
+    }
+    // GPU power
+    else if (type == STAT_GPU_POWER_W) {
+        lv_label_set_text_fmt(lbl, "%s %dW", name, value);
+    }
+    else {
+        lv_label_set_text_fmt(lbl, "? %d", value);
     }
 }
 
@@ -434,54 +413,71 @@ static void render_hotkey_button(lv_obj_t *parent, const WidgetConfig *cfg, uint
 
 // Format just the value part (no name prefix) for split-label mode
 static void format_stat_value_only(lv_obj_t *lbl, uint8_t type, uint16_t value) {
-    switch (type) {
-        case STAT_CPU_PERCENT: case STAT_RAM_PERCENT: case STAT_GPU_PERCENT:
-        case STAT_DISK_PERCENT: case STAT_SWAP_PERCENT: case STAT_BATTERY_PCT:
-        case STAT_GPU_MEM_PCT:
-            if ((value & 0xFF) == 0xFF) lv_label_set_text(lbl, "N/A");
-            else lv_label_set_text_fmt(lbl, "%d%%", value & 0xFF);
-            break;
-        case STAT_CPU_TEMP: case STAT_GPU_TEMP:
-            if ((value & 0xFF) == 0xFF) lv_label_set_text(lbl, "N/A");
-            else lv_label_set_text_fmt(lbl, "%d\xC2\xB0""C", value & 0xFF);
-            break;
-        case STAT_NET_UP: case STAT_NET_DOWN:
-        case STAT_DISK_READ_KBS: case STAT_DISK_WRITE_KBS:
-            if (value >= 1024) lv_label_set_text_fmt(lbl, "%.1f MB/s", value / 1024.0f);
-            else lv_label_set_text_fmt(lbl, "%d KB/s", value);
-            break;
-        case STAT_CPU_FREQ: case STAT_GPU_FREQ:
-            lv_label_set_text_fmt(lbl, "%d MHz", value); break;
-        case STAT_UPTIME_HOURS: case STAT_DISPLAY_UPTIME:
-            lv_label_set_text_fmt(lbl, "%dh", value); break;
-        case STAT_FAN_RPM: case STAT_PROC_COUNT:
-        case STAT_PROC_USER: case STAT_PROC_SYSTEM:
-            lv_label_set_text_fmt(lbl, "%d", value); break;
-        case STAT_LOAD_AVG:
-            lv_label_set_text_fmt(lbl, "%.2f", value / 100.0f); break;
-        case STAT_GPU_POWER_W:
-            lv_label_set_text_fmt(lbl, "%dW", value); break;
-        default:
-            lv_label_set_text_fmt(lbl, "%d", value); break;
+    // Special cases: percentage-like types
+    if (type == STAT_CPU_PERCENT || type == STAT_RAM_PERCENT || type == STAT_GPU_PERCENT ||
+        type == STAT_DISK_PERCENT || type == STAT_SWAP_PERCENT || type == STAT_BATTERY_PCT ||
+        type == STAT_GPU_MEM_PCT) {
+        if ((value & 0xFF) == 0xFF) lv_label_set_text(lbl, "N/A");
+        else lv_label_set_text_fmt(lbl, "%d%%", value & 0xFF);
+    }
+    // Temperature types
+    else if (type == STAT_CPU_TEMP || type == STAT_GPU_TEMP) {
+        if ((value & 0xFF) == 0xFF) lv_label_set_text(lbl, "N/A");
+        else lv_label_set_text_fmt(lbl, "%d%s", value & 0xFF, stat_units[type]);
+    }
+    // Network and disk speed types
+    else if (type == STAT_NET_UP || type == STAT_NET_DOWN || type == STAT_DISK_READ_KBS || type == STAT_DISK_WRITE_KBS) {
+        if (value >= 1024) lv_label_set_text_fmt(lbl, "%.1f MB/s", value / 1024.0f);
+        else lv_label_set_text_fmt(lbl, "%d KB/s", value);
+    }
+    // Frequency types
+    else if (type == STAT_CPU_FREQ || type == STAT_GPU_FREQ) {
+        lv_label_set_text_fmt(lbl, "%d MHz", value);
+    }
+    // Uptime types
+    else if (type == STAT_UPTIME_HOURS || type == STAT_DISPLAY_UPTIME) {
+        lv_label_set_text_fmt(lbl, "%dh", value);
+    }
+    // Integer types (counts, RPM, etc.)
+    else if (type == STAT_FAN_RPM || type == STAT_PROC_COUNT || type == STAT_PROC_USER || type == STAT_PROC_SYSTEM) {
+        lv_label_set_text_fmt(lbl, "%d", value);
+    }
+    // Load average (decimal)
+    else if (type == STAT_LOAD_AVG) {
+        lv_label_set_text_fmt(lbl, "%.2f", value / 100.0f);
+    }
+    // GPU power
+    else if (type == STAT_GPU_POWER_W) {
+        lv_label_set_text_fmt(lbl, "%dW", value);
+    }
+    else {
+        lv_label_set_text_fmt(lbl, "%d", value);
     }
 }
 
 static const char *get_stat_value_placeholder(uint8_t type) {
-    switch (type) {
-        case STAT_CPU_PERCENT: case STAT_RAM_PERCENT: case STAT_GPU_PERCENT:
-        case STAT_DISK_PERCENT: case STAT_SWAP_PERCENT: case STAT_BATTERY_PCT:
-        case STAT_GPU_MEM_PCT: return "--%";
-        case STAT_CPU_TEMP: case STAT_GPU_TEMP: return "--\xC2\xB0""C";
-        case STAT_NET_UP: case STAT_NET_DOWN:
-        case STAT_DISK_READ_KBS: case STAT_DISK_WRITE_KBS: return "-- KB/s";
-        case STAT_CPU_FREQ: case STAT_GPU_FREQ: return "-- MHz";
-        case STAT_UPTIME_HOURS: case STAT_DISPLAY_UPTIME: return "--h";
-        case STAT_FAN_RPM: case STAT_PROC_COUNT:
-        case STAT_PROC_USER: case STAT_PROC_SYSTEM: return "--";
-        case STAT_LOAD_AVG: return "--";
-        case STAT_GPU_POWER_W: return "--W";
-        default: return "--";
+    if (type < (uint8_t)(sizeof(stat_placeholders) / sizeof(stat_placeholders[0]))) {
+        return stat_placeholders[type];
     }
+    return "--";
+}
+
+// Return "Name Placeholder" format for display while loading
+// Note: Uses static buffer to avoid memory allocations
+static const char *get_stat_placeholder(uint8_t type) {
+    static char placeholder_buf[64];
+    const char *name = get_stat_name(type);
+    const char *placeholder = get_stat_value_placeholder(type);
+    snprintf(placeholder_buf, sizeof(placeholder_buf), "%s %s", name, placeholder);
+    return placeholder_buf;
+}
+
+// RSSI-to-color helper
+static lv_color_t get_rssi_color(int rssi_dbm) {
+    if (rssi_dbm == 0) return lv_color_hex(CLR_GREY);        // No signal
+    if (rssi_dbm > -50)  return lv_color_hex(CLR_GREEN);     // Excellent
+    if (rssi_dbm > -70)  return lv_color_hex(CLR_YELLOW);    // Good
+    return lv_color_hex(CLR_RED);                             // Weak/Poor
 }
 
 // --- Stat Monitor ---
@@ -1020,15 +1016,8 @@ void update_stats(const uint8_t *data, uint8_t len) {
 void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_level, bool stats_active) {
     for (auto &ref : status_bar_refs) {
         if (ref.rssi_label) {
-            if (rssi_dbm == 0 || !espnow_linked) {
-                lv_obj_set_style_text_color(ref.rssi_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
-            } else if (rssi_dbm > -50) {
-                lv_obj_set_style_text_color(ref.rssi_label, lv_color_hex(CLR_GREEN), LV_PART_MAIN);
-            } else if (rssi_dbm > -70) {
-                lv_obj_set_style_text_color(ref.rssi_label, lv_color_hex(CLR_YELLOW), LV_PART_MAIN);
-            } else {
-                lv_obj_set_style_text_color(ref.rssi_label, lv_color_hex(CLR_RED), LV_PART_MAIN);
-            }
+            int color_rssi = espnow_linked ? rssi_dbm : 0;
+            lv_obj_set_style_text_color(ref.rssi_label, get_rssi_color(color_rssi), LV_PART_MAIN);
         }
         if (ref.pc_label) {
             lv_obj_set_style_text_color(ref.pc_label,
@@ -1182,14 +1171,7 @@ void update_clock_time() {
     }
 
     int rssi = espnow_get_rssi();
-    if (rssi != 0 && rssi > -50)
-        lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_GREEN), LV_PART_MAIN);
-    else if (rssi != 0 && rssi > -70)
-        lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_YELLOW), LV_PART_MAIN);
-    else if (rssi != 0)
-        lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_RED), LV_PART_MAIN);
-    else
-        lv_obj_set_style_text_color(clock_rssi_label, lv_color_hex(CLR_GREY), LV_PART_MAIN);
+    lv_obj_set_style_text_color(clock_rssi_label, get_rssi_color(rssi), LV_PART_MAIN);
 }
 
 // ============================================================
