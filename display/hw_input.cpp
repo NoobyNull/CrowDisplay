@@ -10,23 +10,27 @@
 #include "config_server.h"
 
 // ============================================================
-// TCA9548A I2C Mux + PCF8575 Addresses
+// PCF8575 I2C GPIO Expander on GPIOD bus (Wire: SDA=IO19, SCL=IO20)
+// Shared I2C bus with GT911 touch — must hold i2c mutex for all access
 // ============================================================
-#define TCA9548A_ADDR   0x77
-#define PCF8575_MUX_CH  0      // Channel 0 on mux
 
-// PCF8575 pin assignments (active LOW)
-#define PIN_ENC_SW   (1 << 0)   // P0 - Encoder push button
-#define PIN_BTN1     (1 << 1)   // P1 - Hardware button 1
-#define PIN_BTN2     (1 << 2)   // P2 - Hardware button 2
-#define PIN_BTN3     (1 << 3)   // P3 - Hardware button 3
-#define PIN_BTN4     (1 << 4)   // P4 - Hardware button 4
-#define PIN_ENC_DT   (1 << 10)  // P10 - Encoder DT (data)
-#define PIN_ENC_CLK  (1 << 11)  // P11 - Encoder CLK (clock)
+// GPIOD connector also exposes IO38 as a digital GPIO (e.g. PCF8575 INT)
+#define GPIOD_PIN    38
+
+// PCF8575 pin assignments (active LOW) — TBD, using debug output to discover
+// Press each button and check serial for "[D] 0x.... P?=0" lines
+#define PIN_BTN1     (1 << 0)   // P0 - placeholder
+#define PIN_BTN2     (1 << 1)   // P1 - placeholder
+#define PIN_BTN3     (1 << 2)   // P2 - placeholder
+#define PIN_BTN4     (1 << 3)   // P3 - placeholder
+#define PIN_BTN5     (1 << 4)   // P4 - placeholder
+#define PIN_BTN6     (1 << 5)   // P5 - placeholder
+// No encoder in current hardware
 
 // Debounce timing
 #define BUTTON_DEBOUNCE_MS  50
-#define ENCODER_ROT_MIN_MS  80  // Minimum interval between rotation events
+#define REBOOT_HOLD_MS      5000 // Hold all buttons for 5s to force reboot
+#define NUM_BUTTONS         6    // 6 hardware buttons
 
 // ============================================================
 // State
@@ -36,12 +40,12 @@ static uint8_t pcf_addr = 0;
 
 // Button debounce state
 static uint16_t prev_pin_state = 0xFFFF;  // All high = nothing pressed
-static uint32_t btn_debounce_time[5] = {0}; // 4 buttons + encoder switch
-static bool btn_prev_pressed[5] = {false};
+static uint32_t btn_debounce_time[NUM_BUTTONS] = {0};
+static bool btn_prev_pressed[NUM_BUTTONS] = {false};
 
-// Encoder quadrature state
-static uint8_t enc_prev_state = 0;
-static uint32_t enc_last_rotation_ms = 0;
+// All-buttons-held reboot detection
+static uint32_t all_btn_hold_start = 0;
+static bool all_btn_held = false;
 
 // App-select focus
 static int focused_widget_idx = -1;
@@ -52,24 +56,33 @@ static lv_opa_t focus_prev_opa = LV_OPA_TRANSP;  // Restore original opacity on 
 // I2C helpers (all PCF8575 access must hold i2c mutex)
 // ============================================================
 
-static bool tca_select_channel(uint8_t ch) {
-    Wire.beginTransmission(TCA9548A_ADDR);
-    Wire.write(1 << ch);
-    return Wire.endTransmission() == 0;
-}
-
-static void tca_deselect() {
-    Wire.beginTransmission(TCA9548A_ADDR);
-    Wire.write(0);
-    Wire.endTransmission();
-}
+static uint32_t pcf_read_ok = 0, pcf_read_fail = 0;
+static uint32_t pcf_consec_fail = 0;       // Consecutive failures (for bus recovery)
+static const uint32_t BUS_RECOVERY_THRESHOLD = 20;  // Trigger recovery after 20 consecutive fails
 
 static uint16_t pcf8575_read() {
-    // Must be called with i2c mutex held and mux channel selected
-    Wire.requestFrom(pcf_addr, (uint8_t)2);
-    if (Wire.available() < 2) return 0xFFFF;
+    // Must be called with i2c mutex held
+    uint8_t n = Wire.requestFrom(pcf_addr, (uint8_t)2);
+    if (Wire.available() < 2) {
+        pcf_read_fail++;
+        pcf_consec_fail++;
+
+        // I2C bus recovery: reinitialize after sustained failures
+        // ESP_ERR_INVALID_STATE leaves the peripheral stuck; Wire.begin() resets it
+        if (pcf_consec_fail == BUS_RECOVERY_THRESHOLD) {
+            Serial.println("[hw_input] I2C bus stuck, attempting recovery...");
+            Wire.end();
+            delay(1);
+            Wire.begin(19, 20);
+            Serial.println("[hw_input] I2C bus reinitialized");
+        }
+
+        return 0xFFFF;  // read failed, return all-high (masks the failure)
+    }
     uint8_t lo = Wire.read();
     uint8_t hi = Wire.read();
+    pcf_read_ok++;
+    pcf_consec_fail = 0;  // Reset consecutive fail counter on success
     return (hi << 8) | lo;
 }
 
@@ -82,7 +95,7 @@ bool hw_input_init() {
         return false;
     }
 
-    // I2C bus scan for debugging
+    // I2C bus scan for debugging (shared bus: SDA=19, SCL=20)
     Serial.print("[hw_input] I2C scan:");
     for (uint8_t addr = 0x08; addr < 0x78; addr++) {
         Wire.beginTransmission(addr);
@@ -92,26 +105,17 @@ bool hw_input_init() {
     }
     Serial.println();
 
-    // Select mux channel
-    if (!tca_select_channel(PCF8575_MUX_CH)) {
-        Serial.println("[hw_input] TCA9548A not found at 0x70");
-        tca_deselect();
-        i2c_give();
-        return false;
-    }
-
-    // Scan for PCF8575 at 0x20-0x27
+    // Scan for PCF8575 (0x20-0x27)
     for (uint8_t addr = 0x20; addr <= 0x27; addr++) {
         Wire.beginTransmission(addr);
         if (Wire.endTransmission() == 0) {
             pcf_addr = addr;
             pcf_available = true;
-            Serial.printf("[hw_input] PCF8575 found at 0x%02X on mux channel %d\n", addr, PCF8575_MUX_CH);
+            Serial.printf("[hw_input] PCF8575 found at 0x%02X\n", addr);
             break;
         }
     }
 
-    tca_deselect();
     i2c_give();
 
     if (!pcf_available) {
@@ -119,16 +123,17 @@ bool hw_input_init() {
         return false;
     }
 
-    // Initialize encoder quadrature state
+    // Write 0xFFFF to set all pins as inputs (quasi-bidirectional: write 1 = input)
     if (i2c_take(10)) {
-        tca_select_channel(PCF8575_MUX_CH);
+        Wire.beginTransmission(pcf_addr);
+        Wire.write(0xFF);  // low byte: all inputs
+        Wire.write(0xFF);  // high byte: all inputs
+        Wire.endTransmission();
+
         uint16_t pins = pcf8575_read();
-        tca_deselect();
+        Serial.printf("[hw_input] Initial pin state: 0x%04X\n", pins);
         i2c_give();
 
-        uint8_t clk = (pins & PIN_ENC_CLK) ? 1 : 0;
-        uint8_t dt  = (pins & PIN_ENC_DT)  ? 1 : 0;
-        enc_prev_state = (clk << 1) | dt;
         prev_pin_state = pins;
     }
 
@@ -192,7 +197,7 @@ static void dispatch_action(ActionType action, uint8_t keycode, uint16_t consume
             power_cycle_brightness();
             break;
         case ACTION_DDC: {
-            const HwButtonConfig &hbc = get_global_config().hw_buttons[hw_btn_idx < 4 ? hw_btn_idx : 0];
+            const HwButtonConfig &hbc = get_global_config().hw_buttons[hw_btn_idx < NUM_BUTTONS ? hw_btn_idx : 0];
             DdcCmdMsg ddc;
             ddc.vcp_code = hbc.ddc_vcp_code;
             ddc.value = hbc.ddc_value;
@@ -216,101 +221,53 @@ static void dispatch_action(ActionType action, uint8_t keycode, uint16_t consume
 }
 
 // ============================================================
-// Encoder rotation dispatch
-// ============================================================
-static void dispatch_encoder_rotation(int8_t direction) {
-    power_activity();
-    const AppConfig &cfg = get_global_config();
-    uint8_t mode = cfg.encoder.encoder_mode;
-
-    switch (mode) {
-        case 0: // page_nav
-            if (direction > 0) ui_next_page();
-            else ui_prev_page();
-            break;
-        case 1: // volume
-            if (direction > 0) send_media_key_to_bridge(0x00E9); // Vol+
-            else send_media_key_to_bridge(0x00EA);               // Vol-
-            break;
-        case 2: // brightness
-            power_cycle_brightness();
-            break;
-        case 3: // app_select
-            if (direction > 0) hw_input_focus_next();
-            else hw_input_focus_prev();
-            break;
-        case 4: // mode_cycle
-            if (direction > 0)
-                mode_cycle_next(cfg.mode_cycle.enabled_modes);
-            else
-                mode_cycle_next(cfg.mode_cycle.enabled_modes); // same direction, just cycle
-            break;
-        case 5: { // ddc_control
-            DdcCmdMsg ddc;
-            ddc.vcp_code = cfg.encoder.ddc_vcp_code;
-            ddc.value = 0;
-            ddc.adjustment = (direction > 0) ? (int16_t)cfg.encoder.ddc_step : -(int16_t)cfg.encoder.ddc_step;
-            ddc.display_num = cfg.encoder.ddc_display;
-            espnow_send(MSG_DDC_CMD, (const uint8_t *)&ddc, sizeof(ddc));
-            Serial.printf("[hw_input] Encoder DDC: vcp=0x%02X adj=%d\n", ddc.vcp_code, ddc.adjustment);
-            break;
-        }
-    }
-}
-
-// ============================================================
-// Quadrature decoder
-// ============================================================
-// Gray code transition table: returns +1 (CW), -1 (CCW), 0 (invalid/no change)
-static const int8_t QUAD_TABLE[16] = {
-    0, -1,  1,  0,
-    1,  0,  0, -1,
-   -1,  0,  0,  1,
-    0,  1, -1,  0
-};
-
-static int8_t decode_encoder(uint16_t pins) {
-    uint8_t clk = (pins & PIN_ENC_CLK) ? 1 : 0;
-    uint8_t dt  = (pins & PIN_ENC_DT)  ? 1 : 0;
-    uint8_t new_state = (clk << 1) | dt;
-
-    if (new_state == enc_prev_state) return 0;
-
-    uint8_t idx = (enc_prev_state << 2) | new_state;
-    enc_prev_state = new_state;
-
-    int8_t dir = QUAD_TABLE[idx];
-
-    // Enforce minimum interval between rotation events
-    if (dir != 0) {
-        uint32_t now = millis();
-        if (now - enc_last_rotation_ms < ENCODER_ROT_MIN_MS) {
-            return 0; // Too fast, ignore
-        }
-        enc_last_rotation_ms = now;
-    }
-
-    return dir;
-}
-
-// ============================================================
 // hw_input_poll()
 // ============================================================
 void hw_input_poll() {
+    static uint32_t poll_heartbeat = 0;
+    if (millis() - poll_heartbeat >= 3000) {
+        poll_heartbeat = millis();
+        Serial.printf("[hw_input] poll: pcf=%d\n", pcf_available);
+    }
     if (!pcf_available) return;
 
-    if (!i2c_take(5)) return;  // Don't block if touch is using I2C
-
-    tca_select_channel(PCF8575_MUX_CH);
+    if (!i2c_take(20)) return;  // Wait up to 20ms for I2C mutex
     uint16_t pins = pcf8575_read();
-    tca_deselect();
     i2c_give();
 
-    // Debug: log raw pin state every 2 seconds
+    // Filter glitched reads: all-zero is physically impossible (all active-low
+    // buttons + encoder pressed simultaneously). Discard and keep previous state.
+    if (pins == 0x0000) return;
+
+    // Debug: log ALL pin changes with bit-level diff
     static uint32_t dbg_timer = 0;
-    if (millis() - dbg_timer >= 2000) {
+    if (pins != prev_pin_state) {
+        uint16_t diff = pins ^ prev_pin_state;
+        Serial.printf("[D] 0x%04X d=0x%04X", pins, diff);
+        for (int b = 0; b < 16; b++) {
+            if (diff & (1 << b)) Serial.printf(" P%d=%d", b, (pins >> b) & 1);
+        }
+        Serial.println();
+    } else if (millis() - dbg_timer >= 3000) {
         dbg_timer = millis();
-        Serial.printf("[hw_input] raw pins=0x%04X\n", pins);
+        Serial.printf("[D] idle 0x%04X ok=%lu fail=%lu\n", pins, pcf_read_ok, pcf_read_fail);
+    }
+
+    // --- All-buttons held reboot check (first 4) ---
+    bool all_four = !(pins & PIN_BTN1) && !(pins & PIN_BTN2) &&
+                    !(pins & PIN_BTN3) && !(pins & PIN_BTN4);
+    if (all_four) {
+        if (!all_btn_held) {
+            all_btn_held = true;
+            all_btn_hold_start = millis();
+            Serial.println("[hw_input] All 4 buttons held — hold 5s to reboot");
+        } else if (millis() - all_btn_hold_start >= REBOOT_HOLD_MS) {
+            Serial.println("[hw_input] REBOOT triggered by 4-button hold");
+            delay(100);
+            ESP.restart();
+        }
+    } else {
+        all_btn_held = false;
     }
 
     if (pins == 0xFFFF && prev_pin_state == 0xFFFF) return; // No change, all high
@@ -318,9 +275,9 @@ void hw_input_poll() {
     uint32_t now = millis();
     const AppConfig &cfg = get_global_config();
 
-    // --- Debounce and dispatch 4 hardware buttons ---
-    static const uint16_t btn_masks[4] = {PIN_BTN1, PIN_BTN2, PIN_BTN3, PIN_BTN4};
-    for (int i = 0; i < 4; i++) {
+    // --- Debounce and dispatch 6 hardware buttons ---
+    static const uint16_t btn_masks[NUM_BUTTONS] = {PIN_BTN1, PIN_BTN2, PIN_BTN3, PIN_BTN4, PIN_BTN5, PIN_BTN6};
+    for (int i = 0; i < NUM_BUTTONS; i++) {
         bool pressed = !(pins & btn_masks[i]); // Active LOW
         if (pressed != btn_prev_pressed[i]) {
             if (now - btn_debounce_time[i] >= BUTTON_DEBOUNCE_MS) {
@@ -337,34 +294,8 @@ void hw_input_poll() {
         }
     }
 
-    // --- Debounce encoder switch ---
-    {
-        bool pressed = !(pins & PIN_ENC_SW);
-        if (pressed != btn_prev_pressed[4]) {
-            if (now - btn_debounce_time[4] >= BUTTON_DEBOUNCE_MS) {
-                btn_debounce_time[4] = now;
-                btn_prev_pressed[4] = pressed;
-                if (pressed) {
-                    // In app-select mode, push fires focused widget
-                    if (cfg.encoder.encoder_mode == 3 && focused_widget_idx >= 0) {
-                        hw_input_activate_focus();
-                    } else {
-                        // Normal push action
-                        Serial.printf("[hw_input] Encoder push (action=%d)\n", cfg.encoder.push_action);
-                        dispatch_action(cfg.encoder.push_action, cfg.encoder.push_keycode,
-                                        cfg.encoder.push_consumer_code, cfg.encoder.push_modifiers, 0xFF);
-                    }
-                }
-            }
-        }
-    }
-
-    // --- Quadrature encoder rotation ---
-    int8_t rot = decode_encoder(pins);
-    if (rot != 0) {
-        Serial.printf("[hw_input] Encoder rotation: %s\n", rot > 0 ? "CW" : "CCW");
-        dispatch_encoder_rotation(rot);
-    }
+    // TODO: encoder support removed (no encoder in current hardware)
+    // Re-add encoder switch + rotation handling if encoder is reconnected
 
     prev_pin_state = pins;
 }
@@ -372,35 +303,47 @@ void hw_input_poll() {
 // ============================================================
 // App-select focus management
 // ============================================================
+static void apply_focus_style(lv_obj_t *obj) {
+    // Use outline (renders outside object bounds, always visible even if border is clipped)
+    lv_obj_set_style_outline_color(obj, lv_color_hex(0x00FF00), LV_PART_MAIN);
+    lv_obj_set_style_outline_width(obj, 4, LV_PART_MAIN);
+    lv_obj_set_style_outline_opa(obj, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_outline_pad(obj, 3, LV_PART_MAIN);
+}
+
 void hw_input_focus_next() {
     int page = ui_get_current_page();
     const AppConfig &cfg = get_global_config();
     const ProfileConfig *profile = cfg.get_active_profile();
-    if (!profile || page >= (int)profile->pages.size()) return;
+    if (!profile || page >= (int)profile->pages.size()) {
+        Serial.printf("[focus] no profile or page %d out of range\n", page);
+        return;
+    }
 
     const auto &widgets = profile->pages[page].widgets;
     int widget_count = (int)widgets.size();
-    if (widget_count <= 0) return;
+    if (widget_count <= 0) { Serial.println("[focus] no widgets"); return; }
 
-    hw_input_clear_focus();
-
-    // Scan forward for next actionable widget (hotkey button)
+    // Save current position BEFORE clearing (clear_focus resets focused_widget_idx to -1)
     int start = focused_widget_idx;
+    hw_input_clear_focus();
     for (int i = 0; i < widget_count; i++) {
         int idx = (start + 1 + i) % widget_count;
         if (widgets[idx].widget_type == WIDGET_HOTKEY_BUTTON) {
             focused_widget_idx = idx;
             lv_obj_t *obj = ui_get_widget_obj(page, idx);
             if (obj) {
-                // Save current opacity, then increase by ~20%
                 focus_prev_opa = lv_obj_get_style_bg_opa(obj, LV_PART_MAIN);
-                lv_opa_t new_opa = (focus_prev_opa <= (LV_OPA_COVER - 50)) ? (focus_prev_opa + 50) : LV_OPA_COVER;
-                lv_obj_set_style_bg_opa(obj, new_opa, LV_PART_MAIN);
+                apply_focus_style(obj);
                 focus_highlight_obj = obj;
+                Serial.printf("[focus] -> widget %d on page %d\n", idx, page);
+            } else {
+                Serial.printf("[focus] widget %d obj is NULL\n", idx);
             }
             return;
         }
     }
+    Serial.println("[focus] no hotkey button found");
 }
 
 void hw_input_focus_prev() {
@@ -413,10 +356,9 @@ void hw_input_focus_prev() {
     int widget_count = (int)widgets.size();
     if (widget_count <= 0) return;
 
-    hw_input_clear_focus();
-
-    // Scan backward for previous actionable widget (hotkey button)
+    // Save current position BEFORE clearing (clear_focus resets focused_widget_idx to -1)
     int start = focused_widget_idx <= 0 ? widget_count : focused_widget_idx;
+    hw_input_clear_focus();
     for (int i = 0; i < widget_count; i++) {
         int idx = (start - 1 - i + widget_count) % widget_count;
         if (widgets[idx].widget_type == WIDGET_HOTKEY_BUTTON) {
@@ -424,9 +366,9 @@ void hw_input_focus_prev() {
             lv_obj_t *obj = ui_get_widget_obj(page, idx);
             if (obj) {
                 focus_prev_opa = lv_obj_get_style_bg_opa(obj, LV_PART_MAIN);
-                lv_opa_t new_opa = (focus_prev_opa <= (LV_OPA_COVER - 50)) ? (focus_prev_opa + 50) : LV_OPA_COVER;
-                lv_obj_set_style_bg_opa(obj, new_opa, LV_PART_MAIN);
+                apply_focus_style(obj);
                 focus_highlight_obj = obj;
+                Serial.printf("[focus] <- widget %d on page %d\n", idx, page);
             }
             return;
         }
@@ -455,6 +397,7 @@ void hw_input_activate_focus() {
 void hw_input_clear_focus() {
     if (focus_highlight_obj) {
         lv_obj_set_style_bg_opa(focus_highlight_obj, focus_prev_opa, LV_PART_MAIN);
+        lv_obj_set_style_outline_width(focus_highlight_obj, 0, LV_PART_MAIN);
         focus_highlight_obj = nullptr;
         focus_prev_opa = LV_OPA_TRANSP;
     }

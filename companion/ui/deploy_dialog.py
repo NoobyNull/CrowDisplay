@@ -78,7 +78,8 @@ def _resolve_deploy_images(config):
                 try:
                     w = widget.get("width", 180)
                     h = widget.get("height", 100)
-                    png_data = optimize_for_widget(source_path, w, h)
+                    has_label = widget.get("show_label", True) and bool(widget.get("label", ""))
+                    png_data = optimize_for_widget(source_path, w, h, has_label=has_label)
                     images[filename] = png_data
                     widget["icon_path"] = f"/icons/{filename}"
                 except Exception as e:

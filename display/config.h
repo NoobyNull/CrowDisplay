@@ -268,7 +268,7 @@ struct AppConfig {
     std::vector<StatConfig> stats_header; // User-selected stats (default 8, max CONFIG_MAX_STATS)
 
     // Hardware input configuration
-    HwButtonConfig hw_buttons[4];
+    HwButtonConfig hw_buttons[6];
     EncoderConfig encoder;
     ModeCycleConfig mode_cycle;
     DisplaySettings display_settings;

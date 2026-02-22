@@ -190,9 +190,9 @@ void loop() {
         Serial.println("Stats timeout -- no data");
     }
 
-    // Hardware input polling (~20Hz, same rate as touch)
+    // Hardware input polling (~100Hz for encoder quadrature)
     // Reads PCF8575 via TCA9548A mux for buttons + encoder
-    if (millis() - encoder_timer >= 50) {
+    if (millis() - encoder_timer >= 10) {
         encoder_timer = millis();
         hw_input_poll();
     }

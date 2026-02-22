@@ -68,8 +68,14 @@ def _resolve_icon_path(icon_name: str, theme: str) -> str:
                 return icon_name + ext
         return ""
 
-    # Search icon theme directories
-    icon_dirs = [f"/usr/share/icons/{theme}", "/usr/share/icons/hicolor"]
+    # Search icon theme directories (system + user XDG locations)
+    user_icons = os.path.expanduser("~/.local/share/icons")
+    icon_dirs = [
+        f"/usr/share/icons/{theme}",
+        f"{user_icons}/{theme}",
+        "/usr/share/icons/hicolor",
+        f"{user_icons}/hicolor",
+    ]
     # Prefer scalable (SVG) and large sizes for best quality when rasterized
     size_dirs = ["scalable", "256x256", "128x128", "64x64", "48x48", "32x32"]
     extensions = [".png", ".svg", ".xpm"]

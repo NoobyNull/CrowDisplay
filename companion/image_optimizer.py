@@ -48,12 +48,63 @@ def optimize_icon(input_path: str, max_width: int, max_height: int) -> bytes:
     return buf.getvalue()
 
 
+def _fit_with_matte(img: Image.Image, width: int, height: int) -> Image.Image:
+    """Fit image to canvas with edge-sampled color matte background.
+
+    If the image already fills the canvas exactly, returns it as-is.
+    Otherwise, samples the dominant color from the image edges and
+    fills the letterbox/pillarbox bars with that color, then composites
+    the contain-fitted image centered on top.
+    """
+    # Check if image already fills canvas
+    img_ratio = img.width / img.height
+    canvas_ratio = width / height
+    if abs(img_ratio - canvas_ratio) < 0.01:
+        return img.resize((width, height), Image.LANCZOS)
+
+    # Sample edge pixels to find a representative background color.
+    # Shrink the image to speed up pixel sampling, then grab border pixels.
+    thumb = img.copy()
+    thumb.thumbnail((64, 64), Image.LANCZOS)
+    if thumb.mode != "RGB":
+        thumb = thumb.convert("RGB")
+    tw, th = thumb.size
+    edge_pixels = []
+    for x in range(tw):
+        edge_pixels.append(thumb.getpixel((x, 0)))
+        edge_pixels.append(thumb.getpixel((x, th - 1)))
+    for y in range(th):
+        edge_pixels.append(thumb.getpixel((0, y)))
+        edge_pixels.append(thumb.getpixel((tw - 1, y)))
+    # Average edge color
+    r = sum(p[0] for p in edge_pixels) // len(edge_pixels)
+    g = sum(p[1] for p in edge_pixels) // len(edge_pixels)
+    b = sum(p[2] for p in edge_pixels) // len(edge_pixels)
+
+    # Create solid color background
+    matte = Image.new("RGB", (width, height), (r, g, b))
+
+    # Fit foreground: contain (fit within canvas, preserve aspect ratio, no cropping)
+    fg = img.copy()
+    if fg.mode != "RGB":
+        fg = fg.convert("RGB")
+    fg.thumbnail((width, height), Image.LANCZOS)
+    fg_x = (width - fg.width) // 2
+    fg_y = (height - fg.height) // 2
+    matte.paste(fg, (fg_x, fg_y))
+
+    return matte
+
+
 def optimize_for_sjpg(input_path: str, width: int = 800, height: int = 480) -> bytes:
     """
     Convert an image to SJPG (LVGL split-JPEG) format.
 
     SJPG decodes in 16-pixel-tall strips without loading the full image
     into RAM, which is ideal for ESP32 devices.
+
+    Images that don't match the canvas aspect ratio get a blurred
+    zoom-to-fill matte behind the centered image (no black bars).
 
     Args:
         input_path: Path to source image
@@ -77,7 +128,7 @@ def optimize_for_sjpg(input_path: str, width: int = 800, height: int = 480) -> b
     if img.mode != "RGB":
         img = img.convert("RGB")
 
-    img.thumbnail((width, height), Image.LANCZOS)
+    img = _fit_with_matte(img, width, height)
     w, h = img.size
 
     # Slice into 16px-tall horizontal strips
@@ -124,22 +175,31 @@ def optimize_for_slideshow(input_path: str) -> bytes:
     return optimize_for_sjpg(input_path)
 
 
-def optimize_for_widget(input_path: str, widget_width: int, widget_height: int) -> bytes:
+def optimize_for_widget(input_path: str, widget_width: int, widget_height: int,
+                        has_label: bool = False) -> bytes:
     """
     Optimize an image for use as a button icon within a widget.
 
-    Renders at full widget size so the device firmware can display it
-    at any zoom level without pixelation. The firmware handles layout
-    (icon-only vs icon+label sizing) via lv_img_set_zoom.
+    Resizes to the exact pixel area the icon will occupy on the display
+    so the firmware renders at 1:1 with no zoom scaling. Accounts for
+    label space when a text label is shown below the icon.
 
     Args:
         input_path: Path to source image
         widget_width: Widget width in pixels
         widget_height: Widget height in pixels
+        has_label: Whether the widget shows a text label (reserves bottom space)
 
     Returns:
         PNG-encoded bytes
     """
-    icon_w = max(16, widget_width)
-    icon_h = max(16, widget_height)
+    # Match firmware layout: padding + label space
+    PAD = 4  # LVGL flex container padding
+    LABEL_H = 20  # ~montserrat_16 line height
+    if has_label:
+        icon_w = max(16, widget_width - PAD * 2)
+        icon_h = max(16, widget_height - PAD * 2 - LABEL_H)
+    else:
+        icon_w = max(16, widget_width - PAD * 2)
+        icon_h = max(16, widget_height - PAD * 2)
     return optimize_icon(input_path, icon_w, icon_h)
