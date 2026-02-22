@@ -183,6 +183,17 @@ void loop() {
                 }
                 break;
             }
+            case MSG_CONFIG_CREDENTIALS: {
+                if (payload_len >= sizeof(ConfigCredentialsMsg)) {
+                    // Relay ephemeral WiFi credentials to companion via vendor HID
+                    send_vendor_report(MSG_CONFIG_CREDENTIALS, payload, sizeof(ConfigCredentialsMsg));
+                    ConfigCredentialsMsg *cred = (ConfigCredentialsMsg *)payload;
+                    Serial.printf("CRED: relayed SSID='%s' to companion\n", cred->ssid);
+                } else {
+                    Serial.printf("ERR: credentials payload too short (%d)\n", payload_len);
+                }
+                break;
+            }
             case MSG_PING: {
                 HotkeyAckMsg ack = { 0 };
                 espnow_send(MSG_HOTKEY_ACK, (uint8_t *)&ack, sizeof(ack));

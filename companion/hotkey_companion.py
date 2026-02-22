@@ -82,6 +82,7 @@ MSG_TIME_SYNC    = 0x06
 MSG_NOTIFICATION = 0x08
 MSG_BUTTON_PRESS = 0x0B
 MSG_DDC_CMD      = 0x0C
+MSG_CONFIG_CREDENTIALS = 0x0D
 
 # Power state values
 POWER_SHUTDOWN = 0
@@ -99,6 +100,7 @@ running = True
 shutdown_event = threading.Event()
 lock_event = threading.Event()
 unlock_event = threading.Event()
+config_credentials = None  # Will store (ssid, password) tuple when received from display
 
 # ---------------------------------------------------------------------------
 # Signal handling
@@ -1450,6 +1452,8 @@ class CompanionService:
 
     def _vendor_read_loop(self):
         """Background: reads vendor HID input reports from bridge."""
+        global config_credentials
+
         while self._running and self._device is not None:
             try:
                 with self._hid_lock:
@@ -1480,6 +1484,14 @@ class CompanionService:
                             args=(vcp_code, value, adjustment, display_num),
                             daemon=True
                         ).start()
+                    elif msg_type == MSG_CONFIG_CREDENTIALS and len(data) >= 50:
+                        # Extract ephemeral AP credentials from display
+                        # Payload: SSID[32] + Password[16] = 48 bytes total
+                        ssid = bytes(data[2:34]).decode('utf-8', errors='ignore').rstrip('\x00')
+                        password = bytes(data[34:50]).decode('utf-8', errors='ignore').rstrip('\x00')
+                        config_credentials = (ssid, password)
+                        logging.info("Received config credentials: SSID='%s' (password %d chars)",
+                                     ssid, len(password))
             except (IOError, OSError):
                 logging.warning("Vendor HID read error, device may have disconnected")
                 break
