@@ -130,6 +130,7 @@ struct WidgetConfig {
     bool show_settings;       // Show settings gear icon
     bool show_brightness;     // Show brightness icon
     bool show_battery;        // Show battery percentage
+    bool show_uart;           // Show UART link-down indicator (red when disconnected)
     bool show_time;           // Show current time
     uint8_t icon_spacing;     // Spacing between status bar icons in pixels (2-20)
 
@@ -153,7 +154,7 @@ struct WidgetConfig {
           stat_type(0), value_position(0),
           clock_analog(false),
           show_wifi(true), show_pc(true), show_settings(true), show_brightness(true),
-          show_battery(true), show_time(true), icon_spacing(8),
+          show_battery(true), show_uart(true), show_time(true), icon_spacing(8),
           font_size(16), text_align(1),
           separator_vertical(false), thickness(2) {}
 };
@@ -268,7 +269,7 @@ struct AppConfig {
     std::vector<StatConfig> stats_header; // User-selected stats (default 8, max CONFIG_MAX_STATS)
 
     // Hardware input configuration
-    HwButtonConfig hw_buttons[6];
+    HwButtonConfig hw_buttons[12];
     EncoderConfig encoder;
     ModeCycleConfig mode_cycle;
     DisplaySettings display_settings;

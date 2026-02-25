@@ -147,8 +147,8 @@ bool hw_input_available() {
 // ============================================================
 // Action dispatch (shared by buttons and encoder push)
 // ============================================================
-static void dispatch_action(ActionType action, uint8_t keycode, uint16_t consumer_code,
-                            uint8_t modifiers, uint8_t hw_btn_idx) {
+void dispatch_action(ActionType action, uint8_t keycode, uint16_t consumer_code,
+                     uint8_t modifiers, uint8_t hw_btn_idx) {
     power_activity();
 
     switch (action) {
@@ -197,7 +197,7 @@ static void dispatch_action(ActionType action, uint8_t keycode, uint16_t consume
             power_cycle_brightness();
             break;
         case ACTION_DDC: {
-            const HwButtonConfig &hbc = get_global_config().hw_buttons[hw_btn_idx < NUM_BUTTONS ? hw_btn_idx : 0];
+            const HwButtonConfig &hbc = get_global_config().hw_buttons[hw_btn_idx < 12 ? hw_btn_idx : 0];
             DdcCmdMsg ddc;
             ddc.vcp_code = hbc.ddc_vcp_code;
             ddc.value = hbc.ddc_value;

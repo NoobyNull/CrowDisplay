@@ -92,6 +92,7 @@ static std::vector<StatWidgetRef> stat_widget_refs;
 struct StatusBarRef {
     lv_obj_t *rssi_label;
     lv_obj_t *pc_label;
+    lv_obj_t *uart_label;
     lv_obj_t *time_label;
 };
 static std::vector<StatusBarRef> status_bar_refs;
@@ -611,6 +612,17 @@ static void render_status_bar(lv_obj_t *parent, const WidgetConfig *cfg) {
         x_offset -= (ICON_W + ICON_GAP);
     }
 
+    // UART link-down indicator (hidden by default, shown red when disconnected)
+    if (cfg->show_uart) {
+        ref.uart_label = lv_label_create(bar);
+        lv_label_set_text(ref.uart_label, LV_SYMBOL_SHUFFLE);
+        lv_obj_set_style_text_font(ref.uart_label, &lv_font_montserrat_18, LV_PART_MAIN);
+        lv_obj_set_style_text_color(ref.uart_label, lv_color_hex(CLR_RED), LV_PART_MAIN);
+        lv_obj_align(ref.uart_label, LV_ALIGN_RIGHT_MID, x_offset, 0);
+        lv_obj_add_flag(ref.uart_label, LV_OBJ_FLAG_HIDDEN);
+        x_offset -= (ICON_W + ICON_GAP);
+    }
+
     // Config/settings button
     if (cfg->show_settings) {
         lv_obj_t *cfg_btn = lv_label_create(bar);
@@ -1013,7 +1025,7 @@ void update_stats(const uint8_t *data, uint8_t len) {
 // ============================================================
 //  Public: update_device_status()
 // ============================================================
-void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_level, bool stats_active) {
+void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_level, bool stats_active, bool uart_linked) {
     for (auto &ref : status_bar_refs) {
         if (ref.rssi_label) {
             int color_rssi = espnow_linked ? rssi_dbm : 0;
@@ -1022,6 +1034,13 @@ void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_l
         if (ref.pc_label) {
             lv_obj_set_style_text_color(ref.pc_label,
                 lv_color_hex(stats_active ? CLR_GREEN : CLR_RED), LV_PART_MAIN);
+        }
+        if (ref.uart_label) {
+            if (uart_linked) {
+                lv_obj_add_flag(ref.uart_label, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_clear_flag(ref.uart_label, LV_OBJ_FLAG_HIDDEN);
+            }
         }
         if (ref.time_label) {
             time_t now = time(nullptr);

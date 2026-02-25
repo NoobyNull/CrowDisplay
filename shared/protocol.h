@@ -30,6 +30,7 @@ enum MsgType : uint8_t {
     MSG_BUTTON_PRESS = 0x0B,  // Display -> Bridge: button identity (page + widget index)
     MSG_DDC_CMD      = 0x0C,  // Display -> Bridge: DDC/CI monitor control
     MSG_CONFIG_CREDENTIALS = 0x0D,  // Display -> Bridge: WiFi AP SSID + password (ephemeral, per-session)
+    MSG_HW_BUTTON          = 0x0E,  // ButtonController -> Display: physical button press/release
 };
 
 // --- Stat Type Enum (for TLV stats protocol) ------------------------
@@ -155,6 +156,11 @@ struct __attribute__((packed)) ConfigCredentialsMsg {
 };
 // Total: 48 bytes, fits within 250-byte ESP-NOW limit
 static_assert(sizeof(ConfigCredentialsMsg) == 48, "ConfigCredentialsMsg must be 48 bytes");
+
+struct __attribute__((packed)) HwButtonMsg {
+    uint8_t button_index;  // 0-7 = front (F1-F8), 8-11 = back (B1-B4)
+    uint8_t pressed;       // 1 = press, 0 = release
+};
 
 // --- Modifier Masks --------------------------------------------------
 

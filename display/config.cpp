@@ -279,6 +279,7 @@ static void widget_to_json(JsonObject obj, const WidgetConfig& w) {
             obj["show_settings"] = w.show_settings;
             obj["show_brightness"] = w.show_brightness;
             obj["show_battery"] = w.show_battery;
+            obj["show_uart"] = w.show_uart;
             obj["show_time"] = w.show_time;
             obj["icon_spacing"] = w.icon_spacing;
             break;
@@ -356,6 +357,7 @@ static void json_to_widget(JsonObject obj, WidgetConfig& w) {
             w.show_settings = obj["show_settings"] | true;
             w.show_brightness = obj["show_brightness"] | true;
             w.show_battery = obj["show_battery"] | true;
+            w.show_uart = obj["show_uart"] | true;
             w.show_time = obj["show_time"] | true;
             w.icon_spacing = obj["icon_spacing"] | (uint8_t)8;
             if (w.icon_spacing < 2) w.icon_spacing = 2;
@@ -617,11 +619,11 @@ static void parse_stats_header(JsonDocument& doc, AppConfig& cfg) {
     }
 }
 
-// Parse hw_buttons[4] from JSON
+// Parse hw_buttons[12] from JSON
 static void parse_hardware_buttons(JsonDocument& doc, AppConfig& cfg) {
     JsonArray hw_btns = doc["hardware_buttons"];
     if (!hw_btns.isNull()) {
-        for (int i = 0; i < 4 && i < (int)hw_btns.size(); i++) {
+        for (int i = 0; i < 12 && i < (int)hw_btns.size(); i++) {
             JsonObject btn = hw_btns[i];
             cfg.hw_buttons[i].action_type = (ActionType)(btn["action_type"] | 8); // PAGE_NEXT default
             cfg.hw_buttons[i].label = btn["label"] | "";
@@ -816,7 +818,7 @@ bool config_save(const AppConfig& config) {
 
     // Hardware buttons
     JsonArray hw_btns = doc["hardware_buttons"].to<JsonArray>();
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 12; i++) {
         JsonObject btn = hw_btns.add<JsonObject>();
         btn["action_type"] = (uint8_t)config.hw_buttons[i].action_type;
         btn["label"] = config.hw_buttons[i].label;
