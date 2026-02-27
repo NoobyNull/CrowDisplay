@@ -67,8 +67,12 @@ class WiFiManager:
             time.sleep(1)
         return False
 
-    def connect_to_crowpanel(self, timeout: float = 15.0) -> None:
+    def connect_to_crowpanel(self, password: str = "", timeout: float = 15.0) -> None:
         """Save current SSID and connect to CrowPanel-Config AP.
+
+        Args:
+            password: Optional ephemeral WiFi password from device (if empty, uses fallback)
+            timeout: Connection timeout in seconds
 
         Raises WiFiManagerError if connection fails within timeout.
         """
@@ -81,10 +85,15 @@ class WiFiManager:
                 f"'{CROWPANEL_SSID}' not found. Display may not have entered config mode."
             )
 
+        # Build nmcli command with password if provided
+        cmd = ["nmcli", "dev", "wifi", "connect", CROWPANEL_SSID]
+        if password:
+            cmd.extend(["password", password])
+
         # Try connecting (nmcli will create a connection profile if needed)
         try:
             result = subprocess.run(
-                ["nmcli", "dev", "wifi", "connect", CROWPANEL_SSID],
+                cmd,
                 capture_output=True, text=True, timeout=timeout,
             )
             if result.returncode != 0:

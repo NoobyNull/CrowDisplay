@@ -81,6 +81,7 @@ void send_vendor_report(uint8_t msg_type, const uint8_t *payload, uint8_t len) {
     uint8_t buf[63];
     memset(buf, 0, sizeof(buf));
     buf[0] = msg_type;
-    if (len > 0 && payload) memcpy(&buf[1], payload, min((int)len, 62));
-    Vendor.write(buf, 1 + len);
+    uint8_t clamped = min((int)len, 62);
+    if (clamped > 0 && payload) memcpy(&buf[1], payload, clamped);
+    Vendor.write(buf, 1 + clamped);
 }

@@ -13,6 +13,7 @@
 #include "config.h"
 #include "config_server.h"
 #include "hw_input.h"
+#include "uart_input.h"
 
 static uint32_t touch_timer = 0;
 static uint32_t last_stats_time = 0;
@@ -53,6 +54,7 @@ void setup() {
     gt911_discover();  // Discover GT911 (after PCA9557 reset)
     bool hw_ok = hw_input_init();
     Serial.printf("[main] hw_input_init: %s\n", hw_ok ? "PCF8575 FOUND" : "NOT FOUND (hw buttons disabled)");
+    uart_input_init(); // UART receiver for WROOM button controller
     lvgl_init();       // LVGL buffers + drivers
 
     espnow_link_init();  // ESP-NOW to bridge
@@ -168,6 +170,9 @@ void loop() {
             notif->body[115] = '\0';
             show_notification_toast(notif->app_name, notif->summary, notif->body);
         }
+        else if (msg_type == MSG_HW_BUTTON && msg_len >= sizeof(HwButtonMsg)) {
+            handle_hw_button(msg_payload, msg_len);
+        }
         else if (msg_type == MSG_CONFIG_MODE) {
             if (!config_server_active()) {
                 Serial.println("CONFIG_MODE: starting SoftAP config server");
@@ -190,11 +195,12 @@ void loop() {
         Serial.println("Stats timeout -- no data");
     }
 
-    // Hardware input polling (~20Hz, same rate as touch)
+    // Hardware input polling (~100Hz for encoder quadrature)
     // Reads PCF8575 via TCA9548A mux for buttons + encoder
-    if (millis() - encoder_timer >= 50) {
+    if (millis() - encoder_timer >= 10) {
         encoder_timer = millis();
         hw_input_poll();
+        uart_input_poll();  // WROOM button controller via UART
     }
 
     // Device status + ping (every 5 seconds)
@@ -202,7 +208,7 @@ void loop() {
         device_status_timer = millis();
         espnow_send(MSG_PING, nullptr, 0);  // Heartbeat to get fresh RSSI
         bool link_ok = (millis() - last_bridge_msg_time) < BRIDGE_LINK_TIMEOUT_MS;
-        update_device_status(espnow_get_rssi(), link_ok, get_backlight(), stats_active);
+        update_device_status(espnow_get_rssi(), link_ok, get_backlight(), stats_active, uart_is_linked());
     }
 
     // Clock updates every 30 seconds (clock mode screen + page clock widgets + display uptime)
