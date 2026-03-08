@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "config.h"
 
 // Initialize PCF8575 hardware input: scan TCA9548A channel 0 for PCF8575 at 0x20-0x27
 // Returns true if PCF8575 found, false if not (hardware buttons disabled gracefully)
@@ -18,3 +19,7 @@ void hw_input_focus_next();    // Highlight next widget on current page
 void hw_input_focus_prev();    // Highlight previous widget
 void hw_input_activate_focus(); // Fire the focused widget's action
 void hw_input_clear_focus();   // Remove focus highlight (call on page change)
+
+// Action dispatch (shared by hw_input, uart_input)
+void dispatch_action(ActionType action, uint8_t keycode, uint16_t consumer_code,
+                     uint8_t modifiers, uint8_t hw_btn_idx);

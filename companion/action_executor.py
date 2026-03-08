@@ -11,6 +11,7 @@ Handles 5 action types:
 
 import logging
 import re
+import shlex
 import shutil
 import subprocess
 import webbrowser
@@ -196,26 +197,35 @@ def _exec_launch_app(widget):
     clean_cmd = re.sub(r'%[uUfFdDnNickvm]', '', launch_command).strip()
 
     try:
-        subprocess.Popen(clean_cmd, shell=True, stdout=DEVNULL, stderr=DEVNULL)
-        logging.info("Launched app: %s", clean_cmd)
+        args = shlex.split(clean_cmd)
+        subprocess.Popen(args, stdout=DEVNULL, stderr=DEVNULL)
+        logging.info("Launched app: %s", args)
+    except ValueError as exc:
+        logging.error("Failed to parse launch command: %s", exc)
     except Exception as exc:
         logging.error("Failed to launch app: %s", exc)
 
 
 def _exec_shell_cmd(widget):
-    """Run a shell command (blocks sudo)."""
+    """Run a shell command (blocks sudo and other privilege escalation)."""
     cmd = widget.get("shell_command", "")
     if not cmd:
         return
 
-    # Block sudo commands
-    if "sudo" in cmd.split():
-        logging.warning("Shell command blocked (contains sudo): %s", cmd)
+    # Block privilege escalation patterns (sudo, pkexec, su, doas, etc.)
+    _BLOCKED_PATTERNS = re.compile(
+        r'(?:^|[;&|`$\(])\s*(?:sudo|pkexec|su\b|doas)\b', re.IGNORECASE
+    )
+    if _BLOCKED_PATTERNS.search(cmd):
+        logging.warning("Shell command blocked (privilege escalation): %s", cmd)
         return
 
     try:
-        subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        logging.info("Shell command: %s", cmd)
+        args = shlex.split(cmd)
+        subprocess.Popen(args, stdout=DEVNULL, stderr=DEVNULL)
+        logging.info("Shell command: %s", args)
+    except ValueError as exc:
+        logging.error("Failed to parse shell command: %s", exc)
     except Exception as exc:
         logging.error("Failed to run shell command: %s", exc)
 

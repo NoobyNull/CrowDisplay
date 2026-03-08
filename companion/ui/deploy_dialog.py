@@ -26,6 +26,7 @@ from PySide6.QtCore import QThread, Signal
 from companion.http_client import HTTPClient, HTTPClientError
 from companion.bridge_device import BridgeDevice, BridgeDeviceError
 from companion.wifi_manager import WiFiManager, WiFiManagerError
+import hotkey_companion
 
 import json
 import os
@@ -78,7 +79,8 @@ def _resolve_deploy_images(config):
                 try:
                     w = widget.get("width", 180)
                     h = widget.get("height", 100)
-                    png_data = optimize_for_widget(source_path, w, h)
+                    has_label = widget.get("show_label", True) and bool(widget.get("label", ""))
+                    png_data = optimize_for_widget(source_path, w, h, has_label=has_label)
                     images[filename] = png_data
                     widget["icon_path"] = f"/icons/{filename}"
                 except Exception as e:
@@ -156,14 +158,27 @@ class DeployWorker(QThread):
             self._bridge.send_config_mode()
             self.step_done.emit("config_mode")
 
-            # 3. Wait for AP startup
+            # 3. Wait for AP startup and credentials
             self.step_started.emit("ap_wait")
-            time.sleep(3)
+            # Wait up to 10 seconds for ephemeral password from display
+            credentials_received = False
+            for _ in range(20):  # 10 seconds with 0.5s checks
+                if hotkey_companion.config_credentials:
+                    credentials_received = True
+                    break
+                time.sleep(0.5)
+
+            if not credentials_received:
+                logger.warning("No credentials received from display, using empty password")
             self.step_done.emit("ap_wait")
 
-            # 4. Connect WiFi
+            # 4. Connect WiFi with received password (or empty if none received)
             self.step_started.emit("wifi_connect")
-            self._wifi.connect_to_crowpanel(timeout=15)
+            password = ""
+            if hotkey_companion.config_credentials:
+                ssid, password = hotkey_companion.config_credentials
+                logger.info("Using received credentials for WiFi connection")
+            self._wifi.connect_to_crowpanel(password=password, timeout=15)
             self.step_done.emit("wifi_connect")
 
             # 5. Wait for device health

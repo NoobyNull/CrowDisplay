@@ -18,7 +18,7 @@ void show_clock_mode();      // Switch to clock screen (called by power state ma
 void show_hotkey_view();     // Switch back to main screen (called on wake)
 
 // Device status update (call from main loop every ~5s or on change)
-void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_level, bool stats_active);
+void update_device_status(int rssi_dbm, bool espnow_linked, uint8_t brightness_level, bool stats_active, bool uart_linked);
 
 // Update clock display (call in clock mode from main loop)
 void update_clock_time();

@@ -9,9 +9,10 @@
 #include "sdcard.h"
 #include "config.h"
 #include "ui.h"
+#include "espnow_link.h"
+#include "protocol.h"
 
 #define CONFIG_SSID     "CrowPanel-Config"
-#define CONFIG_PASS     "crowconfig"
 #define CONFIG_HOSTNAME "crowpanel"
 #define CONFIG_CHANNEL  1
 #define INACTIVITY_TIMEOUT_MS (5 * 60 * 1000)
@@ -29,6 +30,9 @@ static bool g_timed_out = false;
 // Upload error propagation state
 static bool g_upload_success = false;
 static String g_upload_error = "";
+
+// Current AP password (randomly generated per session)
+static String g_ap_password = "";
 
 // Simple HTML upload form for configuration + OTA
 static const char config_html[] PROGMEM = R"rawliteral(
@@ -564,12 +568,32 @@ static void handle_sd_delete() {
     }
 }
 
+// Generate a random 12-character alphanumeric password for ephemeral AP
+// Uses base62 encoding (0-9, a-z, A-Z) for user-friendly typing
+static String generate_random_password() {
+    const char charset[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const int charset_len = 62;
+    const int password_len = 12;
+    String password;
+    password.reserve(password_len);
+
+    for (int i = 0; i < password_len; i++) {
+        uint32_t random_val = esp_random();
+        int idx = random_val % charset_len;
+        password += charset[idx];
+    }
+    return password;
+}
+
 bool config_server_start() {
     if (active) return true;
 
+    // Generate random 12-char password for this session
+    g_ap_password = generate_random_password();
+
     // Switch from STA to AP+STA so ESP-NOW keeps working
     WiFi.mode(WIFI_AP_STA);
-    if (!WiFi.softAP(CONFIG_SSID, CONFIG_PASS, CONFIG_CHANNEL)) {
+    if (!WiFi.softAP(CONFIG_SSID, g_ap_password.c_str(), CONFIG_CHANNEL)) {
         Serial.println("Config Server: SoftAP failed");
         WiFi.mode(WIFI_STA);  // revert
         return false;
@@ -579,7 +603,16 @@ bool config_server_start() {
     esp_wifi_set_channel(CONFIG_CHANNEL, WIFI_SECOND_CHAN_NONE);
 
     Serial.printf("Config Server: SoftAP started - SSID: %s  Password: %s  IP: %s  Channel: %d\n",
-                  CONFIG_SSID, CONFIG_PASS, WiFi.softAPIP().toString().c_str(), CONFIG_CHANNEL);
+                  CONFIG_SSID, g_ap_password.c_str(), WiFi.softAPIP().toString().c_str(), CONFIG_CHANNEL);
+
+    // Send credentials back to bridge via ESP-NOW so companion can use them
+    ConfigCredentialsMsg cred_msg = {};
+    strncpy(cred_msg.ssid, CONFIG_SSID, sizeof(cred_msg.ssid) - 1);
+    cred_msg.ssid[sizeof(cred_msg.ssid) - 1] = '\0';
+    strncpy(cred_msg.password, g_ap_password.c_str(), sizeof(cred_msg.password) - 1);
+    cred_msg.password[sizeof(cred_msg.password) - 1] = '\0';
+    espnow_send(MSG_CONFIG_CREDENTIALS, (uint8_t *)&cred_msg, sizeof(cred_msg));
+    Serial.println("Config Server: sent credentials to bridge via ESP-NOW");
 
     // ArduinoOTA (for PlatformIO upload)
     ArduinoOTA.setHostname(CONFIG_HOSTNAME);
